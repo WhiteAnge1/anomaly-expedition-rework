@@ -72,8 +72,11 @@ rare_artifact_chance = 70
 ; Период обновления логики, мс. Допустимо 250-5000; по умолчанию 1000.
 update_interval_ms = 1000
 
-; Диагностика. debug_log печатает тип, координаты, радиус и связанные ID.
-debug_log = true
+; Диагностика: auto следует глобальным DEV_DEBUG/DEV_DEBUG_DEV, on/off задают
+; явное поведение. Публичный default не включает debug без debug-запуска игры.
+debug_mode = auto
+; Совместимость со старыми конфигами: используется только если debug_mode отсутствует.
+debug_log = false
 ; off, artifact, enemy, loot, empty — принудительный тип ложных областей для теста.
 debug_force_decoy_type = off
 ; 0 — фактический тир; 1/2/3 — принудительная таблица для теста.

@@ -13,6 +13,10 @@
 <rvm_search_large hint="st_rvm_sorties_area_name"><level_map spot="rvm_search_large_spot"/></rvm_search_large>
 <rvm_search_large_spot width="68" height="68" alignment="c" stretch="1" scale="1" scale_min="1" scale_max="1"><texture x="730" y="456" width="115" height="115" a="150" r="222" g="184" b="74">ui\ui_common</texture></rvm_search_large_spot>
 
+<!-- Debug-only exact target marker, attached directly to the loot visual. -->
+<rvm_debug_target hint="st_rvm_sorties_area_name"><level_map spot="rvm_debug_target_spot"/></rvm_debug_target>
+<rvm_debug_target_spot width="14" height="14" alignment="c" stretch="1" scale="1" scale_min="1" scale_max="1"><texture x="730" y="456" width="115" height="115" a="255" r="255" g="64" b="64">ui\ui_common</texture></rvm_debug_target_spot>
+
 <!-- Compatibility aliases for saves made by 0.2.1-alpha before the first field-test fixes. -->
 <rvm_search_60 hint="st_rvm_sorties_area_name"><level_map spot="rvm_search_small_spot"/></rvm_search_60>
 <rvm_search_90 hint="st_rvm_sorties_area_name"><level_map spot="rvm_search_small_spot"/></rvm_search_90>

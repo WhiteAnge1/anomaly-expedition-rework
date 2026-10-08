@@ -31,12 +31,16 @@ foreach ($needle in @('raid_artefacts_tiers_by_dop','raid_artefacts.addToQueuedA
 foreach ($needle in @('generate_scripted_mapspot_at','set_pingspot_persistence','deregister_script_zone','visual_id','max_false_zones','decoy plan')) {
     if (-not $main.Contains($needle)) { $failures.Add("test-fix integration missing: $needle") }
 }
+foreach ($needle in @('DEV_DEBUG','DEV_DEBUG_DEV','rvm_rework_debug','rvm_rework_census','population_census','owned_by_rework','spawned_info','rvm_debug_target')) {
+    if (-not $main.Contains($needle)) { $failures.Add("debug integration missing: $needle") }
+}
 if ($main -match 'drx_da_main\.spawn_artefact_on_smart\s*=') { $failures.Add('Arrival spawn function must not be wrapped') }
+if ($main -match 'raid_dospawn_dungeons\.raid_start_spawn\s*=') { $failures.Add('RVM dospawn function must not be wrapped') }
 if ($main -match 'for\s+id\s*=\s*1\s*,\s*65534[\s\S]{0,300}IsArtefact') { $failures.Add('post-factum global artefact scan detected') }
 if ($main -match '%\.\d+f') { $failures.Add('X-Ray printf-incompatible floating-point format detected') }
 
 $ltx = Get-Content -LiteralPath (Join-Path $ModRoot 'gamedata\configs\plugins\rvm_sorties_rework.ltx') -Raw
-foreach ($needle in @('stash_mode = scouting','weight_artifact = 60','remove_on_npc_pickup = false','rare_artifact_chance = 70','loot_rare_non_artifact = raid_intelligence_note','loot_container_visuals = raid_small_stash_1','map_spot = rvm_search_small','max_false_zones = 1','[level_y04_pole]','[level_k01_darkscape]','[level_l09_deadcity]')) {
+foreach ($needle in @('stash_mode = scouting','weight_artifact = 60','remove_on_npc_pickup = false','rare_artifact_chance = 70','loot_rare_non_artifact = raid_intelligence_note','loot_container_visuals = raid_small_stash_1','map_spot = rvm_search_small','max_false_zones = 1','debug_mode = auto','debug_log = false','[level_y04_pole]','[level_k01_darkscape]','[level_l09_deadcity]')) {
     if (-not $ltx.Contains($needle)) { $failures.Add("config invariant missing: $needle") }
 }
 foreach ($forbidden in @('simk_card','artifact_container')) {
@@ -54,7 +58,7 @@ if (-not $stringsText.Contains('Область интереса')) { $failures.A
 [xml]$stringsText | Out-Null
 $fragment = Get-Content -LiteralPath (Join-Path $ModRoot 'gamedata\configs\ui\map_spots_rvm_sorties.xml') -Raw
 [xml]("<map_spots>" + $fragment + "</map_spots>") | Out-Null
-foreach ($needle in @('rvm_search_small','rvm_search_medium','rvm_search_large','scale_min="1" scale_max="1"')) {
+foreach ($needle in @('rvm_search_small','rvm_search_medium','rvm_search_large','rvm_debug_target','scale_min="1" scale_max="1"')) {
     if (-not $fragment.Contains($needle)) { $failures.Add("map spot invariant missing: $needle") }
 }
 
