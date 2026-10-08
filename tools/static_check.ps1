@@ -55,7 +55,19 @@ $strict1251 = [Text.Encoding]::GetEncoding(1251, [Text.EncoderFallback]::Excepti
 $stringsText = $strict1251.GetString([IO.File]::ReadAllBytes($stringsPath))
 if ($stringsText -notmatch '<\?xml[^>]+encoding="windows-1251"') { $failures.Add('Russian string table must declare windows-1251') }
 if (-not $stringsText.Contains('Область интереса')) { $failures.Add('Russian string table failed Windows-1251 decoding') }
-[xml]$stringsText | Out-Null
+[xml]$stringsXml = $stringsText
+$scoutingText = ($stringsXml.string_table.string | Where-Object id -eq 'st_rvm_sorties_scouting_route_descr').text
+$infectedText = ($stringsXml.string_table.string | Where-Object id -eq 'st_rvm_sorties_anomaly_route_descr').text
+$stashSuffix = ($stringsXml.string_table.string | Where-Object id -eq 'st_rvm_sorties_stash_suffix').text
+if (-not $scoutingText.Contains('%c[255,160,160,160] \n')) { $failures.Add('scouting color tag must keep the original space before \n') }
+if (-not $infectedText.Contains('%c[255,160,160,160] \n')) { $failures.Add('infected color tag must keep the original space before \n') }
+if (-not $scoutingText.Contains('\n \n') -or -not $infectedText.Contains('\n \n')) { $failures.Add('route descriptions must keep the original blank-line token \n \n') }
+if ($stashSuffix -ne '\nНа документе отмечены координаты тайника.') { $failures.Add('stash suffix differs from the RVM-style final text') }
+$scoutingUiText = $scoutingText + $stashSuffix
+$infectedUiText = $infectedText
+if ([regex]::Matches($scoutingUiText, [regex]::Escape('На документе отмечены координаты тайника.')).Count -ne 1) { $failures.Add('build_desc_header simulation must add the stash sentence exactly once to scouting') }
+if ($infectedUiText.Contains('координаты тайника')) { $failures.Add('infected UI text must not mention a stash in scouting mode') }
+if ($scoutingUiText -match '(?i)экспедиц' -or $infectedUiText -match '(?i)экспедиц') { $failures.Add('route UI text must use original RVM terminology, not expedition') }
 $fragment = Get-Content -LiteralPath (Join-Path $ModRoot 'gamedata\configs\ui\map_spots_rvm_sorties.xml') -Raw
 [xml]("<map_spots>" + $fragment + "</map_spots>") | Out-Null
 foreach ($needle in @('rvm_search_small','rvm_search_medium','rvm_search_large','rvm_debug_target','scale_min="1" scale_max="1"')) {
