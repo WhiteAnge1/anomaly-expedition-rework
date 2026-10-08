@@ -1,8 +1,8 @@
--- RVM Sorties Rework by White_Angel 0.2.0-alpha
+-- Anomaly Expedition Rework by White_Angel 0.2.1-alpha
 -- Minimal wrappers around the actual GRA Bolt dungeon-sortie implementation.
 
 local C = rvm_sorties_config
-local PREFIX = "[RVM Sorties Rework]"
+local PREFIX = "[Anomaly Expedition Rework]"
 local callbacks_registered = false
 local hooks_installed = false
 local next_update = 0

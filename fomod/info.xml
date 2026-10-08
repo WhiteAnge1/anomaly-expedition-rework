@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <fomod>
-    <Name>RVM Sorties Rework by White_Angel</Name>
+    <Name>Anomaly Expedition Rework by White_Angel</Name>
     <Author>White_Angel</Author>
-    <Version>0.2.0-alpha</Version>
+    <Version>0.2.1-alpha</Version>
     <Description>Approximate artifact search areas and configurable decoys for RVM dungeon sorties.</Description>
     <Website></Website>
 </fomod>

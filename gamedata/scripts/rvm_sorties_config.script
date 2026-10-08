@@ -1,4 +1,4 @@
--- RVM Sorties Rework by White_Angel
+-- Anomaly Expedition Rework by White_Angel
 -- Runtime reader for gamedata/configs/plugins/rvm_sorties_rework.ltx.
 
 local PATH = "plugins\\rvm_sorties_rework.ltx"
