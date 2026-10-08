@@ -1,0 +1,664 @@
+-- RVM Sorties Rework by White_Angel 0.1.0-alpha
+-- Minimal wrappers around the actual GRA Bolt dungeon-sortie implementation.
+
+local C = rvm_sorties_config
+local PREFIX = "[RVM Sorties Rework]"
+local callbacks_registered = false
+local hooks_installed = false
+local next_update = 0
+
+local function fresh_state()
+    return {
+        schema = 1,
+        level_name = nil,
+        sortie_type = nil,
+        start_pos = nil,
+        zones = {},
+        artifact_zone = {},
+        pending_artifacts = {},
+        stash_ids = {},
+        suppress_stash_calls = 0,
+        decoys_created = false,
+        last_artifact_time = 0,
+        counters = { created = 0, closed = 0, artifact = 0, enemy = 0, loot = 0, empty = 0 },
+    }
+end
+
+local state = fresh_state()
+
+local function enabled()
+    return C.get_bool("global", "enabled", true)
+end
+
+local function debug_enabled()
+    return C.get_bool("global", "debug_log", true)
+end
+
+local function log(fmt, ...)
+    if debug_enabled() then printf(PREFIX .. " " .. fmt, ...) end
+end
+
+local function pos_table(pos)
+    return pos and { x = pos.x, y = pos.y, z = pos.z } or nil
+end
+
+local function pos_vector(pos)
+    return pos and vector():set(pos.x, pos.y, pos.z) or nil
+end
+
+local function distance_xz(a, b)
+    if not (a and b) then return 999999 end
+    local dx = a.x - b.x
+    local dz = a.z - b.z
+    return math.sqrt(dx * dx + dz * dz)
+end
+
+local function valid_vertex(pos)
+    if not (level and pos) then return nil end
+    local lvid = level.vertex_id(pos)
+    if not lvid or lvid >= 4294967295 then return nil end
+    return lvid
+end
+
+local function current_tier()
+    local forced = math.floor(C.get_number("global", "debug_force_tier", 0))
+    if forced >= 1 and forced <= 3 then return forced end
+    return C.get_level_tier(level.name())
+end
+
+local function balanced(key, default)
+    local forced = math.floor(C.get_number("global", "debug_force_tier", 0))
+    if forced >= 1 and forced <= 3 then
+        return C.get_number("tier_" .. tostring(forced), key, C.get_number("global", key, default))
+    end
+    return C.get_balanced(level.name(), key, default)
+end
+
+local function balanced_list(key)
+    local forced = math.floor(C.get_number("global", "debug_force_tier", 0))
+    if forced >= 1 and forced <= 3 then return C.get_list("tier_" .. tostring(forced), key) end
+    return C.get_balanced_list(level.name(), key)
+end
+
+local function spot_for_radius(radius)
+    if radius <= 70 then return "rvm_search_60" end
+    if radius <= 105 then return "rvm_search_90" end
+    if radius <= 140 then return "rvm_search_120" end
+    if radius <= 180 then return "rvm_search_160" end
+    if radius <= 220 then return "rvm_search_200" end
+    return "rvm_search_240"
+end
+
+local function safe_release(id)
+    if not id then return end
+    local obj = alife_object(id)
+    if obj then alife_release(obj) end
+end
+
+local function remove_spot(zone)
+    if zone and zone.anchor_id and zone.spot then
+        if level.map_has_object_spot(zone.anchor_id, zone.spot) ~= 0 then
+            level.map_remove_object_spot(zone.anchor_id, zone.spot)
+            level.map_remove_object_spot(zone.anchor_id, zone.spot)
+        end
+    end
+end
+
+local function close_zone(zone, reason)
+    if not zone or zone.closed then return end
+    remove_spot(zone)
+    -- Releasing an inventory box inside its use callback can invalidate the
+    -- inventory window. Keep an opened box until sortie cleanup.
+    if zone.content_id and reason ~= "container_opened" then safe_release(zone.content_id) end
+    if zone.anchor_id then
+        if zone.managed_anchor and raid_objects_arranger and raid_objects_arranger.release_raid_objects then
+            raid_objects_arranger.release_raid_objects(zone.anchor_id)
+        else
+            safe_release(zone.anchor_id)
+        end
+    end
+    zone.closed = true
+    state.counters.closed = (state.counters.closed or 0) + 1
+    log("close type=%s anchor=%s reason=%s closed=%s/%s",
+        tostring(zone.kind), tostring(zone.anchor_id), tostring(reason),
+        tostring(state.counters.closed), tostring(state.counters.created))
+end
+
+local function cleanup_stashes()
+    for id, _ in pairs(state.stash_ids or {}) do
+        if level and level.map_has_object_spot(id, "secondary_task_location") ~= 0 then
+            level.map_remove_object_spot(id, "secondary_task_location")
+            level.map_remove_object_spot(id, "secondary_task_location")
+        end
+        if raid_tasks_main and raid_tasks_main.raid_busy_stashes_t then
+            raid_tasks_main.raid_busy_stashes_t[id] = nil
+        end
+        if grok_stashes_on_corpses and grok_stashes_on_corpses.clear_stash then
+            grok_stashes_on_corpses.clear_stash(id, state.level_name)
+        end
+    end
+end
+
+function cleanup(reason)
+    log("cleanup reason=%s level=%s zones=%s", tostring(reason), tostring(state.level_name), tostring(size_table(state.zones or {})))
+    for _, zone in pairs(state.zones or {}) do
+        remove_spot(zone)
+        if zone.spawned_ids then
+            for id, _ in pairs(zone.spawned_ids) do safe_release(id) end
+        end
+        if zone.content_id then safe_release(zone.content_id) end
+        if zone.anchor_id then
+            if zone.managed_anchor and raid_objects_arranger and raid_objects_arranger.release_raid_objects then
+                raid_objects_arranger.release_raid_objects(zone.anchor_id)
+            else
+                safe_release(zone.anchor_id)
+            end
+        end
+    end
+    cleanup_stashes()
+    state = fresh_state()
+end
+
+local function create_anchor(pos)
+    local lvid = valid_vertex(pos)
+    if not lvid or not db.actor then return nil end
+    local fixed = level.vertex_position(lvid)
+    fixed.y = fixed.y - 1
+    local anchor = alife_create("raid_shelter_gag", fixed, lvid, db.actor:game_vertex_id())
+    if not anchor then return nil end
+    if utils_stpk and utils_stpk.get_physic_data then
+        local data = utils_stpk.get_physic_data(anchor)
+        utils_stpk.set_physic_data(data, anchor)
+    end
+    return anchor.id, pos_table(fixed)
+end
+
+local function separated(pos)
+    local minimum = balanced("zone_separation_min", 45)
+    for _, zone in pairs(state.zones) do
+        if zone.center and distance_xz(pos, zone.center) < minimum then return false end
+    end
+    return true
+end
+
+local function add_zone(kind, anchor_id, center, radius, extra)
+    if not (anchor_id and center) then return nil end
+    local zone = extra or {}
+    zone.kind = kind
+    zone.anchor_id = anchor_id
+    zone.center = center
+    zone.radius = radius
+    zone.spot = spot_for_radius(radius)
+    zone.closed = false
+    state.zones[tostring(anchor_id)] = zone
+    state.counters.created = state.counters.created + 1
+    state.counters[kind] = (state.counters[kind] or 0) + 1
+    level.map_add_object_spot_ser(anchor_id, zone.spot, game.translate_string("st_rvm_sorties_area_hint"))
+    log("create type=%s center=(%.1f, %.1f, %.1f) radius=%.1f anchor=%s linked=%s",
+        kind, center.x, center.y, center.z, radius, tostring(anchor_id),
+        tostring(zone.artifact_id or zone.content_id or "none"))
+    return zone
+end
+
+local function random_radius()
+    local min_r = math.floor(balanced("zone_radius_min", 80))
+    local max_r = math.floor(balanced("zone_radius_max", 140))
+    if max_r < min_r then max_r = min_r end
+    return math.random(min_r, max_r)
+end
+
+local function create_artifact_zone(artifact_id)
+    if state.artifact_zone[tostring(artifact_id)] then return true end
+    local art = alife_object(artifact_id)
+    if not art then
+        log("artifact id=%s vanished before area creation", tostring(artifact_id))
+        return false
+    end
+    local radius = random_radius()
+    local fmin = C.get_number("global", "artifact_offset_fraction_min", 0.35)
+    local fmax = C.get_number("global", "artifact_offset_fraction_max", 0.80)
+    local attempts = math.floor(C.get_number("global", "placement_attempts", 60))
+    for _ = 1, attempts do
+        local angle = math.random() * math.pi * 2
+        local offset = radius * (fmin + math.random() * (fmax - fmin))
+        local candidate = vector():set(art.position.x + math.cos(angle) * offset, art.position.y, art.position.z + math.sin(angle) * offset)
+        local lvid = valid_vertex(candidate)
+        if lvid and separated(candidate) then
+            local anchor_id, center = create_anchor(level.vertex_position(lvid))
+            local zone = add_zone("artifact", anchor_id, center, radius, { artifact_id = artifact_id })
+            if zone then
+                state.artifact_zone[tostring(artifact_id)] = tostring(anchor_id)
+                return true
+            end
+        end
+    end
+    log("ERROR no valid center for raid artifact id=%s", tostring(artifact_id))
+    return false
+end
+
+local function random_decoy_anchor(kind)
+    local attempts = math.floor(C.get_number("global", "placement_attempts", 60))
+    for _ = 1, attempts do
+        local id = raid_objects_arranger.spawn_object_rand_point("raid_shelter_gag", level.name(), -1)
+        local obj = id and alife_object(id)
+        if obj then
+            local valid = separated(obj.position)
+            if kind == "enemy" and state.start_pos then
+                valid = valid and distance_xz(obj.position, state.start_pos) >= balanced("ambush_start_exclusion_radius", 180)
+            end
+            if valid then return id, pos_table(obj.position) end
+            raid_objects_arranger.release_raid_objects(id)
+        end
+    end
+    return nil, nil
+end
+
+local function valid_sections(list)
+    local result = {}
+    for _, section in ipairs(list or {}) do
+        if ini_sys:section_exist(section) then result[#result + 1] = section
+        else log("config section missing, ignored: %s", tostring(section)) end
+    end
+    return result
+end
+
+local function choose_distinct(pool, used)
+    local available = {}
+    for _, section in ipairs(valid_sections(pool)) do
+        if not used[section] then available[#available + 1] = section end
+    end
+    if #available == 0 then return nil end
+    return available[math.random(1, #available)]
+end
+
+local function fill_loot(box_id)
+    local box = alife_object(box_id)
+    if not box then return 0 end
+    local target_min = math.max(1, math.floor(balanced("loot_distinct_min", 1)))
+    local target_max = math.max(target_min, math.floor(balanced("loot_distinct_max", 6)))
+    local target = math.random(target_min, target_max)
+    local used, picked = {}, {}
+
+    if math.random(1, 100) <= balanced("medicine_chance", 75) then
+        local med = choose_distinct(balanced_list("loot_medicine"), used)
+        if med then used[med] = true; picked[#picked + 1] = med end
+    end
+
+    local utility = balanced_list("loot_utility")
+    local modules = balanced_list("loot_modules")
+    local attempts = 0
+    while #picked < target and attempts < 50 do
+        attempts = attempts + 1
+        local pool = math.random(1, 100) <= 45 and utility or modules
+        local section = choose_distinct(pool, used)
+        if not section then section = choose_distinct(utility, used) or choose_distinct(modules, used) end
+        if section then used[section] = true; picked[#picked + 1] = section end
+        if not section then break end
+    end
+
+    if math.random(1, 100) <= balanced("rare_slot_chance", 4) then
+        local rare = choose_distinct(balanced_list("loot_rare"), used)
+        if rare then used[rare] = true; picked[#picked + 1] = rare end
+    end
+
+    if #picked == 0 then
+        local fallback = choose_distinct(utility, used) or choose_distinct(modules, used)
+        if fallback then picked[1] = fallback end
+    end
+    for _, section in ipairs(picked) do alife_create_item(section, box) end
+    log("loot box=%s distinct=%s", tostring(box_id), tostring(#picked))
+    return #picked
+end
+
+local function create_loot_zone()
+    local anchor_id, center = random_decoy_anchor("loot")
+    if not anchor_id then return false end
+    local anchor = alife_object(anchor_id)
+    local lvid = anchor and valid_vertex(anchor.position)
+    if not lvid then safe_release(anchor_id); return false end
+    local box_pos = level.vertex_position(lvid)
+    local box = alife_create("inventory_box", box_pos, lvid, db.actor:game_vertex_id())
+    if not box then safe_release(anchor_id); return false end
+    if fill_loot(box.id) < 1 then
+        safe_release(box.id); safe_release(anchor_id)
+        log("ERROR loot generation had no valid configured sections")
+        return false
+    end
+    return add_zone("loot", anchor_id, center, random_radius(), { content_id = box.id, managed_anchor = true }) ~= nil
+end
+
+local function create_decoy(kind)
+    if kind == "loot" then return create_loot_zone() end
+    local anchor_id, center = random_decoy_anchor(kind)
+    if not anchor_id then return false end
+    return add_zone(kind, anchor_id, center, random_radius(), { managed_anchor = true }) ~= nil
+end
+
+local function enabled_weights()
+    local weights = {
+        artifact = math.max(0, C.get_number("global", "weight_artifact", 60)),
+        enemy = C.get_bool("global", "enable_enemy_decoys", true) and math.max(0, C.get_number("global", "weight_enemy", 20)) or 0,
+        loot = C.get_bool("global", "enable_loot_decoys", true) and math.max(0, C.get_number("global", "weight_loot", 10)) or 0,
+        empty = C.get_bool("global", "enable_empty_decoys", true) and math.max(0, C.get_number("global", "weight_empty", 10)) or 0,
+    }
+    return weights
+end
+
+local function weighted_decoy(weights)
+    local forced = string.lower(C.get_string("global", "debug_force_decoy_type", "off"))
+    if forced == "enemy" or forced == "loot" or forced == "empty" then return forced end
+    local total = weights.enemy + weights.loot + weights.empty
+    if total <= 0 then return nil end
+    local roll = math.random() * total
+    if roll < weights.enemy then return "enemy" end
+    if roll < weights.enemy + weights.loot then return "loot" end
+    return "empty"
+end
+
+local function create_decoys()
+    if state.decoys_created then return end
+    state.decoys_created = true
+    local true_count = state.counters.artifact or 0
+    local weights = enabled_weights()
+    if true_count < 1 or weights.artifact <= 0 then return end
+    if string.lower(C.get_string("global", "debug_force_decoy_type", "off")) == "artifact" then
+        log("debug_force_decoy_type=artifact: only real artifact areas retained")
+        return
+    end
+    local total_weight = weights.artifact + weights.enemy + weights.loot + weights.empty
+    local exact_total = true_count * total_weight / weights.artifact
+    local total = math.floor(exact_total)
+    if math.random() < (exact_total - total) then total = total + 1 end
+    local false_count = math.max(0, total - true_count)
+    for _ = 1, false_count do
+        local kind = weighted_decoy(weights)
+        if kind and not create_decoy(kind) then
+            local fallback = C.get_bool("global", "enable_loot_decoys", true) and "loot" or "empty"
+            if fallback ~= kind and not create_decoy(fallback) then create_decoy("empty") end
+            log("decoy rerolled from %s after placement failure", tostring(kind))
+        end
+    end
+end
+
+local function stock_spawn_radius()
+    local fallback = balanced("ambush_spawn_safe_fallback", 85)
+    if raid_dospawn_dungeons and raid_dospawn_dungeons.raid_sim_dospawn
+    and raid_dospawn_dungeons.raid_sim_dospawn[level.name()]
+    and raid_dospawn_dungeons.raid_sim_dospawn[level.name()]["infected"] then
+        local value = raid_dospawn_dungeons.raid_sim_dospawn[level.name()]["infected"].spawn_block_radius
+        if value then return value end
+    end
+    log("stock respawn exclusion unavailable; fallback=%.1f", fallback)
+    return fallback
+end
+
+local function point_outside_view(pos)
+    local actor_pos = db.actor:position()
+    local dir = db.actor:direction()
+    local vx, vz = pos.x - actor_pos.x, pos.z - actor_pos.z
+    local len = math.sqrt(vx * vx + vz * vz)
+    local dlen = math.sqrt(dir.x * dir.x + dir.z * dir.z)
+    if len < 0.01 or dlen < 0.01 then return false end
+    local cosine = (vx * dir.x + vz * dir.z) / (len * dlen)
+    return cosine < 0.35
+end
+
+local function collect_anomaly_positions()
+    local result = {}
+    for id = 1, 65534 do
+        local obj = alife_object(id)
+        if obj and IsAnomaly(obj) then result[#result + 1] = pos_table(obj.position) end
+    end
+    return result
+end
+
+local function point_clear_of_anomalies(pos, anomaly_positions)
+    for _, anomaly_pos in ipairs(anomaly_positions or {}) do
+        if distance_xz(pos, anomaly_pos) < 15 then return false end
+    end
+    return true
+end
+
+local function ambush_spawn_point(zone)
+    local min_d = math.floor(balanced("enemy_spawn_distance_min", 35))
+    local max_d = math.floor(balanced("enemy_spawn_distance_max", 90))
+    local safe = stock_spawn_radius() + balanced("ambush_extra_padding", 20)
+    local attempts = math.floor(C.get_number("global", "placement_attempts", 60))
+    for _ = 1, attempts do
+        local angle = math.random() * math.pi * 2
+        local dist = math.random(min_d, math.max(min_d, max_d))
+        local p = vector():set(zone.center.x + math.cos(angle) * dist, zone.center.y, zone.center.z + math.sin(angle) * dist)
+        local lvid = valid_vertex(p)
+        if lvid then
+            p = level.vertex_position(lvid)
+            if distance_xz(p, db.actor:position()) >= safe and point_outside_view(p)
+            and point_clear_of_anomalies(p, zone.anomaly_positions) then
+                return p, lvid
+            end
+        end
+    end
+    return nil, nil
+end
+
+local function trigger_ambush(zone)
+    if zone.triggered then return end
+    zone.triggered = true
+    zone.spawned_ids = {}
+    zone.anomaly_positions = collect_anomaly_positions()
+    local sections = valid_sections(balanced_list("enemy_sections"))
+    local min_n = math.max(1, math.floor(balanced("enemy_count_min", 2)))
+    local max_n = math.max(min_n, math.floor(balanced("enemy_count_max", 3)))
+    local count = math.random(min_n, max_n)
+    for _ = 1, count do
+        local pos, lvid = ambush_spawn_point(zone)
+        if pos and #sections > 0 then
+            local section = sections[math.random(1, #sections)]
+            local obj = alife_create(section, pos, lvid, db.actor:game_vertex_id())
+            if obj then zone.spawned_ids[obj.id] = true end
+        end
+    end
+    if size_table(zone.spawned_ids) == 0 then
+        log("ERROR ambush anchor=%s has no safe spawn point; resolving safely", tostring(zone.anchor_id))
+        close_zone(zone, "unsafe_spawn_rejected")
+    else
+        log("ambush anchor=%s spawned=%s", tostring(zone.anchor_id), tostring(size_table(zone.spawned_ids)))
+    end
+    zone.anomaly_positions = nil
+end
+
+local function update_zones()
+    for _, zone in pairs(state.zones) do
+        if not zone.closed and zone.kind == "enemy" then
+            if not zone.triggered then
+                local trigger = zone.radius + balanced("ambush_trigger_padding", 130)
+                if distance_xz(db.actor:position(), zone.center) <= trigger then trigger_ambush(zone) end
+            else
+                local alive = 0
+                for id, _ in pairs(zone.spawned_ids or {}) do
+                    local obj = alife_object(id)
+                    if obj and obj:alive() then alive = alive + 1 end
+                end
+                if alive == 0 then close_zone(zone, "ambush_resolved") end
+            end
+        end
+    end
+end
+
+local function create_scouting_stash()
+    if state.scouting_stash_created then return end
+    state.scouting_stash_created = true
+    local id, name, descr, hint = treasure_manager.get_random_stash(nil, game.translate_string("st_stash_of"), nil, nil, nil, nil, level.name())
+    if not id then log("scouting stash: no free stash found"); return end
+    state.stash_ids[id] = true
+    raid_tasks_main.raid_busy_stashes_t[id] = true
+    if level.map_has_object_spot(id, "secondary_task_location") == 0 then
+        level.map_add_object_spot_ser(id, "secondary_task_location", dynamic_news_helper.GetPointDescription(alife_object(id)))
+    end
+    treasure_manager.set_random_stash(nil, dynamic_news_helper.GetPointDescription(alife_object(id)), nil, id, true)
+    log("scouting stash created id=%s", tostring(id))
+end
+
+local function prepare_sortie(sortie_type)
+    if state.level_name and (state.level_name ~= level.name() or state.sortie_type ~= sortie_type) then cleanup("new_sortie") end
+    state.level_name = level.name()
+    state.sortie_type = sortie_type
+    state.start_capture_after = time_global() + 1200
+    if sortie_type == "infected" then
+        local mode = string.lower(C.get_string("global", "stash_mode", "scouting"))
+        if mode ~= "anomaly" then state.suppress_stash_calls = 10 end
+    elseif sortie_type == "scouting" and string.lower(C.get_string("global", "stash_mode", "scouting")) == "scouting" then
+        state.need_scouting_stash = true
+    end
+    log("prepare type=%s level=%s", tostring(sortie_type), tostring(level.name()))
+end
+
+local function install_hooks()
+    if hooks_installed then return end
+    hooks_installed = true
+
+    if raid_anomalys and raid_anomalys.spawn_artefact_in_zone then
+        local base_spawn_artifact = raid_anomalys.spawn_artefact_in_zone
+        raid_anomalys.spawn_artefact_in_zone = function(anom_zone, pos, level_tier)
+            local artifact_id = base_spawn_artifact(anom_zone, pos, level_tier)
+            if enabled() and artifact_id and state.sortie_type == "infected" and state.level_name == level.name() then
+                state.pending_artifacts[tostring(artifact_id)] = artifact_id
+                state.last_artifact_time = time_global()
+                log("captured raid artifact id=%s zone=%s", tostring(artifact_id), tostring(anom_zone))
+            end
+            return artifact_id
+        end
+    else
+        printf(PREFIX .. " ERROR raid_anomalys.spawn_artefact_in_zone not found")
+    end
+
+    if raid_tasks_dungeons and raid_tasks_dungeons.issue_task_dungeon then
+        local base_issue = raid_tasks_dungeons.issue_task_dungeon
+        raid_tasks_dungeons.issue_task_dungeon = function(sortie_type)
+            if enabled() then prepare_sortie(sortie_type) end
+            return base_issue(sortie_type)
+        end
+    else
+        printf(PREFIX .. " ERROR raid_tasks_dungeons.issue_task_dungeon not found")
+    end
+
+    if treasure_manager and treasure_manager.get_random_stash then
+        local base_get_stash = treasure_manager.get_random_stash
+        treasure_manager.get_random_stash = function(...)
+            if enabled() and state.suppress_stash_calls and state.suppress_stash_calls > 0
+            and state.sortie_type == "infected" and state.level_name == level.name() then
+                state.suppress_stash_calls = state.suppress_stash_calls - 1
+                log("suppressed anomaly-sortie stash attempt; remaining=%s", tostring(state.suppress_stash_calls))
+                return nil
+            end
+            return base_get_stash(...)
+        end
+    end
+
+    if ui_item and ui_item.build_desc_header then
+        local base_header = ui_item.build_desc_header
+        ui_item.build_desc_header = function(obj, sec, str)
+            local result = base_header(obj, sec, str)
+            if enabled() and sec and string.find(sec, "raid_map_travel_") then
+                local mode = string.lower(C.get_string("global", "stash_mode", "scouting"))
+                local matches = (mode == "scouting" and string.find(sec, "_scouting")) or (mode == "anomaly" and string.find(sec, "_infected"))
+                if matches then result = result .. game.translate_string("st_rvm_sorties_stash_suffix") end
+            end
+            return result
+        end
+    end
+end
+
+local function actor_on_item_take(item)
+    if not item then return end
+    local key = tostring(item:id())
+    local anchor_key = state.artifact_zone[key]
+    local zone = anchor_key and state.zones[anchor_key]
+    if zone then close_zone(zone, "actor_pickup") end
+end
+
+local function npc_on_item_take(npc, item)
+    if not (item and C.get_bool("global", "remove_on_npc_pickup", false)) then return end
+    local anchor_key = state.artifact_zone[tostring(item:id())]
+    local zone = anchor_key and state.zones[anchor_key]
+    if zone then close_zone(zone, "npc_pickup") end
+end
+
+local function physic_object_on_use_callback(box, who)
+    if not box then return end
+    for _, zone in pairs(state.zones) do
+        if not zone.closed and zone.kind == "loot" and zone.content_id == box:id() then
+            close_zone(zone, "container_opened")
+            return
+        end
+    end
+end
+
+local function actor_on_first_update()
+    install_hooks()
+    if state.level_name and state.level_name ~= level.name() then cleanup("loaded_other_level") end
+    if state.level_name == level.name() then
+        for _, zone in pairs(state.zones) do
+            if not zone.closed and zone.anchor_id and alife_object(zone.anchor_id)
+            and level.map_has_object_spot(zone.anchor_id, zone.spot) == 0 then
+                level.map_add_object_spot_ser(zone.anchor_id, zone.spot, game.translate_string("st_rvm_sorties_area_hint"))
+            end
+        end
+    end
+end
+
+local function actor_on_update()
+    if not enabled() or not db.actor then return end
+    local now = time_global()
+    if now < next_update then return end
+    next_update = now + math.max(250, C.get_number("global", "update_interval_ms", 1000))
+
+    if C.get_bool("global", "debug_cleanup_current_sortie", false) then cleanup("debug_flag"); return end
+    if not state.level_name or state.level_name ~= level.name() then return end
+    if not state.start_pos and state.start_capture_after and now >= state.start_capture_after then
+        state.start_pos = pos_table(db.actor:position())
+        log("start position captured (%.1f, %.1f, %.1f)", state.start_pos.x, state.start_pos.y, state.start_pos.z)
+    end
+    if state.need_scouting_stash and state.start_pos then
+        state.need_scouting_stash = nil
+        create_scouting_stash()
+    end
+    if state.sortie_type == "infected" then
+        for key, artifact_id in pairs(state.pending_artifacts) do
+            if create_artifact_zone(artifact_id) then state.pending_artifacts[key] = nil end
+        end
+        if not state.decoys_created and state.last_artifact_time > 0 and now - state.last_artifact_time >= 2000 then create_decoys() end
+        update_zones()
+    end
+end
+
+local function on_before_level_changing()
+    if state.level_name then cleanup("level_change") end
+end
+
+local function save_state(m_data)
+    m_data.rvm_sorties_rework = state
+end
+
+local function load_state(m_data)
+    state = m_data.rvm_sorties_rework or fresh_state()
+    state.zones = state.zones or {}
+    state.artifact_zone = state.artifact_zone or {}
+    state.pending_artifacts = state.pending_artifacts or {}
+    state.stash_ids = state.stash_ids or {}
+    state.counters = state.counters or fresh_state().counters
+end
+
+function on_game_start()
+    if callbacks_registered then return end
+    callbacks_registered = true
+    C.reload()
+    install_hooks()
+    RegisterScriptCallback("actor_on_first_update", actor_on_first_update)
+    RegisterScriptCallback("actor_on_update", actor_on_update)
+    RegisterScriptCallback("actor_on_item_take", actor_on_item_take)
+    RegisterScriptCallback("npc_on_item_take", npc_on_item_take)
+    RegisterScriptCallback("physic_object_on_use_callback", physic_object_on_use_callback)
+    RegisterScriptCallback("on_before_level_changing", on_before_level_changing)
+    RegisterScriptCallback("save_state", save_state)
+    RegisterScriptCallback("load_state", load_state)
+end

@@ -1,0 +1,90 @@
+-- RVM Sorties Rework by White_Angel
+-- Runtime reader for gamedata/configs/plugins/rvm_sorties_rework.ltx.
+
+local PATH = "plugins\\rvm_sorties_rework.ltx"
+local cfg = nil
+
+local function split_csv(value)
+    local result = {}
+    if not value then return result end
+    for token in string.gmatch(value, "[^,]+") do
+        token = string.gsub(token, "^%s+", "")
+        token = string.gsub(token, "%s+$", "")
+        if token ~= "" then result[#result + 1] = token end
+    end
+    return result
+end
+
+local function has(section, key)
+    return cfg and cfg:section_exist(section) and cfg:line_exist(section, key)
+end
+
+local function raw(section, key, default)
+    if not has(section, key) then return default end
+    return cfg:r_string(section, key)
+end
+
+local function number(section, key, default)
+    local value = tonumber(raw(section, key, nil))
+    return value ~= nil and value or default
+end
+
+local function boolean(section, key, default)
+    local value = raw(section, key, nil)
+    if value == nil then return default end
+    value = string.lower(tostring(value))
+    return value == "true" or value == "1" or value == "yes" or value == "on"
+end
+
+function reload()
+    cfg = ini_file(PATH)
+    return cfg ~= nil
+end
+
+function get_string(section, key, default)
+    return raw(section, key, default)
+end
+
+function get_number(section, key, default)
+    return number(section, key, default)
+end
+
+function get_bool(section, key, default)
+    return boolean(section, key, default)
+end
+
+function get_list(section, key)
+    return split_csv(raw(section, key, ""))
+end
+
+function get_level_tier(level_name)
+    if raid_utils and raid_utils.get_raid_sim then
+        local sim = raid_utils.get_raid_sim(level_name)
+        if sim and sim.level_tier then return sim.level_tier end
+    end
+    local level_section = "level_" .. tostring(level_name)
+    return math.floor(number(level_section, "tier", 1))
+end
+
+-- Hierarchy: global -> tier_N -> level_<technical id>.
+function get_balanced(level_name, key, default)
+    local value = number("global", key, default)
+    local tier = get_level_tier(level_name)
+    value = number("tier_" .. tostring(tier), key, value)
+    value = number("level_" .. tostring(level_name), key, value)
+    return value
+end
+
+function get_balanced_list(level_name, key)
+    local result = get_list("global", key)
+    local tier = get_level_tier(level_name)
+    if has("tier_" .. tostring(tier), key) then
+        result = get_list("tier_" .. tostring(tier), key)
+    end
+    if has("level_" .. tostring(level_name), key) then
+        result = get_list("level_" .. tostring(level_name), key)
+    end
+    return result
+end
+
+reload()

@@ -1,0 +1,127 @@
+; ============================================================================
+; RVM Sorties Rework by White_Angel 0.1.0-alpha
+; Все расстояния указаны в игровых метрах, вероятности и веса — числа >= 0.
+; Иерархия значений: [global] -> [tier_N] -> [level_техническое_имя].
+; После изменения файла полностью перезапустите игру.
+; ============================================================================
+
+[global]
+; Основной выключатель. false: callbacks остаются безопасными, но ничего не создают.
+enabled = true
+
+; Тайники: anomaly (исходное поведение), scouting (перенос), disabled (отключить).
+stash_mode = scouting
+
+; Независимые дополнительные типы ложных областей.
+enable_enemy_decoys = true
+enable_loot_decoys = true
+enable_empty_decoys = true
+
+; Целевые статистические веса. После отключения типов автоматически нормализуются.
+weight_artifact = 60
+weight_enemy = 20
+weight_loot = 10
+weight_empty = 10
+
+; При true метка исчезает, если callback сообщил о подборе артефакта NPC.
+; По умолчанию false, чтобы не раскрывать игроку кражу артефакта.
+remove_on_npc_pickup = false
+
+; Смещение центра настоящей области: доля её радиуса (0.0-1.0).
+artifact_offset_fraction_min = 0.35
+artifact_offset_fraction_max = 0.80
+
+; Минимальное расстояние между центрами областей и число попыток размещения.
+zone_separation_min = 45
+placement_attempts = 60
+
+; Радиус запрета опасной области вокруг фактической стартовой позиции игрока.
+ambush_start_exclusion_radius = 180
+; Засада активируется заранее; фактический порог = радиус области + это значение.
+ambush_trigger_padding = 130
+; Запас сверх штатного радиуса доспавна РВМ.
+ambush_extra_padding = 20
+; Резерв, если таблица РВМ недоступна.
+ambush_spawn_safe_fallback = 85
+; Расстояние точки появления от центра области.
+enemy_spawn_distance_min = 35
+enemy_spawn_distance_max = 90
+; Число существ (целые значения >= 1).
+enemy_count_min = 2
+enemy_count_max = 3
+; Если созданные существа исчезли из A-Life, область считается разрешённой.
+enemy_missing_resolves = true
+
+; Контейнер: число различных предметов и шанс обязательного медицинского броска.
+loot_distinct_min = 1
+loot_distinct_max = 6
+medicine_chance = 75
+rare_slot_chance = 4
+
+; Период обновления логики, мс. Допустимо 250-5000; по умолчанию 1000.
+update_interval_ms = 1000
+
+; Диагностика. debug_log печатает тип, координаты, радиус и связанные ID.
+debug_log = true
+; off, artifact, enemy, loot, empty — принудительный тип ложных областей для теста.
+debug_force_decoy_type = off
+; 0 — фактический тир; 1/2/3 — принудительная таблица для теста.
+debug_force_tier = 0
+; true очищает состояние при следующем обновлении. Затем верните false вручную.
+debug_cleanup_current_sortie = false
+
+[tier_1]
+zone_radius_min = 60
+zone_radius_max = 100
+enemy_count_min = 2
+enemy_count_max = 2
+medicine_chance = 70
+enemy_sections = dog_normal, boar_normal, flesh_normal
+loot_medicine = medkit_army, medkit, antirad, stimpack
+loot_utility = detector_simple, itm_ammokit, simk_card
+loot_modules = af_iam, lead_box, artifact_container
+loot_rare = raid_intelligence_note, af_medusa
+
+[tier_2]
+zone_radius_min = 110
+zone_radius_max = 180
+enemy_count_min = 2
+enemy_count_max = 3
+medicine_chance = 78
+enemy_sections = dog_normal, boar_normal, flesh_normal, snork_normal, pseudodog_normal
+loot_medicine = medkit_army, medkit_scientic, antirad, stimpack_army
+loot_utility = detector_advanced, itm_ammokit, simk_card
+loot_modules = af_iam, af_aac, lead_box, artifact_container
+loot_rare = raid_intelligence_note, af_cristall_flower, af_vyvert
+
+[tier_3]
+zone_radius_min = 140
+zone_radius_max = 230
+enemy_count_min = 2
+enemy_count_max = 3
+medicine_chance = 85
+enemy_sections = snork_normal, pseudodog_normal, bloodsucker_normal
+loot_medicine = medkit_scientic, medkit_army, antirad, stimpack_scientic
+loot_utility = detector_elite, detector_scientific, itm_ammokit, simk_card
+loot_modules = af_iam, af_aac, af_aam, lead_box, artifact_container
+loot_rare = raid_intelligence_note, af_gold_fish, af_dummy_battery
+
+; Поляна — фактический идентификатор y04_pole, тир 1.
+[level_y04_pole]
+tier = 1
+zone_radius_min = 55
+zone_radius_max = 85
+
+; Тёмная лощина — фактический идентификатор k01_darkscape, тир 2.
+[level_k01_darkscape]
+tier = 2
+zone_radius_min = 150
+zone_radius_max = 240
+enemy_spawn_distance_min = 60
+enemy_spawn_distance_max = 110
+
+; Мёртвый город — фактический идентификатор l09_deadcity, тир 3.
+[level_l09_deadcity]
+tier = 3
+zone_radius_min = 140
+zone_radius_max = 220
