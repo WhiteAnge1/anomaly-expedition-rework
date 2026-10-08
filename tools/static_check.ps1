@@ -1,6 +1,7 @@
 param(
     [string]$ModRoot = (Split-Path -Parent $PSScriptRoot),
-    [string]$PythonDeps = ""
+    [string]$PythonDeps = "",
+    [string]$BuildModsRoot = ""
 )
 
 $ErrorActionPreference = 'Stop'
@@ -27,18 +28,55 @@ foreach ($needle in @('raid_anomalys.spawn_artefact_in_zone','actor_on_item_take
 foreach ($needle in @('raid_artefacts_tiers_by_dop','raid_artefacts.addToQueuedArtefacts','{ 1, 2, 3, 4, 5 }','{ 5, 6 }','{ 6, 7 }')) {
     if (-not $main.Contains($needle)) { $failures.Add("artifact integration missing: $needle") }
 }
+foreach ($needle in @('generate_scripted_mapspot_at','set_pingspot_persistence','deregister_script_zone','visual_id','max_false_zones','decoy plan')) {
+    if (-not $main.Contains($needle)) { $failures.Add("test-fix integration missing: $needle") }
+}
 if ($main -match 'drx_da_main\.spawn_artefact_on_smart\s*=') { $failures.Add('Arrival spawn function must not be wrapped') }
 if ($main -match 'for\s+id\s*=\s*1\s*,\s*65534[\s\S]{0,300}IsArtefact') { $failures.Add('post-factum global artefact scan detected') }
+if ($main -match '%\.\d+f') { $failures.Add('X-Ray printf-incompatible floating-point format detected') }
 
 $ltx = Get-Content -LiteralPath (Join-Path $ModRoot 'gamedata\configs\plugins\rvm_sorties_rework.ltx') -Raw
-foreach ($needle in @('stash_mode = scouting','weight_artifact = 60','remove_on_npc_pickup = false','rare_artifact_chance = 70','loot_rare_non_artifact = raid_intelligence_note','[level_y04_pole]','[level_k01_darkscape]','[level_l09_deadcity]')) {
+foreach ($needle in @('stash_mode = scouting','weight_artifact = 60','remove_on_npc_pickup = false','rare_artifact_chance = 70','loot_rare_non_artifact = raid_intelligence_note','loot_container_visuals = raid_small_stash_1','map_spot = rvm_search_small','max_false_zones = 1','[level_y04_pole]','[level_k01_darkscape]','[level_l09_deadcity]')) {
     if (-not $ltx.Contains($needle)) { $failures.Add("config invariant missing: $needle") }
+}
+foreach ($forbidden in @('simk_card','artifact_container')) {
+    if ($ltx -match "(?m)^loot_[^=]+=[^`r`n]*\b$([regex]::Escape($forbidden))\b") { $failures.Add("invalid configured loot section: $forbidden") }
 }
 
 [xml](Get-Content -LiteralPath (Join-Path $ModRoot 'fomod\info.xml') -Raw) | Out-Null
-[xml](Get-Content -LiteralPath (Join-Path $ModRoot 'gamedata\configs\text\rus\st_rvm_sorties_rework.xml') -Raw) | Out-Null
+$fomod = Get-Content -LiteralPath (Join-Path $ModRoot 'fomod\info.xml') -Raw
+if (-not $fomod.Contains('[Геймплей] Anomaly Expedition Rework by White_Angel v0.2.1-alpha')) { $failures.Add('FOMOD display name must include category and version') }
+$stringsPath = Join-Path $ModRoot 'gamedata\configs\text\rus\st_rvm_sorties_rework.xml'
+$strict1251 = [Text.Encoding]::GetEncoding(1251, [Text.EncoderFallback]::ExceptionFallback, [Text.DecoderFallback]::ExceptionFallback)
+$stringsText = $strict1251.GetString([IO.File]::ReadAllBytes($stringsPath))
+if ($stringsText -notmatch '<\?xml[^>]+encoding="windows-1251"') { $failures.Add('Russian string table must declare windows-1251') }
+if (-not $stringsText.Contains('Область интереса')) { $failures.Add('Russian string table failed Windows-1251 decoding') }
+[xml]$stringsText | Out-Null
 $fragment = Get-Content -LiteralPath (Join-Path $ModRoot 'gamedata\configs\ui\map_spots_rvm_sorties.xml') -Raw
 [xml]("<map_spots>" + $fragment + "</map_spots>") | Out-Null
+foreach ($needle in @('rvm_search_small','rvm_search_medium','rvm_search_large','scale_min="1" scale_max="1"')) {
+    if (-not $fragment.Contains($needle)) { $failures.Add("map spot invariant missing: $needle") }
+}
+
+if ($BuildModsRoot) {
+    if (-not (Test-Path -LiteralPath $BuildModsRoot)) { $failures.Add("build mods root missing: $BuildModsRoot") }
+    else {
+        $lootSections = [regex]::Matches($ltx, '(?m)^loot_(?:medicine|utility|modules|rare_non_artifact)\s*=\s*([^;\r\n]+)') |
+            ForEach-Object { $_.Groups[1].Value -split ',' } |
+            ForEach-Object { $_.Trim() } |
+            Where-Object { $_ } |
+            Where-Object { $_ -match '^(?:raid_|af_)' -or $_ -eq 'lead_box' } |
+            Sort-Object -Unique
+        foreach ($section in $lootSections) {
+            & rg -q --glob '*.ltx' "^\[$([regex]::Escape($section))\]" $BuildModsRoot
+            if ($LASTEXITCODE -ne 0) { $failures.Add("loot section not found in build: $section") }
+        }
+        foreach ($section in 1..17 | ForEach-Object { "raid_small_stash_$_" }) {
+            & rg -q --glob '*.ltx' "^\[$section\]" $BuildModsRoot
+            if ($LASTEXITCODE -ne 0) { $failures.Add("loot visual section not found in build: $section") }
+        }
+    }
+}
 
 if ($PythonDeps) {
     $env:PYTHONPATH = $PythonDeps

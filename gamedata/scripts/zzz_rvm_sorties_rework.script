@@ -53,6 +53,11 @@ local function distance_xz(a, b)
     return math.sqrt(dx * dx + dz * dz)
 end
 
+local function fmt_number(value)
+    value = tonumber(value) or 0
+    return tostring(math.floor(value * 10 + 0.5) / 10)
+end
+
 local function valid_vertex(pos)
     if not (level and pos) then return nil end
     local lvid = level.vertex_id(pos)
@@ -80,13 +85,12 @@ local function balanced_list(key)
     return C.get_balanced_list(level.name(), key)
 end
 
-local function spot_for_radius(radius)
-    if radius <= 70 then return "rvm_search_60" end
-    if radius <= 105 then return "rvm_search_90" end
-    if radius <= 140 then return "rvm_search_120" end
-    if radius <= 180 then return "rvm_search_160" end
-    if radius <= 220 then return "rvm_search_200" end
-    return "rvm_search_240"
+local function spot_for_level()
+    local forced = math.floor(C.get_number("global", "debug_force_tier", 0))
+    if forced >= 1 and forced <= 3 then
+        return C.get_string("tier_" .. tostring(forced), "map_spot", "rvm_search_small")
+    end
+    return C.get_balanced_string(level.name(), "map_spot", "rvm_search_small")
 end
 
 local function safe_release(id)
@@ -104,19 +108,37 @@ local function remove_spot(zone)
     end
 end
 
+local function release_anchor(zone)
+    if not (zone and zone.anchor_id) then return end
+    if zone.paw_anchor and tasks_placeable_waypoints and tasks_placeable_waypoints.deregister_script_zone then
+        local ok = pcall(tasks_placeable_waypoints.deregister_script_zone, zone.anchor_id)
+        if ok then return end
+    end
+    if zone.managed_anchor and raid_objects_arranger and raid_objects_arranger.release_raid_objects then
+        raid_objects_arranger.release_raid_objects(zone.anchor_id)
+    else
+        safe_release(zone.anchor_id)
+    end
+end
+
+local function release_loot(zone)
+    if zone.content_id then safe_release(zone.content_id) end
+    if zone.visual_id then
+        if zone.managed_visual and raid_objects_arranger and raid_objects_arranger.release_raid_objects then
+            raid_objects_arranger.release_raid_objects(zone.visual_id)
+        else
+            safe_release(zone.visual_id)
+        end
+    end
+end
+
 local function close_zone(zone, reason)
     if not zone or zone.closed then return end
     remove_spot(zone)
     -- Releasing an inventory box inside its use callback can invalidate the
     -- inventory window. Keep an opened box until sortie cleanup.
-    if zone.content_id and reason ~= "container_opened" then safe_release(zone.content_id) end
-    if zone.anchor_id then
-        if zone.managed_anchor and raid_objects_arranger and raid_objects_arranger.release_raid_objects then
-            raid_objects_arranger.release_raid_objects(zone.anchor_id)
-        else
-            safe_release(zone.anchor_id)
-        end
-    end
+    if reason ~= "container_opened" then release_loot(zone) end
+    release_anchor(zone)
     zone.closed = true
     state.counters.closed = (state.counters.closed or 0) + 1
     log("close type=%s anchor=%s reason=%s closed=%s/%s",
@@ -146,14 +168,8 @@ function cleanup(reason)
         if zone.spawned_ids then
             for id, _ in pairs(zone.spawned_ids) do safe_release(id) end
         end
-        if zone.content_id then safe_release(zone.content_id) end
-        if zone.anchor_id then
-            if zone.managed_anchor and raid_objects_arranger and raid_objects_arranger.release_raid_objects then
-                raid_objects_arranger.release_raid_objects(zone.anchor_id)
-            else
-                safe_release(zone.anchor_id)
-            end
-        end
+        release_loot(zone)
+        release_anchor(zone)
     end
     cleanup_stashes()
     state = fresh_state()
@@ -163,14 +179,17 @@ local function create_anchor(pos)
     local lvid = valid_vertex(pos)
     if not lvid or not db.actor then return nil end
     local fixed = level.vertex_position(lvid)
-    fixed.y = fixed.y - 1
-    local anchor = alife_create("raid_shelter_gag", fixed, lvid, db.actor:game_vertex_id())
-    if not anchor then return nil end
-    if utils_stpk and utils_stpk.get_physic_data then
-        local data = utils_stpk.get_physic_data(anchor)
-        utils_stpk.set_physic_data(data, anchor)
+    if tasks_placeable_waypoints and tasks_placeable_waypoints.generate_scripted_mapspot_at
+    and tasks_placeable_waypoints.set_pingspot_persistence then
+        local ok, id = pcall(tasks_placeable_waypoints.generate_scripted_mapspot_at, fixed, lvid, db.actor:game_vertex_id())
+        if ok and id then
+            tasks_placeable_waypoints.set_pingspot_persistence(id, true)
+            return id, pos_table(fixed), true
+        end
     end
-    return anchor.id, pos_table(fixed)
+    local anchor = alife_create("script_zone", fixed, lvid, db.actor:game_vertex_id())
+    if not anchor then return nil end
+    return anchor.id, pos_table(fixed), false
 end
 
 local function separated(pos)
@@ -188,14 +207,14 @@ local function add_zone(kind, anchor_id, center, radius, extra)
     zone.anchor_id = anchor_id
     zone.center = center
     zone.radius = radius
-    zone.spot = spot_for_radius(radius)
+    zone.spot = spot_for_level()
     zone.closed = false
     state.zones[tostring(anchor_id)] = zone
     state.counters.created = state.counters.created + 1
     state.counters[kind] = (state.counters[kind] or 0) + 1
     level.map_add_object_spot_ser(anchor_id, zone.spot, game.translate_string("st_rvm_sorties_area_hint"))
-    log("create type=%s center=(%.1f, %.1f, %.1f) radius=%.1f anchor=%s linked=%s",
-        kind, center.x, center.y, center.z, radius, tostring(anchor_id),
+    log("create type=%s center=(%s, %s, %s) radius=%s anchor=%s linked=%s",
+        kind, fmt_number(center.x), fmt_number(center.y), fmt_number(center.z), fmt_number(radius), tostring(anchor_id),
         tostring(zone.artifact_id or zone.content_id or "none"))
     return zone
 end
@@ -224,8 +243,8 @@ local function create_artifact_zone(artifact_id)
         local candidate = vector():set(art.position.x + math.cos(angle) * offset, art.position.y, art.position.z + math.sin(angle) * offset)
         local lvid = valid_vertex(candidate)
         if lvid and separated(candidate) then
-            local anchor_id, center = create_anchor(level.vertex_position(lvid))
-            local zone = add_zone("artifact", anchor_id, center, radius, { artifact_id = artifact_id })
+            local anchor_id, center, paw_anchor = create_anchor(level.vertex_position(lvid))
+            local zone = add_zone("artifact", anchor_id, center, radius, { artifact_id = artifact_id, paw_anchor = paw_anchor })
             if zone then
                 state.artifact_zone[tostring(artifact_id)] = tostring(anchor_id)
                 return true
@@ -246,8 +265,13 @@ local function random_decoy_anchor(kind)
             if kind == "enemy" and state.start_pos then
                 valid = valid and distance_xz(obj.position, state.start_pos) >= balanced("ambush_start_exclusion_radius", 180)
             end
-            if valid then return id, pos_table(obj.position) end
-            raid_objects_arranger.release_raid_objects(id)
+            if valid then
+                local position = pos_table(obj.position)
+                raid_objects_arranger.release_raid_objects(id)
+                local anchor_id, center, paw_anchor = create_anchor(pos_vector(position))
+                if anchor_id then return anchor_id, center, paw_anchor end
+            end
+            if alife_object(id) then raid_objects_arranger.release_raid_objects(id) end
         end
     end
     return nil, nil
@@ -378,27 +402,42 @@ local function fill_loot(box_id)
 end
 
 local function create_loot_zone()
-    local anchor_id, center = random_decoy_anchor("loot")
-    if not anchor_id then return false end
-    local anchor = alife_object(anchor_id)
-    local lvid = anchor and valid_vertex(anchor.position)
-    if not lvid then safe_release(anchor_id); return false end
-    local box_pos = level.vertex_position(lvid)
-    local box = alife_create("inventory_box", box_pos, lvid, db.actor:game_vertex_id())
-    if not box then safe_release(anchor_id); return false end
-    if fill_loot(box.id) < 1 then
-        safe_release(box.id); safe_release(anchor_id)
-        log("ERROR loot generation had no valid configured sections")
+    local visuals = valid_sections(balanced_list("loot_container_visuals"))
+    if #visuals == 0 then
+        log("ERROR no valid loot container visuals configured")
         return false
     end
-    return add_zone("loot", anchor_id, center, random_radius(), { content_id = box.id, managed_anchor = true }) ~= nil
+    local attempts = math.floor(C.get_number("global", "placement_attempts", 60))
+    for _ = 1, attempts do
+        local section = visuals[math.random(1, #visuals)]
+        local visual_id, box_id = raid_objects_arranger.spawn_object_rand_point(section, level.name(), 0, true)
+        local visual = visual_id and alife_object(visual_id)
+        if visual and box_id and separated(visual.position) then
+            local anchor_id, center, paw_anchor = create_anchor(visual.position)
+            if anchor_id and fill_loot(box_id) >= 1 then
+                return add_zone("loot", anchor_id, center, random_radius(), {
+                    content_id = box_id,
+                    visual_id = visual_id,
+                    managed_visual = true,
+                    paw_anchor = paw_anchor,
+                }) ~= nil
+            end
+            safe_release(box_id)
+            if anchor_id then release_anchor({ anchor_id = anchor_id, paw_anchor = paw_anchor }) end
+        elseif box_id then
+            safe_release(box_id)
+        end
+        if visual_id then raid_objects_arranger.release_raid_objects(visual_id) end
+    end
+    log("ERROR loot zone placement or content generation failed")
+    return false
 end
 
 local function create_decoy(kind)
     if kind == "loot" then return create_loot_zone() end
-    local anchor_id, center = random_decoy_anchor(kind)
+    local anchor_id, center, paw_anchor = random_decoy_anchor(kind)
     if not anchor_id then return false end
-    return add_zone(kind, anchor_id, center, random_radius(), { managed_anchor = true }) ~= nil
+    return add_zone(kind, anchor_id, center, random_radius(), { paw_anchor = paw_anchor }) ~= nil
 end
 
 local function enabled_weights()
@@ -437,6 +476,9 @@ local function create_decoys()
     local total = math.floor(exact_total)
     if math.random() < (exact_total - total) then total = total + 1 end
     local false_count = math.max(0, total - true_count)
+    local max_false = math.floor(balanced("max_false_zones", -1))
+    if max_false >= 0 then false_count = math.min(false_count, max_false) end
+    log("decoy plan true=%s false=%s cap=%s", tostring(true_count), tostring(false_count), tostring(max_false))
     for _ = 1, false_count do
         local kind = weighted_decoy(weights)
         if kind and not create_decoy(kind) then
@@ -455,7 +497,7 @@ local function stock_spawn_radius()
         local value = raid_dospawn_dungeons.raid_sim_dospawn[level.name()]["infected"].spawn_block_radius
         if value then return value end
     end
-    log("stock respawn exclusion unavailable; fallback=%.1f", fallback)
+    log("stock respawn exclusion unavailable; fallback=%s", fmt_number(fallback))
     return fallback
 end
 
@@ -683,7 +725,7 @@ local function actor_on_update()
     if not state.level_name or state.level_name ~= level.name() then return end
     if not state.start_pos and state.start_capture_after and now >= state.start_capture_after then
         state.start_pos = pos_table(db.actor:position())
-        log("start position captured (%.1f, %.1f, %.1f)", state.start_pos.x, state.start_pos.y, state.start_pos.z)
+        log("start position captured (%s, %s, %s)", fmt_number(state.start_pos.x), fmt_number(state.start_pos.y), fmt_number(state.start_pos.z))
     end
     if state.need_scouting_stash and state.start_pos then
         state.need_scouting_stash = nil

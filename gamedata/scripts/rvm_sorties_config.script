@@ -75,6 +75,18 @@ function get_balanced(level_name, key, default)
     return value
 end
 
+function get_balanced_string(level_name, key, default)
+    local value = raw("global", key, default)
+    local tier = get_level_tier(level_name)
+    if has("tier_" .. tostring(tier), key) then
+        value = raw("tier_" .. tostring(tier), key, value)
+    end
+    if has("level_" .. tostring(level_name), key) then
+        value = raw("level_" .. tostring(level_name), key, value)
+    end
+    return value
+end
+
 function get_balanced_list(level_name, key)
     local result = get_list("global", key)
     local tier = get_level_tier(level_name)
