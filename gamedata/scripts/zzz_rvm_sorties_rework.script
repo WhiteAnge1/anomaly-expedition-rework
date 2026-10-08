@@ -1,4 +1,4 @@
--- RVM Sorties Rework by White_Angel 0.1.0-alpha
+-- RVM Sorties Rework by White_Angel 0.2.0-alpha
 -- Minimal wrappers around the actual GRA Bolt dungeon-sortie implementation.
 
 local C = rvm_sorties_config
@@ -271,6 +271,51 @@ local function choose_distinct(pool, used)
     return available[math.random(1, #available)]
 end
 
+-- Use the authoritative RVM classification instead of maintaining a second,
+-- inevitably stale list. raid_artefacts_tiers_by_dop groups 1..4 are junk,
+-- 5 is T1, 6 is T2, 7 is T3, and 8 is above the sortie tiers in this mod.
+local function artifact_pool_for_tier(tier)
+    local source = raid_artefacts and raid_artefacts.raid_artefacts_tiers_by_dop
+    if type(source) ~= "table" then
+        log("ERROR raid_artefacts_tiers_by_dop unavailable; artifact rare reward disabled")
+        return {}
+    end
+    local groups = tier == 1 and { 1, 2, 3, 4, 5 }
+        or tier == 2 and { 5, 6 }
+        or { 6, 7 }
+    local result, seen = {}, {}
+    for _, group_id in ipairs(groups) do
+        local group = source[group_id]
+        for _, section in ipairs(group and group.artefacts or {}) do
+            if not seen[section] and ini_sys:section_exist(section) then
+                seen[section] = true
+                result[#result + 1] = section
+            elseif not ini_sys:section_exist(section) then
+                log("artifact pool section missing, ignored: group=%s section=%s", tostring(group_id), tostring(section))
+            end
+        end
+    end
+    return result
+end
+
+local function queue_rvm_artifact(item, section)
+    if not item then return false end
+    if raid_artefacts and raid_artefacts.addToQueuedArtefacts then
+        local ok, err = pcall(raid_artefacts.addToQueuedArtefacts, item)
+        if ok then
+            log("rare artifact queued: section=%s id=%s", tostring(section), tostring(item.id))
+            return true
+        end
+        log("ERROR artifact queue failed; releasing unrandomized reward: section=%s id=%s error=%s",
+            tostring(section), tostring(item.id), tostring(err))
+        safe_release(item.id)
+        return false
+    end
+    log("ERROR artifact queue unavailable; releasing unrandomized reward: section=%s id=%s", tostring(section), tostring(item.id))
+    safe_release(item.id)
+    return false
+end
+
 local function fill_loot(box_id)
     local box = alife_object(box_id)
     if not box then return 0 end
@@ -296,9 +341,17 @@ local function fill_loot(box_id)
         if not section then break end
     end
 
+    local rare_artifact = nil
     if math.random(1, 100) <= balanced("rare_slot_chance", 4) then
-        local rare = choose_distinct(balanced_list("loot_rare"), used)
-        if rare then used[rare] = true; picked[#picked + 1] = rare end
+        local artifact_roll = math.random(1, 100) <= balanced("rare_artifact_chance", 70)
+        if artifact_roll then
+            local pool = artifact_pool_for_tier(current_tier())
+            if #pool > 0 then rare_artifact = pool[math.random(1, #pool)] end
+        end
+        if not rare_artifact then
+            local rare = choose_distinct(balanced_list("loot_rare_non_artifact"), used)
+            if rare then used[rare] = true; picked[#picked + 1] = rare end
+        end
     end
 
     if #picked == 0 then
@@ -306,8 +359,22 @@ local function fill_loot(box_id)
         if fallback then picked[1] = fallback end
     end
     for _, section in ipairs(picked) do alife_create_item(section, box) end
-    log("loot box=%s distinct=%s", tostring(box_id), tostring(#picked))
-    return #picked
+    if rare_artifact then
+        local item = alife_create_item(rare_artifact, box)
+        if item then
+            if queue_rvm_artifact(item, rare_artifact) then
+                used[rare_artifact] = true
+            else
+                rare_artifact = nil
+            end
+        else
+            log("ERROR rare artifact spawn failed: box=%s section=%s", tostring(box_id), tostring(rare_artifact))
+            rare_artifact = nil
+        end
+    end
+    local total = #picked + (rare_artifact and 1 or 0)
+    log("loot box=%s distinct=%s rare_artifact=%s tier=%s", tostring(box_id), tostring(total), tostring(rare_artifact), tostring(current_tier()))
+    return total
 end
 
 local function create_loot_zone()
