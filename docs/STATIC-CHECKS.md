@@ -11,6 +11,7 @@
 - Проверено использование PAW `script_zone`, видимых `raid_small_stash_*`, отсутствие несовместимых `printf`-форматов и запрещённых после полевого теста loot-секций.
 - Проверены global-debug auto/default-off, безопасный вывод runtime-команд в Debug UI, PAW stash-marker/tooltip, census и отсутствие обёртки штатного `raid_dospawn_dungeons.raid_start_spawn`.
 - Регрессия same-level cleanup закрыта статическим запретом прямого `cleanup()` из `on_before_level_changing`; очистка разрешена только после определения фактического уровня на `actor_on_first_update`.
+- `tools/*.ps1` с кириллицей обязаны иметь UTF-8 BOM и проверяются запуском через Windows PowerShell 5.1 (`powershell.exe`), а `.cmd`-обёртка остаётся ASCII.
 - При передаче `-BuildModsRoot` дополнительно проверяется наличие сборочных секций модулей, разведданных и всех 17 моделей тайников.
 - Стохастическая симуляция 100 000 вылазок дала:
   - всё включено: 60.00 / 19.98 / 10.02 / 10.00%;
@@ -21,7 +22,7 @@
 Команда повторной проверки:
 
 ```powershell
-.\tools\static_check.ps1 -BuildModsRoot 'E:\GRA2.5\MO2\mods'
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\static_check.ps1 -BuildModsRoot 'E:\GRA2.5\MO2\mods'
 ```
 
 Параметр `-PythonDeps` включает полноценный синтаксический разбор Lua, если локально доступен пакет `luaparser`.

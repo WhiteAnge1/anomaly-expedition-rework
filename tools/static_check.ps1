@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$ModRoot = (Split-Path -Parent $PSScriptRoot),
     [string]$PythonDeps = "",
     [string]$BuildModsRoot = ""
@@ -22,6 +22,22 @@ $required = @(
 )
 foreach ($relative in $required) {
     if (-not (Test-Path -LiteralPath (Join-Path $ModRoot $relative))) { $failures.Add("missing: $relative") }
+}
+
+# Windows PowerShell 5.1 treats BOM-less UTF-8 scripts as the active ANSI code
+# page. Both scripts contain Cyrillic text, so the BOM is a runtime requirement.
+foreach ($relative in @('tools\static_check.ps1','tools\watch_live_log.ps1')) {
+    $toolPath = Join-Path $ModRoot $relative
+    if (Test-Path -LiteralPath $toolPath) {
+        $bytes = [IO.File]::ReadAllBytes($toolPath)
+        $hasUtf8Bom = $bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF
+        if (-not $hasUtf8Bom) { $failures.Add("Windows PowerShell 5.1 requires UTF-8 BOM: $relative") }
+    }
+}
+$watchCmdPath = Join-Path $ModRoot 'tools\watch_live_log.cmd'
+if (Test-Path -LiteralPath $watchCmdPath) {
+    $cmdBytes = [IO.File]::ReadAllBytes($watchCmdPath)
+    if (@($cmdBytes | Where-Object { $_ -gt 0x7F }).Count -gt 0) { $failures.Add('watch_live_log.cmd must remain ASCII for cmd.exe compatibility') }
 }
 
 $main = Get-Content -LiteralPath (Join-Path $ModRoot 'gamedata\scripts\zzz_rvm_sorties_rework.script') -Raw
@@ -55,8 +71,8 @@ foreach ($forbidden in @('simk_card','artifact_container')) {
     if ($ltx -match "(?m)^loot_[^=]+=[^`r`n]*\b$([regex]::Escape($forbidden))\b") { $failures.Add("invalid configured loot section: $forbidden") }
 }
 
-[xml](Get-Content -LiteralPath (Join-Path $ModRoot 'fomod\info.xml') -Raw) | Out-Null
-$fomod = Get-Content -LiteralPath (Join-Path $ModRoot 'fomod\info.xml') -Raw
+[xml](Get-Content -LiteralPath (Join-Path $ModRoot 'fomod\info.xml') -Raw -Encoding UTF8) | Out-Null
+$fomod = Get-Content -LiteralPath (Join-Path $ModRoot 'fomod\info.xml') -Raw -Encoding UTF8
 if (-not $fomod.Contains('[Геймплей] Anomaly Expedition Rework by White_Angel v0.2.1-alpha')) { $failures.Add('FOMOD display name must include category and version') }
 $stringsPath = Join-Path $ModRoot 'gamedata\configs\text\rus\st_rvm_sorties_rework.xml'
 $strict1251 = [Text.Encoding]::GetEncoding(1251, [Text.EncoderFallback]::ExceptionFallback, [Text.DecoderFallback]::ExceptionFallback)

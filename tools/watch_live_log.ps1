@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$LogPath = 'E:\GRA2.5\Anomaly 1.5.3 up\appdata\logs\xray_maksi.log',
     [string]$Pattern = '\[Anomaly Expedition Rework\]|FATAL|SCRIPT ERROR',
     [int]$Tail = 50
