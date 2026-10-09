@@ -3,6 +3,9 @@
 
 local C = rvm_sorties_config
 local PREFIX = "[Anomaly Expedition Rework]"
+local ARTIFACT_DEBUG_SPOT = "paw_stash_green"
+local LOOT_DEBUG_SPOT = "paw_stash_red"
+local ENEMY_DEBUG_SPOT = "alife_presentation_squad_enemy_1"
 local callbacks_registered = false
 local hooks_installed = false
 local next_update = 0
@@ -10,6 +13,7 @@ local debug_override = nil
 local census_disabled = false
 local census_error_reported = false
 local next_artifact_diagnostic = 0
+local safe_alive = nil
 
 local function fresh_state()
     return {
@@ -285,8 +289,6 @@ local function zone_debug_text(zone, exact_target)
         lines[#lines + 1] = "artifact_id=" .. tostring(zone.artifact_id)
             .. " section=" .. tostring(zone.artifact_section)
             .. " name=" .. tostring(zone.artifact_name)
-        local ok, snapshot = pcall(artifact_snapshot, zone)
-        lines[#lines + 1] = ok and artifact_diagnostic_text(snapshot) or "snapshot_error=" .. tostring(snapshot)
     elseif zone.kind == "loot" then
         local pos = zone.visual_pos or zone.center
         local distance = db.actor and pos and distance_xz(db.actor:position(), pos) or -1
@@ -323,10 +325,68 @@ local function safe_remove_map_spot(id, spot)
     pcall(level.map_remove_object_spot, id, spot)
 end
 
+local function safe_add_map_spot(id, spot, hint)
+    if not (level and id and spot) then return false end
+    local ok, present = pcall(level.map_has_object_spot, id, spot)
+    if not ok then return false end
+    if present ~= 0 then return true end
+    ok = pcall(level.map_add_object_spot_ser, id, spot, hint or "")
+    return ok
+end
+
+local function artifact_exact_debug_text(zone, snapshot)
+    local pos = snapshot and (snapshot.online_pos or snapshot.server_pos) or nil
+    local parent = snapshot and (snapshot.online_parent_id or snapshot.parent_id) or nil
+    return "[RVM DEBUG] kind=artifact"
+        .. " artifact_id=" .. tostring(zone.artifact_id)
+        .. " section=" .. tostring(zone.artifact_section)
+        .. " name=" .. tostring(zone.artifact_name)
+        .. "\nposition=" .. fmt_position(pos)
+        .. " parent=" .. tostring(parent)
+end
+
+local function enemy_exact_debug_text(id, info, alive, alive_source)
+    return "[RVM DEBUG] kind=enemy"
+        .. " section=" .. tostring(info and info.section or "unknown")
+        .. " id=" .. tostring(id)
+        .. " owned_by_rework=true"
+        .. " alive=" .. tostring(alive)
+        .. " alive_source=" .. tostring(alive_source)
+end
+
+local function sync_artifact_debug_spot(zone, snapshot, force_refresh)
+    if not (zone and zone.artifact_id) then return end
+    if debug_enabled() and snapshot and snapshot.server_exists then
+        local parent = snapshot.online_parent_id or snapshot.parent_id
+        local signature = tostring(parent)
+        if force_refresh or zone.artifact_debug_signature ~= signature then
+            safe_remove_map_spot(zone.artifact_id, ARTIFACT_DEBUG_SPOT)
+        end
+        safe_add_map_spot(zone.artifact_id, ARTIFACT_DEBUG_SPOT, artifact_exact_debug_text(zone, snapshot))
+        zone.artifact_debug_signature = signature
+    else
+        safe_remove_map_spot(zone.artifact_id, ARTIFACT_DEBUG_SPOT)
+        zone.artifact_debug_signature = nil
+    end
+end
+
+local function sync_enemy_debug_spot(id, info, alive, alive_source)
+    if debug_enabled() and alive == true then
+        safe_add_map_spot(id, ENEMY_DEBUG_SPOT, enemy_exact_debug_text(id, info, alive, alive_source))
+    else
+        safe_remove_map_spot(id, ENEMY_DEBUG_SPOT)
+    end
+end
+
 local function remove_spot(zone)
     if not zone then return end
     safe_remove_map_spot(zone.anchor_id, zone.spot)
-    safe_remove_map_spot(zone.visual_id, "paw_stash_red")
+    safe_remove_map_spot(zone.artifact_id, ARTIFACT_DEBUG_SPOT)
+    zone.artifact_debug_signature = nil
+    safe_remove_map_spot(zone.visual_id, LOOT_DEBUG_SPOT)
+    for id, _ in pairs(zone.spawned_ids or {}) do
+        safe_remove_map_spot(id, ENEMY_DEBUG_SPOT)
+    end
     -- Remove the pre-0.2.1-alpha debug dot when loading an older test save.
     safe_remove_map_spot(zone.visual_id, "rvm_debug_target")
 end
@@ -335,9 +395,20 @@ local function add_zone_spots(zone)
     if not (zone and not zone.closed and zone.anchor_id and alife_object(zone.anchor_id)) then return end
     local hint = game.translate_string("st_rvm_sorties_area_hint") .. zone_debug_text(zone, false)
     level.map_add_object_spot_ser(zone.anchor_id, zone.spot, hint)
-    if debug_enabled() and zone.kind == "loot" and zone.visual_id and alife_object(zone.visual_id) then
+    if debug_enabled() and zone.kind == "artifact" and zone.artifact_id then
+        local ok, snapshot = pcall(artifact_snapshot, zone)
+        if ok then sync_artifact_debug_spot(zone, snapshot, true) end
+    elseif debug_enabled() and zone.kind == "loot" and zone.visual_id and alife_object(zone.visual_id) then
         local exact_hint = game.translate_string("st_rvm_sorties_area_hint") .. zone_debug_text(zone, true)
-        level.map_add_object_spot_ser(zone.visual_id, "paw_stash_red", exact_hint)
+        safe_add_map_spot(zone.visual_id, LOOT_DEBUG_SPOT, exact_hint)
+    elseif debug_enabled() and zone.kind == "enemy" and zone.triggered then
+        for id, _ in pairs(zone.spawned_ids or {}) do
+            local info = zone.spawned_info and zone.spawned_info[id]
+            local obj_ok, obj = pcall(alife_object, id)
+            obj = obj_ok and obj or nil
+            local alive, alive_source = safe_alive(id, obj)
+            sync_enemy_debug_spot(id, info, alive, alive_source)
+        end
     end
 end
 
@@ -909,7 +980,7 @@ local function safe_alive_method(obj)
     return result == true
 end
 
-local function safe_alive(id, server_obj)
+safe_alive = function(id, server_obj)
     if id and level then
         local ok, online = pcall(function() return level.object_by_id(id) end)
         if ok and online then
@@ -1109,6 +1180,7 @@ local function update_artifact_zones(now)
                 end
             else
                 zone.ownership_error_reported = nil
+                sync_artifact_debug_spot(zone, snapshot, emit_diagnostic)
                 if snapshot.actor_owned then
                     log("artifact ownership acquired anchor=%s linked=%s source=%s chain=%s",
                         tostring(zone.anchor_id), tostring(zone.artifact_id), tostring(snapshot.ownership_source),
@@ -1133,9 +1205,12 @@ local function update_zones(now)
             else
                 local alive = 0
                 for id, _ in pairs(zone.spawned_ids or {}) do
-                    local obj = alife_object(id)
+                    local obj_ok, obj = pcall(alife_object, id)
+                    obj = obj_ok and obj or nil
                     local info = zone.spawned_info and zone.spawned_info[id]
-                    if obj and obj:alive() then
+                    local entity_alive, alive_source = safe_alive(id, obj)
+                    sync_enemy_debug_spot(id, info, entity_alive, alive_source)
+                    if entity_alive == true or (entity_alive == nil and obj) then
                         alive = alive + 1
                     elseif info and not info.resolved then
                         info.resolved = true

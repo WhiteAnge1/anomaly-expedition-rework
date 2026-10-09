@@ -12,7 +12,9 @@
 | Подбор NPC | При false область остаётся | Переключить `remove_on_npc_pickup` |
 | NPC → труп → actor | Область остаётся у NPC и закрывается, когда точный linked ID оказывается у actor | `reason=actor_owns_linked_artifact`, не совпадение section |
 | Диагностика артефакта | Server/online existence, parent chain, позиции, `anchor_dxz/dy`, ближайшая vertex | Периодический debug-log и `rvm_rework_census` |
+| Exact artifact marker | Debug-on: зелёный `paw_stash_green` следует exact linked ID; debug-off/close: исчезает | Tooltip `kind/artifact_id/section/name/position/parent` |
 | Засада | 2–3 разрешённых мутанта вне взгляда/аномалии/радиуса | `spawned`, отсутствие ERROR |
+| Enemy debug markers | Красная точка только на каждом живом `zone.spawned_ids`; смерть/пропажа удаляет её на update | Tooltip `section/id/owned_by_rework/alive`; штатные RVM без точек |
 | Контейнер | Видимая модель открывается; ordinary target 1–6, при исчерпании low pool допустимо меньше, rare независим | `target/created/ordinary/valuable_quota/actual/sections/rare`, затем `reason=container_opened` |
 | Valuable quota T1 | Quota 0/1/2/3: 65/31.5/3.4475/0.0525%; actual никогда не выше quota | `tools\test_loot_policy.ps1`, затем серия полевых логов |
 | Точный loot-marker | Обычная красная иконка тайника PAW стоит на visual/box и исчезает при открытии | ID/координаты/contents в tooltip |
@@ -34,6 +36,8 @@
 Если игра падает до главного меню, приложите конец `xray_*.log` со строками `[Anomaly Expedition Rework]`. Если круги есть, но PAW не предлагает маршрут, приложите версию PAW и результат теста на минимальном/максимальном масштабе карты.
 
 Для runtime-проверки откройте **Debug UI debug launcher**, не обычную консоль `~`. Используйте `rvm_rework_debug_off`, затем `rvm_rework_debug_on`: Debug UI должен подтвердить mode/effective, а круги — переключиться между обычным и техническим tooltip без изменения количества зон. Команда `rvm_rework_census` должна показать краткие `squads/stalkers/mutants` в Debug UI и не создавать/удалять население.
+
+После spawn enemy decoy проверить каждого живого mod-owned врага отдельно: красная точка должна следовать его object ID и исчезать не позднее следующего update после смерти. Повторить debug-off/on и same-level save/load. Наличие точек на штатных `owned_by_rework=false` squad является ошибкой.
 
 Круги после второго полевого теста имеют базы `80/96/112 px`, `scale_max=1.35`, alpha `220`. Особенно проверить T1 на минимальном и максимальном zoom: он должен быть явно заметнее прежних `40 px`, но не разрастаться по старому пределу `3x`.
 

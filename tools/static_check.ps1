@@ -60,6 +60,10 @@ foreach ($needle in @('safe_alive','safe_class_check','census_disabled','pcall(p
 foreach ($needle in @('artifact_snapshot','actor_inventory','server_parent_chain','actor_owns_linked_artifact','artifact diagnostic reason=periodic','zone kept open')) {
     if (-not $main.Contains($needle)) { $failures.Add("artifact ownership safety missing: $needle") }
 }
+foreach ($needle in @('ARTIFACT_DEBUG_SPOT = "paw_stash_green"','LOOT_DEBUG_SPOT = "paw_stash_red"','ENEMY_DEBUG_SPOT = "alife_presentation_squad_enemy_1"','sync_artifact_debug_spot','sync_enemy_debug_spot','pairs(zone.spawned_ids or {})','owned_by_rework=true')) {
+    if (-not $main.Contains($needle)) { $failures.Add("exact debug marker integration missing: $needle") }
+}
+if ($main.Contains('crlc_squad_red')) { $failures.Add('quest-pointer crlc_squad_red must not be used for enemy debug markers') }
 foreach ($needle in @('roll_valuable_quota','percent_roll','valuable_first_chance','valuable_second_chance','valuable_third_chance','valuable_actual','loot_valuable')) {
     if (-not $main.Contains($needle)) { $failures.Add("loot quality policy missing: $needle") }
 }
@@ -125,6 +129,20 @@ if ($BuildModsRoot) {
         }
         & rg -q --glob '*.xml' '<paw_stash_red>' $BuildModsRoot
         if ($LASTEXITCODE -ne 0) { $failures.Add('PAW red stash map spot not found in build: paw_stash_red') }
+        & rg -q --glob '*.xml' '<paw_stash_green>' $BuildModsRoot
+        if ($LASTEXITCODE -ne 0) { $failures.Add('PAW green stash map spot not found in build: paw_stash_green') }
+        & rg -q --glob 'map_spots*.xml' '<alife_presentation_squad_enemy_1>' $BuildModsRoot
+        if ($LASTEXITCODE -ne 0) { $failures.Add('GRA red squad map spot not found in build: alife_presentation_squad_enemy_1') }
+        $safeEnemySpot = $false
+        foreach ($spotFile in Get-ChildItem -LiteralPath $BuildModsRoot -Recurse -File -Filter 'map_spots*.xml') {
+            $spotText = Get-Content -LiteralPath $spotFile.FullName -Raw
+            $match = [regex]::Match($spotText, '<alife_presentation_squad_enemy_1>([\s\S]*?)</alife_presentation_squad_enemy_1>')
+            if ($match.Success -and $match.Value.Contains('alife_presentation_squad_enemy_spot_1') -and $match.Value -notmatch 'pointer\s*=') {
+                $safeEnemySpot = $true
+                break
+            }
+        }
+        if (-not $safeEnemySpot) { $failures.Add('GRA red squad map spot is missing a pointer-free wrapper') }
     }
 }
 
