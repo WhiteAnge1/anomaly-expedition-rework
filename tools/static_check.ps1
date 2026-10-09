@@ -18,7 +18,8 @@ $required = @(
     'meta.ini',
     'docs\RELEASE-CHECKLIST.md',
     'tools\watch_live_log.ps1',
-    'tools\watch_live_log.cmd'
+    'tools\watch_live_log.cmd',
+    'tools\test_loot_policy.ps1'
 )
 foreach ($relative in $required) {
     if (-not (Test-Path -LiteralPath (Join-Path $ModRoot $relative))) { $failures.Add("missing: $relative") }
@@ -59,15 +60,19 @@ foreach ($needle in @('safe_alive','safe_class_check','census_disabled','pcall(p
 foreach ($needle in @('artifact_snapshot','actor_inventory','server_parent_chain','actor_owns_linked_artifact','artifact diagnostic reason=periodic','zone kept open')) {
     if (-not $main.Contains($needle)) { $failures.Add("artifact ownership safety missing: $needle") }
 }
+foreach ($needle in @('roll_valuable_quota','percent_roll','valuable_first_chance','valuable_second_chance','valuable_third_chance','valuable_actual','loot_valuable')) {
+    if (-not $main.Contains($needle)) { $failures.Add("loot quality policy missing: $needle") }
+}
 if ($main -match 'member:alive\s*\(') { $failures.Add('unsafe squad iterator member:alive() call detected') }
 if ($main -match 'function on_before_level_changing\(\)[\s\S]{0,250}cleanup\(') { $failures.Add('before-level-change must defer cleanup until the destination level is known') }
 if ($main -match 'drx_da_main\.spawn_artefact_on_smart\s*=') { $failures.Add('Arrival spawn function must not be wrapped') }
 if ($main -match 'raid_dospawn_dungeons\.raid_start_spawn\s*=') { $failures.Add('RVM dospawn function must not be wrapped') }
+if ($main -match 'math\.random\s*\(\s*1\s*,\s*100\s*\)\s*<=\s*45') { $failures.Add('old equal utility/modules loot fill detected') }
 if ($main -match 'for\s+id\s*=\s*1\s*,\s*65534[\s\S]{0,300}IsArtefact') { $failures.Add('post-factum global artefact scan detected') }
 if ($main -match '%\.\d+f') { $failures.Add('X-Ray printf-incompatible floating-point format detected') }
 
 $ltx = Get-Content -LiteralPath (Join-Path $ModRoot 'gamedata\configs\plugins\rvm_sorties_rework.ltx') -Raw
-foreach ($needle in @('stash_mode = scouting','weight_artifact = 60','remove_on_npc_pickup = false','rare_artifact_chance = 70','loot_rare_non_artifact = raid_intelligence_note','loot_container_visuals = raid_small_stash_1','map_spot = rvm_search_small','max_false_zones = 1','debug_mode = auto','debug_log = false','[level_y04_pole]','[level_k01_darkscape]','[level_l09_deadcity]')) {
+foreach ($needle in @('stash_mode = scouting','weight_artifact = 60','remove_on_npc_pickup = false','valuable_first_chance = 35','valuable_second_chance = 10','valuable_third_chance = 1.5','loot_valuable = itm_ammokit, af_iam, lead_box','loot_valuable = detector_advanced, itm_ammokit, itm_advancedkit, af_iam, af_aac, lead_box','loot_valuable = detector_elite, detector_scientific, itm_ammokit, itm_expertkit, af_iam, af_aac, af_aam, lead_box','rare_artifact_chance = 70','loot_rare_non_artifact = raid_intelligence_note','loot_container_visuals = raid_small_stash_1','map_spot = rvm_search_small','max_false_zones = 1','debug_mode = auto','debug_log = false','[level_y04_pole]','[level_k01_darkscape]','[level_l09_deadcity]')) {
     if (-not $ltx.Contains($needle)) { $failures.Add("config invariant missing: $needle") }
 }
 foreach ($forbidden in @('simk_card','artifact_container')) {
@@ -105,11 +110,10 @@ foreach ($needle in @('rvm_search_small','rvm_search_medium','rvm_search_large',
 if ($BuildModsRoot) {
     if (-not (Test-Path -LiteralPath $BuildModsRoot)) { $failures.Add("build mods root missing: $BuildModsRoot") }
     else {
-        $lootSections = [regex]::Matches($ltx, '(?m)^loot_(?:medicine|utility|modules|rare_non_artifact)\s*=\s*([^;\r\n]+)') |
+        $lootSections = [regex]::Matches($ltx, '(?m)^loot_(?:medicine|utility|modules|valuable|rare_non_artifact)\s*=\s*([^;\r\n]+)') |
             ForEach-Object { $_.Groups[1].Value -split ',' } |
             ForEach-Object { $_.Trim() } |
             Where-Object { $_ } |
-            Where-Object { $_ -match '^(?:raid_|af_)' -or $_ -eq 'lead_box' } |
             Sort-Object -Unique
         foreach ($section in $lootSections) {
             & rg -q --glob '*.ltx' "^\[$([regex]::Escape($section))\]" $BuildModsRoot
@@ -123,6 +127,8 @@ if ($BuildModsRoot) {
         if ($LASTEXITCODE -ne 0) { $failures.Add('PAW red stash map spot not found in build: paw_stash_red') }
     }
 }
+
+& (Join-Path $ModRoot 'tools\test_loot_policy.ps1') -Samples 200000
 
 if ($PythonDeps) {
     $env:PYTHONPATH = $PythonDeps

@@ -11,6 +11,7 @@
 - Проверено использование PAW `script_zone`, видимых `raid_small_stash_*`, отсутствие несовместимых `printf`-форматов и запрещённых после полевого теста loot-секций.
 - Проверены global-debug auto/default-off, безопасный вывод runtime-команд в Debug UI, PAW stash-marker/tooltip, census и отсутствие обёртки штатного `raid_dospawn_dungeons.raid_start_spawn`.
 - Проверены exact-ID fallback владения артефактом, fail-closed сохранение области при ошибке API и новые заметные bounded размеры кругов `80/96/112` при `scale_max=1.35`.
+- `test_loot_policy.ps1` проверяет точную формулу квоты `65/31.5/3.4475/0.0525`, 200000 детерминированных выборок и инварианты `actual <= quota`, `ordinary <= target`; static check запрещает возврат старого 45/55 fill.
 - Регрессия same-level cleanup закрыта статическим запретом прямого `cleanup()` из `on_before_level_changing`; очистка разрешена только после определения фактического уровня на `actor_on_first_update`.
 - `tools/*.ps1` с кириллицей обязаны иметь UTF-8 BOM и проверяются запуском через Windows PowerShell 5.1 (`powershell.exe`), а `.cmd`-обёртка остаётся ASCII.
 - При передаче `-BuildModsRoot` дополнительно проверяется наличие сборочных секций модулей, разведданных и всех 17 моделей тайников.

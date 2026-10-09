@@ -63,6 +63,11 @@ enemy_missing_resolves = true
 loot_distinct_min = 1
 loot_distinct_max = 6
 medicine_chance = 75
+; Цепочка квоты дорогих предметов: 35% хотя бы один, затем 10% второй,
+; затем 1.5% третий. Фактическое число дополнительно ограничено target/pool.
+valuable_first_chance = 35
+valuable_second_chance = 10
+valuable_third_chance = 1.5
 rare_slot_chance = 4
 ; Если редкий слот сработал, шанс выбрать артефакт вместо прочей редкой награды.
 ; Пул берётся из фактической таблицы raid_artefacts_tiers_by_dop текущей сборки:
@@ -95,6 +100,7 @@ enemy_sections = dog_normal, boar_normal, flesh_normal
 loot_medicine = medkit_army, medkit, antirad, stimpack
 loot_utility = detector_simple, itm_ammokit, itm_sleepbag
 loot_modules = af_iam, lead_box
+loot_valuable = itm_ammokit, af_iam, lead_box
 loot_rare_non_artifact = raid_intelligence_note
 
 [tier_2]
@@ -108,6 +114,7 @@ enemy_sections = dog_normal, boar_normal, flesh_normal, snork_normal, pseudodog_
 loot_medicine = medkit_army, medkit_scientic, antirad, stimpack_army
 loot_utility = detector_advanced, itm_ammokit, itm_advancedkit
 loot_modules = af_iam, af_aac, lead_box
+loot_valuable = detector_advanced, itm_ammokit, itm_advancedkit, af_iam, af_aac, lead_box
 loot_rare_non_artifact = raid_intelligence_note
 
 [tier_3]
@@ -121,6 +128,7 @@ enemy_sections = snork_normal, pseudodog_normal, bloodsucker_normal
 loot_medicine = medkit_scientic, medkit_army, antirad, stimpack_scientic
 loot_utility = detector_elite, detector_scientific, itm_ammokit, itm_expertkit
 loot_modules = af_iam, af_aac, af_aam, lead_box
+loot_valuable = detector_elite, detector_scientific, itm_ammokit, itm_expertkit, af_iam, af_aac, af_aam, lead_box
 loot_rare_non_artifact = raid_intelligence_note
 
 ; Поляна — фактический идентификатор y04_pole, тир 1.

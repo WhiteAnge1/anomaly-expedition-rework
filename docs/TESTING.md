@@ -13,7 +13,8 @@
 | NPC → труп → actor | Область остаётся у NPC и закрывается, когда точный linked ID оказывается у actor | `reason=actor_owns_linked_artifact`, не совпадение section |
 | Диагностика артефакта | Server/online existence, parent chain, позиции, `anchor_dxz/dy`, ближайшая vertex | Периодический debug-log и `rvm_rework_census` |
 | Засада | 2–3 разрешённых мутанта вне взгляда/аномалии/радиуса | `spawned`, отсутствие ERROR |
-| Контейнер | Видимая модель малого тайника открывается; внутри 1–6 разных валидных предметов | `loot box=... distinct=...`, затем `reason=container_opened` |
+| Контейнер | Видимая модель открывается; ordinary target 1–6, при исчерпании low pool допустимо меньше, rare независим | `target/created/ordinary/valuable_quota/actual/sections/rare`, затем `reason=container_opened` |
+| Valuable quota T1 | Quota 0/1/2/3: 65/31.5/3.4475/0.0525%; actual никогда не выше quota | `tools\test_loot_policy.ps1`, затем серия полевых логов |
 | Точный loot-marker | Обычная красная иконка тайника PAW стоит на visual/box и исчезает при открытии | ID/координаты/contents в tooltip |
 | Enemy ownership | До активации `armed`, после — section#ID каждого нашего мутанта | `ambush entity ... owned_by_rework=true` |
 | Census | Стартовый снимок и новый снимок после появления raid squad | `census begin/end`, `rvm_squad_added=` |

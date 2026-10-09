@@ -589,6 +589,30 @@ local function queue_rvm_artifact(item, section)
     return false
 end
 
+local function append_distinct(target, source, excluded)
+    local present = {}
+    for _, section in ipairs(target or {}) do present[section] = true end
+    for _, section in ipairs(source or {}) do
+        if not present[section] and not (excluded and excluded[section]) then
+            target[#target + 1] = section
+            present[section] = true
+        end
+    end
+    return target
+end
+
+local function percent_roll(chance)
+    chance = math.max(0, math.min(100, tonumber(chance) or 0))
+    return math.random() * 100 < chance
+end
+
+local function roll_valuable_quota()
+    if not percent_roll(balanced("valuable_first_chance", 35)) then return 0 end
+    if not percent_roll(balanced("valuable_second_chance", 10)) then return 1 end
+    if not percent_roll(balanced("valuable_third_chance", 1.5)) then return 2 end
+    return 3
+end
+
 local function fill_loot(box_id)
     local box = alife_object(box_id)
     if not box then return 0 end
@@ -597,24 +621,49 @@ local function fill_loot(box_id)
     local target = math.random(target_min, target_max)
     local used, picked = {}, {}
 
-    if math.random(1, 100) <= balanced("medicine_chance", 75) then
-        local med = choose_distinct(balanced_list("loot_medicine"), used)
+    local medicine = valid_sections(balanced_list("loot_medicine"))
+    local utility = valid_sections(balanced_list("loot_utility"))
+    local modules = valid_sections(balanced_list("loot_modules"))
+    local valuable = valid_sections(balanced_list("loot_valuable"))
+    local valuable_set = {}
+    for _, section in ipairs(valuable) do valuable_set[section] = true end
+    local low_value = {}
+    append_distinct(low_value, medicine, valuable_set)
+    append_distinct(low_value, utility, valuable_set)
+    append_distinct(low_value, modules, valuable_set)
+
+    if percent_roll(balanced("medicine_chance", 75)) then
+        local med = choose_distinct(medicine, used)
         if med then used[med] = true; picked[#picked + 1] = med end
     end
 
-    local utility = balanced_list("loot_utility")
-    local modules = balanced_list("loot_modules")
-    local attempts = 0
-    while #picked < target and attempts < 50 do
-        attempts = attempts + 1
-        local pool = math.random(1, 100) <= 45 and utility or modules
-        local section = choose_distinct(pool, used)
-        if not section then section = choose_distinct(utility, used) or choose_distinct(modules, used) end
-        if section then used[section] = true; picked[#picked + 1] = section end
+    local valuable_quota = roll_valuable_quota()
+    local valuable_sections = {}
+    while #valuable_sections < valuable_quota and #picked < target do
+        local section = choose_distinct(valuable, used)
         if not section then break end
+        used[section] = true
+        picked[#picked + 1] = section
+        valuable_sections[#valuable_sections + 1] = section
     end
 
+    while #picked < target do
+        local section = choose_distinct(low_value, used)
+        if not section then break end
+        used[section] = true
+        picked[#picked + 1] = section
+    end
+
+    if #picked == 0 then
+        local fallback = choose_distinct(low_value, used)
+        if fallback then
+            used[fallback] = true
+            picked[1] = fallback
+        end
+    end
     local rare_artifact = nil
+    local rare_non_artifact = nil
+    local rare_reward = nil
     if math.random(1, 100) <= balanced("rare_slot_chance", 4) then
         local artifact_roll = math.random(1, 100) <= balanced("rare_artifact_chance", 70)
         if artifact_roll then
@@ -623,20 +672,31 @@ local function fill_loot(box_id)
         end
         if not rare_artifact then
             local rare = choose_distinct(balanced_list("loot_rare_non_artifact"), used)
-            if rare then used[rare] = true; picked[#picked + 1] = rare end
+            if rare then
+                used[rare] = true
+                rare_non_artifact = rare
+                rare_reward = rare
+            end
         end
     end
 
-    if #picked == 0 then
-        local fallback = choose_distinct(utility, used) or choose_distinct(modules, used)
-        if fallback then picked[1] = fallback end
+    local created_sections = {}
+    local created_valuable_sections = {}
+    for _, section in ipairs(picked) do
+        local item = alife_create_item(section, box)
+        if item then
+            created_sections[#created_sections + 1] = section
+            if valuable_set[section] then created_valuable_sections[#created_valuable_sections + 1] = section end
+        else
+            log("ERROR loot item spawn failed: box=%s section=%s", tostring(box_id), tostring(section))
+        end
     end
-    for _, section in ipairs(picked) do alife_create_item(section, box) end
     if rare_artifact then
         local item = alife_create_item(rare_artifact, box)
         if item then
             if queue_rvm_artifact(item, rare_artifact) then
                 used[rare_artifact] = true
+                rare_reward = rare_artifact
             else
                 rare_artifact = nil
             end
@@ -644,12 +704,21 @@ local function fill_loot(box_id)
             log("ERROR rare artifact spawn failed: box=%s section=%s", tostring(box_id), tostring(rare_artifact))
             rare_artifact = nil
         end
+    elseif rare_non_artifact then
+        local item = alife_create_item(rare_non_artifact, box)
+        if item then
+            created_sections[#created_sections + 1] = rare_non_artifact
+        else
+            log("ERROR rare reward spawn failed: box=%s section=%s", tostring(box_id), tostring(rare_non_artifact))
+            rare_reward = nil
+        end
     end
-    local created_sections = {}
-    for _, section in ipairs(picked) do created_sections[#created_sections + 1] = section end
     if rare_artifact then created_sections[#created_sections + 1] = rare_artifact end
     local total = #created_sections
-    log("loot box=%s distinct=%s rare_artifact=%s tier=%s", tostring(box_id), tostring(total), tostring(rare_artifact), tostring(current_tier()))
+    log("loot box=%s target=%s created=%s ordinary=%s valuable_quota=%s valuable_actual=%s valuable_sections=[%s] rare=%s rare_artifact=%s tier=%s",
+        tostring(box_id), tostring(target), tostring(total), tostring(total - (rare_reward and 1 or 0)), tostring(valuable_quota),
+        tostring(#created_valuable_sections), join_values(created_valuable_sections, ","), tostring(rare_reward),
+        tostring(rare_artifact), tostring(current_tier()))
     return total, created_sections
 end
 
