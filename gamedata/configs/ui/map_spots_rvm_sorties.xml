@@ -1,19 +1,20 @@
 <!--
   One compact visual size per sortie tier. Logical gameplay radii remain in
   rvm_sorties_rework.ltx; map circles are intentionally symbolic UI markers.
-  scale_min=scale_max=1 prevents the old 3x growth while zooming.
+  PAW-style bounded scaling keeps them smaller while zoomed out and slightly
+  larger while zoomed in, without restoring the old scale_max=3 growth.
   There is no mini_map entry: RVM has no minimap and this mod must not add one.
 -->
 <rvm_search_small hint="st_rvm_sorties_area_name"><level_map spot="rvm_search_small_spot"/></rvm_search_small>
-<rvm_search_small_spot width="44" height="44" alignment="c" stretch="1" scale="1" scale_min="1" scale_max="1"><texture x="730" y="456" width="115" height="115" a="150" r="222" g="184" b="74">ui\ui_common</texture></rvm_search_small_spot>
+<rvm_search_small_spot width="40" height="40" alignment="c" stretch="1" scale="1" scale_min="1" scale_max="1.25"><texture x="730" y="456" width="115" height="115" a="150" r="222" g="184" b="74">ui\ui_common</texture></rvm_search_small_spot>
 
 <rvm_search_medium hint="st_rvm_sorties_area_name"><level_map spot="rvm_search_medium_spot"/></rvm_search_medium>
-<rvm_search_medium_spot width="56" height="56" alignment="c" stretch="1" scale="1" scale_min="1" scale_max="1"><texture x="730" y="456" width="115" height="115" a="150" r="222" g="184" b="74">ui\ui_common</texture></rvm_search_medium_spot>
+<rvm_search_medium_spot width="50" height="50" alignment="c" stretch="1" scale="1" scale_min="1" scale_max="1.25"><texture x="730" y="456" width="115" height="115" a="150" r="222" g="184" b="74">ui\ui_common</texture></rvm_search_medium_spot>
 
 <rvm_search_large hint="st_rvm_sorties_area_name"><level_map spot="rvm_search_large_spot"/></rvm_search_large>
-<rvm_search_large_spot width="68" height="68" alignment="c" stretch="1" scale="1" scale_min="1" scale_max="1"><texture x="730" y="456" width="115" height="115" a="150" r="222" g="184" b="74">ui\ui_common</texture></rvm_search_large_spot>
+<rvm_search_large_spot width="60" height="60" alignment="c" stretch="1" scale="1" scale_min="1" scale_max="1.25"><texture x="730" y="456" width="115" height="115" a="150" r="222" g="184" b="74">ui\ui_common</texture></rvm_search_large_spot>
 
-<!-- Debug-only exact target marker, attached directly to the loot visual. -->
+<!-- Compatibility only: refresh removes this old debug dot and uses PAW paw_stash_red. -->
 <rvm_debug_target hint="st_rvm_sorties_area_name"><level_map spot="rvm_debug_target_spot"/></rvm_debug_target>
 <rvm_debug_target_spot width="14" height="14" alignment="c" stretch="1" scale="1" scale_min="1" scale_max="1"><texture x="730" y="456" width="115" height="115" a="255" r="255" g="64" b="64">ui\ui_common</texture></rvm_debug_target_spot>
 

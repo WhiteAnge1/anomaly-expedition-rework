@@ -9,7 +9,8 @@
 - Проверено отсутствие обёртки `drx_da_main.spawn_artefact_on_smart` и постфактум-перебора всех артефактов уровня.
 - Проверено динамическое чтение штатной таблицы артефактов, точное соответствие групп пулов `{1..5}`, `{5,6}`, `{6,7}` и вызов сохраняемой очереди `raid_artefacts.addToQueuedArtefacts`.
 - Проверено использование PAW `script_zone`, видимых `raid_small_stash_*`, отсутствие несовместимых `printf`-форматов и запрещённых после полевого теста loot-секций.
-- Проверены global-debug auto/default-off, runtime-команды, debug-marker/tooltip, census и отсутствие обёртки штатного `raid_dospawn_dungeons.raid_start_spawn`.
+- Проверены global-debug auto/default-off, безопасный вывод runtime-команд в Debug UI, PAW stash-marker/tooltip, census и отсутствие обёртки штатного `raid_dospawn_dungeons.raid_start_spawn`.
+- Регрессия same-level cleanup закрыта статическим запретом прямого `cleanup()` из `on_before_level_changing`; очистка разрешена только после определения фактического уровня на `actor_on_first_update`.
 - При передаче `-BuildModsRoot` дополнительно проверяется наличие сборочных секций модулей, разведданных и всех 17 моделей тайников.
 - Стохастическая симуляция 100 000 вылазок дала:
   - всё включено: 60.00 / 19.98 / 10.02 / 10.00%;

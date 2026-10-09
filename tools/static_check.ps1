@@ -16,7 +16,9 @@ $required = @(
     'gamedata\configs\text\rus\st_rvm_sorties_rework.xml',
     'fomod\info.xml',
     'meta.ini',
-    'docs\RELEASE-CHECKLIST.md'
+    'docs\RELEASE-CHECKLIST.md',
+    'tools\watch_live_log.ps1',
+    'tools\watch_live_log.cmd'
 )
 foreach ($relative in $required) {
     if (-not (Test-Path -LiteralPath (Join-Path $ModRoot $relative))) { $failures.Add("missing: $relative") }
@@ -29,16 +31,17 @@ foreach ($needle in @('raid_anomalys.spawn_artefact_in_zone','actor_on_item_take
 foreach ($needle in @('raid_artefacts_tiers_by_dop','raid_artefacts.addToQueuedArtefacts','{ 1, 2, 3, 4, 5 }','{ 5, 6 }','{ 6, 7 }')) {
     if (-not $main.Contains($needle)) { $failures.Add("artifact integration missing: $needle") }
 }
-foreach ($needle in @('generate_scripted_mapspot_at','set_pingspot_persistence','deregister_script_zone','visual_id','max_false_zones','decoy plan')) {
+foreach ($needle in @('generate_scripted_mapspot_at','set_pingspot_persistence','deregister_script_zone','visual_id','max_false_zones','decoy plan','pending_transition','confirmed_level_change','safe_remove_map_spot')) {
     if (-not $main.Contains($needle)) { $failures.Add("test-fix integration missing: $needle") }
 }
-foreach ($needle in @('DEV_DEBUG','DEV_DEBUG_DEV','rvm_rework_debug','rvm_rework_census','population_census','owned_by_rework','spawned_info','rvm_debug_target')) {
+foreach ($needle in @('DEV_DEBUG','DEV_DEBUG_DEV','rvm_rework_debug','rvm_rework_census','population_census','owned_by_rework','spawned_info','SendOutput','paw_stash_red')) {
     if (-not $main.Contains($needle)) { $failures.Add("debug integration missing: $needle") }
 }
 foreach ($needle in @('safe_alive','safe_class_check','census_disabled','pcall(population_census_impl','pcall(detect_rvm_squad_changes_impl')) {
     if (-not $main.Contains($needle)) { $failures.Add("census safety missing: $needle") }
 }
 if ($main -match 'member:alive\s*\(') { $failures.Add('unsafe squad iterator member:alive() call detected') }
+if ($main -match 'function on_before_level_changing\(\)[\s\S]{0,250}cleanup\(') { $failures.Add('before-level-change must defer cleanup until the destination level is known') }
 if ($main -match 'drx_da_main\.spawn_artefact_on_smart\s*=') { $failures.Add('Arrival spawn function must not be wrapped') }
 if ($main -match 'raid_dospawn_dungeons\.raid_start_spawn\s*=') { $failures.Add('RVM dospawn function must not be wrapped') }
 if ($main -match 'for\s+id\s*=\s*1\s*,\s*65534[\s\S]{0,300}IsArtefact') { $failures.Add('post-factum global artefact scan detected') }
@@ -68,6 +71,7 @@ if (-not $scoutingText.Contains('%c[255,160,160,160] \n')) { $failures.Add('scou
 if (-not $infectedText.Contains('%c[255,160,160,160] \n')) { $failures.Add('infected color tag must keep the original space before \n') }
 if (-not $scoutingText.Contains('\n \n') -or -not $infectedText.Contains('\n \n')) { $failures.Add('route descriptions must keep the original blank-line token \n \n') }
 if ($stashSuffix -ne '\nНа документе отмечены координаты тайника.') { $failures.Add('stash suffix differs from the RVM-style final text') }
+if (-not $scoutingText.Contains('На документе отмечены стратегические точки и схроны, которые можно проверить.')) { $failures.Add('scouting intelligence text differs from the approved wording') }
 $scoutingUiText = $scoutingText + $stashSuffix
 $infectedUiText = $infectedText
 if ([regex]::Matches($scoutingUiText, [regex]::Escape('На документе отмечены координаты тайника.')).Count -ne 1) { $failures.Add('build_desc_header simulation must add the stash sentence exactly once to scouting') }
@@ -75,7 +79,7 @@ if ($infectedUiText.Contains('координаты тайника')) { $failures
 if ($scoutingUiText -match '(?i)экспедиц' -or $infectedUiText -match '(?i)экспедиц') { $failures.Add('route UI text must use original RVM terminology, not expedition') }
 $fragment = Get-Content -LiteralPath (Join-Path $ModRoot 'gamedata\configs\ui\map_spots_rvm_sorties.xml') -Raw
 [xml]("<map_spots>" + $fragment + "</map_spots>") | Out-Null
-foreach ($needle in @('rvm_search_small','rvm_search_medium','rvm_search_large','rvm_debug_target','scale_min="1" scale_max="1"')) {
+foreach ($needle in @('rvm_search_small','rvm_search_medium','rvm_search_large','rvm_debug_target','scale_min="1" scale_max="1.25"')) {
     if (-not $fragment.Contains($needle)) { $failures.Add("map spot invariant missing: $needle") }
 }
 
@@ -96,6 +100,8 @@ if ($BuildModsRoot) {
             & rg -q --glob '*.ltx' "^\[$section\]" $BuildModsRoot
             if ($LASTEXITCODE -ne 0) { $failures.Add("loot visual section not found in build: $section") }
         }
+        & rg -q --glob '*.xml' '<paw_stash_red>' $BuildModsRoot
+        if ($LASTEXITCODE -ne 0) { $failures.Add('PAW red stash map spot not found in build: paw_stash_red') }
     }
 }
 

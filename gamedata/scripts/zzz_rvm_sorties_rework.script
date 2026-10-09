@@ -12,9 +12,11 @@ local census_error_reported = false
 
 local function fresh_state()
     return {
-        schema = 1,
+        schema = 2,
         level_name = nil,
         sortie_type = nil,
+        pending_transition = false,
+        transition_from_level = nil,
         start_pos = nil,
         zones = {},
         artifact_zone = {},
@@ -106,8 +108,11 @@ end
 
 local function safe_release(id)
     if not id then return end
-    local obj = alife_object(id)
-    if obj then alife_release(obj) end
+    local found, obj = pcall(alife_object, id)
+    if found and obj then
+        local released, err = pcall(alife_release, obj)
+        if not released then log("ERROR release id=%s error=%s", tostring(id), tostring(err)) end
+    end
 end
 
 local function object_section(obj)
@@ -176,17 +181,20 @@ local function zone_debug_text(zone, exact_target)
     return "\n" .. join_values(lines, "\n")
 end
 
+local function safe_remove_map_spot(id, spot)
+    if not (level and id and spot) then return end
+    local ok, present = pcall(level.map_has_object_spot, id, spot)
+    if not ok or present == 0 then return end
+    pcall(level.map_remove_object_spot, id, spot)
+    pcall(level.map_remove_object_spot, id, spot)
+end
+
 local function remove_spot(zone)
-    if zone and zone.anchor_id and zone.spot then
-        if level.map_has_object_spot(zone.anchor_id, zone.spot) ~= 0 then
-            level.map_remove_object_spot(zone.anchor_id, zone.spot)
-            level.map_remove_object_spot(zone.anchor_id, zone.spot)
-        end
-    end
-    if zone and zone.visual_id and level.map_has_object_spot(zone.visual_id, "rvm_debug_target") ~= 0 then
-        level.map_remove_object_spot(zone.visual_id, "rvm_debug_target")
-        level.map_remove_object_spot(zone.visual_id, "rvm_debug_target")
-    end
+    if not zone then return end
+    safe_remove_map_spot(zone.anchor_id, zone.spot)
+    safe_remove_map_spot(zone.visual_id, "paw_stash_red")
+    -- Remove the pre-0.2.1-alpha debug dot when loading an older test save.
+    safe_remove_map_spot(zone.visual_id, "rvm_debug_target")
 end
 
 local function add_zone_spots(zone)
@@ -195,7 +203,7 @@ local function add_zone_spots(zone)
     level.map_add_object_spot_ser(zone.anchor_id, zone.spot, hint)
     if debug_enabled() and zone.kind == "loot" and zone.visual_id and alife_object(zone.visual_id) then
         local exact_hint = game.translate_string("st_rvm_sorties_area_hint") .. zone_debug_text(zone, true)
-        level.map_add_object_spot_ser(zone.visual_id, "rvm_debug_target", exact_hint)
+        level.map_add_object_spot_ser(zone.visual_id, "paw_stash_red", exact_hint)
     end
 end
 
@@ -213,11 +221,12 @@ end
 local function release_anchor(zone)
     if not (zone and zone.anchor_id) then return end
     if zone.paw_anchor and tasks_placeable_waypoints and tasks_placeable_waypoints.deregister_script_zone then
-        local ok = pcall(tasks_placeable_waypoints.deregister_script_zone, zone.anchor_id)
-        if ok then return end
+        local ok, result = pcall(tasks_placeable_waypoints.deregister_script_zone, zone.anchor_id)
+        if ok and result ~= false then return end
     end
     if zone.managed_anchor and raid_objects_arranger and raid_objects_arranger.release_raid_objects then
-        raid_objects_arranger.release_raid_objects(zone.anchor_id)
+        local ok = pcall(raid_objects_arranger.release_raid_objects, zone.anchor_id)
+        if not ok then safe_release(zone.anchor_id) end
     else
         safe_release(zone.anchor_id)
     end
@@ -227,7 +236,8 @@ local function release_loot(zone)
     if zone.content_id then safe_release(zone.content_id) end
     if zone.visual_id then
         if zone.managed_visual and raid_objects_arranger and raid_objects_arranger.release_raid_objects then
-            raid_objects_arranger.release_raid_objects(zone.visual_id)
+            local ok = pcall(raid_objects_arranger.release_raid_objects, zone.visual_id)
+            if not ok then safe_release(zone.visual_id) end
         else
             safe_release(zone.visual_id)
         end
@@ -250,15 +260,12 @@ end
 
 local function cleanup_stashes()
     for id, _ in pairs(state.stash_ids or {}) do
-        if level and level.map_has_object_spot(id, "secondary_task_location") ~= 0 then
-            level.map_remove_object_spot(id, "secondary_task_location")
-            level.map_remove_object_spot(id, "secondary_task_location")
-        end
+        safe_remove_map_spot(id, "secondary_task_location")
         if raid_tasks_main and raid_tasks_main.raid_busy_stashes_t then
             raid_tasks_main.raid_busy_stashes_t[id] = nil
         end
         if grok_stashes_on_corpses and grok_stashes_on_corpses.clear_stash then
-            grok_stashes_on_corpses.clear_stash(id, state.level_name)
+            pcall(grok_stashes_on_corpses.clear_stash, id, state.level_name)
         end
     end
 end
@@ -742,7 +749,7 @@ end
 local function population_census_impl(reason)
     if not debug_enabled() then
         printf(PREFIX .. " census skipped: diagnostics disabled")
-        return
+        return nil, "diagnostics disabled"
     end
     local stalkers, mutants, squads = 0, 0, 0
     local member_ids = {}
@@ -800,16 +807,17 @@ local function population_census_impl(reason)
     end
     log("census end reason=%s squads=%s stalkers=%s mutants=%s",
         tostring(reason), tostring(squads), tostring(stalkers), tostring(mutants))
+    return { squads = squads, stalkers = stalkers, mutants = mutants }
 end
 
 local function population_census(reason)
-    if census_disabled then return false end
-    local ok, err = pcall(population_census_impl, reason)
+    if census_disabled then return nil, "disabled after an earlier diagnostic error" end
+    local ok, summary, detail = pcall(population_census_impl, reason)
     if not ok then
-        disable_census("population_census:" .. tostring(reason), err)
-        return false
+        disable_census("population_census:" .. tostring(reason), summary)
+        return nil, tostring(summary)
     end
-    return true
+    return summary, detail
 end
 
 local function detect_rvm_squad_changes_impl()
@@ -1015,7 +1023,24 @@ end
 
 local function actor_on_first_update()
     install_hooks()
-    if state.level_name and state.level_name ~= level.name() then cleanup("loaded_other_level") end
+    local current_level = level.name()
+    if state.pending_transition and state.level_name then
+        local raid_level = z_raid_item_travel_dungeons and z_raid_item_travel_dungeons.level_name_dunge
+        local raid_type = z_raid_item_travel_dungeons and z_raid_item_travel_dungeons.type_dungeon
+        local same_level = state.level_name == current_level
+        local raid_matches = (not raid_level or raid_level == current_level)
+            and (not raid_type or raid_type == state.sortie_type)
+        if same_level and raid_matches then
+            log("transition resolved same_level=%s sortie=%s; preserving zones=%s",
+                tostring(current_level), tostring(state.sortie_type), tostring(size_table(state.zones or {})))
+            state.pending_transition = false
+            state.transition_from_level = nil
+        else
+            cleanup("confirmed_level_change")
+        end
+    elseif state.level_name and state.level_name ~= current_level then
+        cleanup("loaded_other_level")
+    end
     if state.level_name == level.name() then
         for _, zone in pairs(state.zones) do
             if not zone.closed then refresh_zone_spots(zone) end
@@ -1050,7 +1075,12 @@ local function actor_on_update()
 end
 
 local function on_before_level_changing()
-    if state.level_name then cleanup("level_change") end
+    if state.level_name then
+        state.pending_transition = true
+        state.transition_from_level = level and level.name() or state.level_name
+        log("transition pending from=%s zones=%s; cleanup deferred until next level",
+            tostring(state.transition_from_level), tostring(size_table(state.zones or {})))
+    end
     debug_override = nil
 end
 
@@ -1067,15 +1097,59 @@ local function load_state(m_data)
     state.counters = state.counters or fresh_state().counters
     state.census_squads = state.census_squads or {}
     state.census_initialized = state.census_initialized or false
+    state.pending_transition = state.pending_transition == true
+    state.transition_from_level = state.transition_from_level or nil
+    state.schema = 2
+end
+
+local function find_debug_ui(...)
+    local values = { ... }
+    for _, value in ipairs(values) do
+        if type(value) == "table" or type(value) == "userdata" then
+            local ok, method = pcall(function() return value.SendOutput end)
+            if ok and type(method) == "function" then return value, method end
+        end
+    end
+    return nil, nil
+end
+
+local function debug_output(ui, method, text)
+    local delivered = false
+    if ui and method then delivered = pcall(method, ui, text) end
+    printf(PREFIX .. " %s", tostring(text))
+    return delivered
+end
+
+local function set_debug_mode(mode, ...)
+    local ui, method = find_debug_ui(...)
+    if mode == "auto" then debug_override = nil
+    elseif mode == "on" or mode == "off" then debug_override = mode
+    else return false end
+    refresh_all_zone_spots()
+    local message = "runtime debug mode=" .. tostring(mode)
+        .. " effective=" .. tostring(debug_enabled())
+        .. " DEV_DEBUG=" .. tostring(DEV_DEBUG)
+        .. " DEV_DEBUG_DEV=" .. tostring(DEV_DEBUG_DEV)
+    debug_output(ui, method, message)
+    if debug_enabled() then
+        state.census_initialized = false
+        detect_rvm_squad_changes()
+    end
+    return true
 end
 
 local function debug_command(...)
+    local ui, method = find_debug_ui(...)
     local values = { ... }
     local text = ""
     for _, value in ipairs(values) do
-        if type(value) == "table" then
-            for _, nested in pairs(value) do text = text .. " " .. tostring(nested) end
-        else
+        if type(value) == "table" and value ~= ui then
+            for _, nested in pairs(value) do
+                if type(nested) == "string" or type(nested) == "number" then
+                    text = text .. " " .. tostring(nested)
+                end
+            end
+        elseif type(value) == "string" or type(value) == "number" then
             text = text .. " " .. tostring(value)
         end
     end
@@ -1083,29 +1157,32 @@ local function debug_command(...)
     local mode = string.match(text, "%f[%a](auto)%f[%A]")
         or string.match(text, "%f[%a](on)%f[%A]")
         or string.match(text, "%f[%a](off)%f[%A]")
-    if mode == "auto" then debug_override = nil
-    elseif mode == "on" or mode == "off" then debug_override = mode
-    else
-        printf(PREFIX .. " usage: rvm_rework_debug auto|on|off")
-        printf(PREFIX .. " fallback commands: rvm_rework_debug_auto, rvm_rework_debug_on, rvm_rework_debug_off")
+    if not mode then
+        debug_output(ui, method, "usage: rvm_rework_debug auto|on|off; or use rvm_rework_debug_auto/on/off")
         return
     end
-    refresh_all_zone_spots()
-    printf(PREFIX .. " runtime debug mode=%s effective=%s DEV_DEBUG=%s DEV_DEBUG_DEV=%s",
-        tostring(mode), tostring(debug_enabled()), tostring(DEV_DEBUG), tostring(DEV_DEBUG_DEV))
-    if debug_enabled() then
-        state.census_initialized = false
-        detect_rvm_squad_changes()
+    set_debug_mode(mode, ...)
+end
+
+local function census_command(...)
+    local ui, method = find_debug_ui(...)
+    local summary, err = population_census("console_command")
+    if summary then
+        debug_output(ui, method, "census squads=" .. tostring(summary.squads)
+            .. " stalkers=" .. tostring(summary.stalkers)
+            .. " mutants=" .. tostring(summary.mutants) .. " (details in xray log)")
+    else
+        debug_output(ui, method, "census unavailable: " .. tostring(err))
     end
 end
 
 local function register_debug_commands()
     if not (add_console_command and (DEV_DEBUG == true or DEV_DEBUG_DEV == true)) then return end
     add_console_command("rvm_rework_debug", debug_command)
-    add_console_command("rvm_rework_debug_auto", function() debug_command("auto") end)
-    add_console_command("rvm_rework_debug_on", function() debug_command("on") end)
-    add_console_command("rvm_rework_debug_off", function() debug_command("off") end)
-    add_console_command("rvm_rework_census", function() population_census("console_command") end)
+    add_console_command("rvm_rework_debug_auto", function(...) set_debug_mode("auto", ...) end)
+    add_console_command("rvm_rework_debug_on", function(...) set_debug_mode("on", ...) end)
+    add_console_command("rvm_rework_debug_off", function(...) set_debug_mode("off", ...) end)
+    add_console_command("rvm_rework_census", census_command)
 end
 
 function on_game_start()
