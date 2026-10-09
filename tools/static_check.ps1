@@ -15,7 +15,8 @@ $required = @(
     'gamedata\configs\ui\map_spots_rvm_sorties.xml',
     'gamedata\configs\text\rus\st_rvm_sorties_rework.xml',
     'fomod\info.xml',
-    'meta.ini'
+    'meta.ini',
+    'docs\RELEASE-CHECKLIST.md'
 )
 foreach ($relative in $required) {
     if (-not (Test-Path -LiteralPath (Join-Path $ModRoot $relative))) { $failures.Add("missing: $relative") }
