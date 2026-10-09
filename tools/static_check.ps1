@@ -56,6 +56,9 @@ foreach ($needle in @('DEV_DEBUG','DEV_DEBUG_DEV','rvm_rework_debug','rvm_rework
 foreach ($needle in @('safe_alive','safe_class_check','census_disabled','pcall(population_census_impl','pcall(detect_rvm_squad_changes_impl')) {
     if (-not $main.Contains($needle)) { $failures.Add("census safety missing: $needle") }
 }
+foreach ($needle in @('artifact_snapshot','actor_inventory','server_parent_chain','actor_owns_linked_artifact','artifact diagnostic reason=periodic','zone kept open')) {
+    if (-not $main.Contains($needle)) { $failures.Add("artifact ownership safety missing: $needle") }
+}
 if ($main -match 'member:alive\s*\(') { $failures.Add('unsafe squad iterator member:alive() call detected') }
 if ($main -match 'function on_before_level_changing\(\)[\s\S]{0,250}cleanup\(') { $failures.Add('before-level-change must defer cleanup until the destination level is known') }
 if ($main -match 'drx_da_main\.spawn_artefact_on_smart\s*=') { $failures.Add('Arrival spawn function must not be wrapped') }
@@ -95,7 +98,7 @@ if ($infectedUiText.Contains('координаты тайника')) { $failures
 if ($scoutingUiText -match '(?i)экспедиц' -or $infectedUiText -match '(?i)экспедиц') { $failures.Add('route UI text must use original RVM terminology, not expedition') }
 $fragment = Get-Content -LiteralPath (Join-Path $ModRoot 'gamedata\configs\ui\map_spots_rvm_sorties.xml') -Raw
 [xml]("<map_spots>" + $fragment + "</map_spots>") | Out-Null
-foreach ($needle in @('rvm_search_small','rvm_search_medium','rvm_search_large','rvm_debug_target','scale_min="1" scale_max="1.25"')) {
+foreach ($needle in @('rvm_search_small','rvm_search_medium','rvm_search_large','rvm_debug_target','width="80" height="80"','width="96" height="96"','width="112" height="112"','scale_min="1" scale_max="1.35"','a="220" r="255" g="210" b="64"')) {
     if (-not $fragment.Contains($needle)) { $failures.Add("map spot invariant missing: $needle") }
 }
 

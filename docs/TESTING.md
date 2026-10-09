@@ -10,6 +10,8 @@
 | Debug tooltip | Обычный текст сохранён; добавлены kind/anchor/radius/linked | Сравнить все четыре kind |
 | Подбор игроком | Одна область закрывается | `reason=actor_pickup` |
 | Подбор NPC | При false область остаётся | Переключить `remove_on_npc_pickup` |
+| NPC → труп → actor | Область остаётся у NPC и закрывается, когда точный linked ID оказывается у actor | `reason=actor_owns_linked_artifact`, не совпадение section |
+| Диагностика артефакта | Server/online existence, parent chain, позиции, `anchor_dxz/dy`, ближайшая vertex | Периодический debug-log и `rvm_rework_census` |
 | Засада | 2–3 разрешённых мутанта вне взгляда/аномалии/радиуса | `spawned`, отсутствие ERROR |
 | Контейнер | Видимая модель малого тайника открывается; внутри 1–6 разных валидных предметов | `loot box=... distinct=...`, затем `reason=container_opened` |
 | Точный loot-marker | Обычная красная иконка тайника PAW стоит на visual/box и исчезает при открытии | ID/координаты/contents в tooltip |
@@ -31,6 +33,8 @@
 Если игра падает до главного меню, приложите конец `xray_*.log` со строками `[Anomaly Expedition Rework]`. Если круги есть, но PAW не предлагает маршрут, приложите версию PAW и результат теста на минимальном/максимальном масштабе карты.
 
 Для runtime-проверки откройте **Debug UI debug launcher**, не обычную консоль `~`. Используйте `rvm_rework_debug_off`, затем `rvm_rework_debug_on`: Debug UI должен подтвердить mode/effective, а круги — переключиться между обычным и техническим tooltip без изменения количества зон. Команда `rvm_rework_census` должна показать краткие `squads/stalkers/mutants` в Debug UI и не создавать/удалять население.
+
+Круги после второго полевого теста имеют базы `80/96/112 px`, `scale_max=1.35`, alpha `220`. Особенно проверить T1 на минимальном и максимальном zoom: он должен быть явно заметнее прежних `40 px`, но не разрастаться по старому пределу `3x`.
 
 Live-log: запустите `tools\watch_live_log.cmd` либо `.\tools\watch_live_log.ps1`. До первого совпадения watcher явно показывает `Waiting for matches...`; остановка — `Ctrl+C`.
 

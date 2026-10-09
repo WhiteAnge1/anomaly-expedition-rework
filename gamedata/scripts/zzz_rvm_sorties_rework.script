@@ -9,6 +9,7 @@ local next_update = 0
 local debug_override = nil
 local census_disabled = false
 local census_error_reported = false
+local next_artifact_diagnostic = 0
 
 local function fresh_state()
     return {
@@ -140,6 +141,137 @@ local function join_values(values, separator)
     return result
 end
 
+local function safe_object_id_any(obj)
+    if not obj then return nil end
+    local ok, id = pcall(function() return obj.id end)
+    if ok and type(id) == "number" then return id end
+    ok, id = pcall(function() return obj:id() end)
+    return ok and type(id) == "number" and id or nil
+end
+
+local function safe_parent_id(obj)
+    if not obj then return nil end
+    local ok, id = pcall(function() return obj.parent_id end)
+    return ok and type(id) == "number" and id or nil
+end
+
+local function safe_object_position(obj)
+    if not obj then return nil end
+    local ok, pos = pcall(function()
+        local value = obj.position
+        if type(value) == "function" or not value then return nil end
+        return pos_table(value)
+    end)
+    if ok and pos then return pos end
+    ok, pos = pcall(function() return pos_table(obj:position()) end)
+    return ok and pos or nil
+end
+
+local function fmt_position(pos)
+    if not pos then return "none" end
+    return fmt_number(pos.x) .. "," .. fmt_number(pos.y) .. "," .. fmt_number(pos.z)
+end
+
+-- The item-take callback is not guaranteed for corpse loot/trade. The exact
+-- server ID is therefore also checked against actor inventory and its parent
+-- chain. Every engine-facing access is protected: an uncertain result keeps
+-- the zone open instead of risking a false close or an X-Ray crash.
+local function artifact_snapshot(zone)
+    local id = zone and zone.artifact_id
+    local snapshot = {
+        id = id,
+        server_exists = false,
+        online_exists = false,
+        actor_inventory = false,
+        actor_owned = false,
+        ownership_source = "none",
+        parent_id = nil,
+        parent_chain = {},
+    }
+    if not (id and db.actor) then return snapshot end
+
+    local actor_id = safe_object_id_any(db.actor)
+    local server_ok, server_obj = pcall(alife_object, id)
+    if server_ok and server_obj then
+        snapshot.server_exists = true
+        snapshot.server_pos = safe_object_position(server_obj)
+        snapshot.parent_id = safe_parent_id(server_obj)
+    end
+    local online_ok, online_obj = pcall(function() return level and level.object_by_id(id) end)
+    if online_ok and online_obj then
+        snapshot.online_exists = true
+        snapshot.online_pos = safe_object_position(online_obj)
+        local parent_ok, parent = pcall(function() return online_obj:parent() end)
+        snapshot.online_parent_id = parent_ok and safe_object_id_any(parent) or nil
+    end
+
+    local inventory_ok, inventory_err = pcall(function()
+        db.actor:iterate_inventory(function(_, item)
+            if safe_object_id_any(item) == id then snapshot.actor_inventory = true end
+        end, nil)
+    end)
+    snapshot.inventory_check = inventory_ok and "ok" or ("error:" .. tostring(inventory_err))
+    if snapshot.actor_inventory then
+        snapshot.actor_owned = true
+        snapshot.ownership_source = "actor_inventory"
+    elseif actor_id ~= nil and snapshot.online_parent_id == actor_id then
+        snapshot.actor_owned = true
+        snapshot.ownership_source = "online_parent"
+    end
+
+    local parent_id = snapshot.parent_id
+    local visited = {}
+    for _ = 1, 8 do
+        if parent_id == nil or parent_id == 65535 or visited[parent_id] then break end
+        snapshot.parent_chain[#snapshot.parent_chain + 1] = parent_id
+        if actor_id ~= nil and parent_id == actor_id then
+            snapshot.actor_owned = true
+            if snapshot.ownership_source == "none" then snapshot.ownership_source = "server_parent_chain" end
+            break
+        end
+        visited[parent_id] = true
+        local parent_ok, parent_obj = pcall(alife_object, parent_id)
+        if not (parent_ok and parent_obj) then break end
+        parent_id = safe_parent_id(parent_obj)
+    end
+
+    local pos = snapshot.online_pos or snapshot.server_pos
+    if pos then
+        snapshot.anchor_distance = zone.center and distance_xz(pos, zone.center) or nil
+        snapshot.anchor_delta_y = zone.center and (pos.y - zone.center.y) or nil
+        local vertex_ok, lvid = pcall(valid_vertex, pos_vector(pos))
+        if vertex_ok and lvid then
+            snapshot.nearest_vertex = lvid
+            local nearest_ok, nearest = pcall(level.vertex_position, lvid)
+            if nearest_ok and nearest then
+                snapshot.vertex_distance = distance_xz(pos, nearest)
+                snapshot.vertex_delta_y = pos.y - nearest.y
+            end
+        end
+    end
+    return snapshot
+end
+
+local function artifact_diagnostic_text(snapshot)
+    if not snapshot then return "snapshot=unavailable" end
+    return "exists(server=" .. tostring(snapshot.server_exists)
+        .. ",online=" .. tostring(snapshot.online_exists) .. ")"
+        .. " parent=" .. tostring(snapshot.parent_id)
+        .. " online_parent=" .. tostring(snapshot.online_parent_id)
+        .. " chain=" .. join_values(snapshot.parent_chain, ">")
+        .. " actor_inventory=" .. tostring(snapshot.actor_inventory)
+        .. " inventory_check=" .. tostring(snapshot.inventory_check)
+        .. " owned=" .. tostring(snapshot.actor_owned)
+        .. " source=" .. tostring(snapshot.ownership_source)
+        .. " server_pos=" .. fmt_position(snapshot.server_pos)
+        .. " online_pos=" .. fmt_position(snapshot.online_pos)
+        .. " anchor_dxz=" .. fmt_number(snapshot.anchor_distance or -1)
+        .. " anchor_dy=" .. fmt_number(snapshot.anchor_delta_y or -9999)
+        .. " vertex=" .. tostring(snapshot.nearest_vertex)
+        .. " vertex_dxz=" .. fmt_number(snapshot.vertex_distance or -1)
+        .. " vertex_dy=" .. fmt_number(snapshot.vertex_delta_y or -9999)
+end
+
 local function zone_debug_text(zone, exact_target)
     if not debug_enabled() then return "" end
     local linked = zone.artifact_id or zone.content_id or "none"
@@ -153,6 +285,8 @@ local function zone_debug_text(zone, exact_target)
         lines[#lines + 1] = "artifact_id=" .. tostring(zone.artifact_id)
             .. " section=" .. tostring(zone.artifact_section)
             .. " name=" .. tostring(zone.artifact_name)
+        local ok, snapshot = pcall(artifact_snapshot, zone)
+        lines[#lines + 1] = ok and artifact_diagnostic_text(snapshot) or "snapshot_error=" .. tostring(snapshot)
     elseif zone.kind == "loot" then
         local pos = zone.visual_pos or zone.center
         local distance = db.actor and pos and distance_xz(db.actor:position(), pos) or -1
@@ -688,11 +822,7 @@ local function owned_enemy(id)
 end
 
 local function safe_object_id(obj)
-    if not obj then return nil end
-    local ok, id = pcall(function() return obj.id end)
-    if ok and id then return id end
-    ok, id = pcall(function() return obj:id() end)
-    return ok and id or nil
+    return safe_object_id_any(obj)
 end
 
 local function safe_alife_object(id)
@@ -804,6 +934,16 @@ local function population_census_impl(reason)
                     tostring(alive == nil and "unknown" or alive), tostring(alive_source))
             end
         end
+        if not zone.closed and zone.kind == "artifact" then
+            local snapshot_ok, snapshot = pcall(artifact_snapshot, zone)
+            if snapshot_ok then
+                log("artifact diagnostic reason=census anchor=%s linked=%s %s",
+                    tostring(zone.anchor_id), tostring(zone.artifact_id), artifact_diagnostic_text(snapshot))
+            else
+                log("ERROR artifact diagnostic failed reason=census anchor=%s linked=%s error=%s",
+                    tostring(zone.anchor_id), tostring(zone.artifact_id), tostring(snapshot))
+            end
+        end
     end
     log("census end reason=%s squads=%s stalkers=%s mutants=%s",
         tostring(reason), tostring(squads), tostring(stalkers), tostring(mutants))
@@ -886,7 +1026,36 @@ local function trigger_ambush(zone)
     zone.anomaly_positions = nil
 end
 
-local function update_zones()
+local function update_artifact_zones(now)
+    local emit_diagnostic = debug_enabled() and now >= next_artifact_diagnostic
+    if emit_diagnostic then next_artifact_diagnostic = now + 15000 end
+    for _, zone in pairs(state.zones or {}) do
+        if not zone.closed and zone.kind == "artifact" then
+            local ok, snapshot = pcall(artifact_snapshot, zone)
+            if not ok then
+                if not zone.ownership_error_reported then
+                    zone.ownership_error_reported = true
+                    log("ERROR artifact ownership check failed anchor=%s linked=%s error=%s; zone kept open",
+                        tostring(zone.anchor_id), tostring(zone.artifact_id), tostring(snapshot))
+                end
+            else
+                zone.ownership_error_reported = nil
+                if snapshot.actor_owned then
+                    log("artifact ownership acquired anchor=%s linked=%s source=%s chain=%s",
+                        tostring(zone.anchor_id), tostring(zone.artifact_id), tostring(snapshot.ownership_source),
+                        join_values(snapshot.parent_chain, ">"))
+                    close_zone(zone, "actor_owns_linked_artifact")
+                elseif emit_diagnostic then
+                    log("artifact diagnostic reason=periodic anchor=%s linked=%s %s",
+                        tostring(zone.anchor_id), tostring(zone.artifact_id), artifact_diagnostic_text(snapshot))
+                end
+            end
+        end
+    end
+end
+
+local function update_zones(now)
+    update_artifact_zones(now)
     for _, zone in pairs(state.zones) do
         if not zone.closed and zone.kind == "enemy" then
             if not zone.triggered then
@@ -1070,7 +1239,7 @@ local function actor_on_update()
             if create_artifact_zone(artifact_id) then state.pending_artifacts[key] = nil end
         end
         if not state.decoys_created and state.last_artifact_time > 0 and now - state.last_artifact_time >= 2000 then create_decoys() end
-        update_zones()
+        update_zones(now)
     end
 end
 

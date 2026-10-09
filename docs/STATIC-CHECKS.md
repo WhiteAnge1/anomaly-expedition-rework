@@ -10,6 +10,7 @@
 - Проверено динамическое чтение штатной таблицы артефактов, точное соответствие групп пулов `{1..5}`, `{5,6}`, `{6,7}` и вызов сохраняемой очереди `raid_artefacts.addToQueuedArtefacts`.
 - Проверено использование PAW `script_zone`, видимых `raid_small_stash_*`, отсутствие несовместимых `printf`-форматов и запрещённых после полевого теста loot-секций.
 - Проверены global-debug auto/default-off, безопасный вывод runtime-команд в Debug UI, PAW stash-marker/tooltip, census и отсутствие обёртки штатного `raid_dospawn_dungeons.raid_start_spawn`.
+- Проверены exact-ID fallback владения артефактом, fail-closed сохранение области при ошибке API и новые заметные bounded размеры кругов `80/96/112` при `scale_max=1.35`.
 - Регрессия same-level cleanup закрыта статическим запретом прямого `cleanup()` из `on_before_level_changing`; очистка разрешена только после определения фактического уровня на `actor_on_first_update`.
 - `tools/*.ps1` с кириллицей обязаны иметь UTF-8 BOM и проверяются запуском через Windows PowerShell 5.1 (`powershell.exe`), а `.cmd`-обёртка остаётся ASCII.
 - При передаче `-BuildModsRoot` дополнительно проверяется наличие сборочных секций модулей, разведданных и всех 17 моделей тайников.
