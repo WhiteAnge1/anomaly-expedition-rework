@@ -7,6 +7,8 @@ local callbacks_registered = false
 local hooks_installed = false
 local next_update = 0
 local debug_override = nil
+local census_disabled = false
+local census_error_reported = false
 
 local function fresh_state()
     return {
@@ -662,9 +664,13 @@ local function ambush_spawn_point(zone)
 end
 
 local function on_current_level(obj)
-    if not (obj and obj.m_game_vertex_id) then return false end
-    local vertex = game_graph():vertex(obj.m_game_vertex_id)
-    return vertex and alife():level_name(vertex:level_id()) == level.name()
+    if not obj then return false end
+    local ok, result = pcall(function()
+        if not obj.m_game_vertex_id then return false end
+        local vertex = game_graph():vertex(obj.m_game_vertex_id)
+        return vertex and alife():level_name(vertex:level_id()) == level.name()
+    end)
+    return ok and result == true
 end
 
 local function owned_enemy(id)
@@ -674,7 +680,66 @@ local function owned_enemy(id)
     return false
 end
 
-local function population_census(reason)
+local function safe_object_id(obj)
+    if not obj then return nil end
+    local ok, id = pcall(function() return obj.id end)
+    if ok and id then return id end
+    ok, id = pcall(function() return obj:id() end)
+    return ok and id or nil
+end
+
+local function safe_alife_object(id)
+    if not id then return nil end
+    local ok, obj = pcall(alife_object, id)
+    return ok and obj or nil
+end
+
+local function safe_alive_method(obj)
+    if not obj then return nil end
+    local ok, method = pcall(function() return obj.alive end)
+    if not (ok and type(method) == "function") then return nil end
+    local result_ok, result = pcall(method, obj)
+    if not result_ok then return nil end
+    return result == true
+end
+
+local function safe_alive(id, server_obj)
+    if id and level then
+        local ok, online = pcall(function() return level.object_by_id(id) end)
+        if ok and online then
+            local alive = safe_alive_method(online)
+            if alive ~= nil then return alive, "online_alive" end
+        end
+    end
+
+    local obj = safe_alife_object(id) or server_obj
+    local alive = safe_alive_method(obj)
+    if alive ~= nil then return alive, "server_alive" end
+    for _, field in ipairs({ "health", "m_fHealth" }) do
+        local ok, health = pcall(function() return obj and obj[field] end)
+        if ok and type(health) == "number" then return health > 0, "server_" .. field end
+    end
+    return nil, "unknown"
+end
+
+local function safe_class_check(check, obj)
+    if type(check) ~= "function" or not obj then return false end
+    local ok, result = pcall(check, obj)
+    if ok then return result == true end
+    local cls_ok, clsid = pcall(function() return obj:clsid() end)
+    if not (cls_ok and clsid) then return false end
+    ok, result = pcall(check, nil, clsid)
+    return ok and result == true
+end
+
+local function disable_census(context, err)
+    census_disabled = true
+    if census_error_reported then return end
+    census_error_reported = true
+    printf(PREFIX .. " ERROR census disabled context=%s error=%s", tostring(context), tostring(err))
+end
+
+local function population_census_impl(reason)
     if not debug_enabled() then
         printf(PREFIX .. " census skipped: diagnostics disabled")
         return
@@ -700,16 +765,19 @@ local function population_census(reason)
             local members = {}
             local squad_owned = false
             for member in squad:squad_members() do
-                local id = member.id
-                local alive = member:alive()
+                local id = safe_object_id(member)
+                local server_member = safe_alife_object(id) or member
+                local alive, alive_source = safe_alive(id, server_member)
                 local owned = owned_enemy(id)
-                local section = object_section(member)
-                member_ids[id] = true
+                local section = object_section(server_member)
+                if id then member_ids[id] = true end
                 squad_owned = squad_owned or owned
-                if alive and IsStalker(member) then stalkers = stalkers + 1 end
-                if alive and IsMonster(member) then mutants = mutants + 1 end
+                if alive == true and safe_class_check(IsStalker, server_member) then stalkers = stalkers + 1 end
+                if alive == true and safe_class_check(IsMonster, server_member) then mutants = mutants + 1 end
                 members[#members + 1] = tostring(section) .. "#" .. tostring(id)
-                    .. "(alive=" .. tostring(alive) .. ",owned_by_rework=" .. tostring(owned) .. ")"
+                    .. "(alive=" .. tostring(alive == nil and "unknown" or alive)
+                    .. ",alive_source=" .. tostring(alive_source)
+                    .. ",owned_by_rework=" .. tostring(owned) .. ")"
             end
             table.sort(members)
             log("census squad id=%s section=%s owned_by_rework=%s members=[%s]",
@@ -719,13 +787,14 @@ local function population_census(reason)
     for _, zone in pairs(state.zones or {}) do
         for id, _ in pairs(zone.spawned_ids or {}) do
             if not member_ids[id] then
-                local obj = alife_object(id)
+                local obj = safe_alife_object(id)
                 local info = zone.spawned_info and zone.spawned_info[id] or {}
-                local alive = obj and obj:alive() or false
-                if alive and obj and IsStalker(obj) then stalkers = stalkers + 1 end
-                if alive and obj and IsMonster(obj) then mutants = mutants + 1 end
-                log("census loose id=%s section=%s alive=%s owned_by_rework=true",
-                    tostring(id), tostring(info.section or object_section(obj)), tostring(alive))
+                local alive, alive_source = safe_alive(id, obj)
+                if alive == true and safe_class_check(IsStalker, obj) then stalkers = stalkers + 1 end
+                if alive == true and safe_class_check(IsMonster, obj) then mutants = mutants + 1 end
+                log("census loose id=%s section=%s alive=%s alive_source=%s owned_by_rework=true",
+                    tostring(id), tostring(info.section or object_section(obj)),
+                    tostring(alive == nil and "unknown" or alive), tostring(alive_source))
             end
         end
     end
@@ -733,7 +802,17 @@ local function population_census(reason)
         tostring(reason), tostring(squads), tostring(stalkers), tostring(mutants))
 end
 
-local function detect_rvm_squad_changes()
+local function population_census(reason)
+    if census_disabled then return false end
+    local ok, err = pcall(population_census_impl, reason)
+    if not ok then
+        disable_census("population_census:" .. tostring(reason), err)
+        return false
+    end
+    return true
+end
+
+local function detect_rvm_squad_changes_impl()
     if not debug_enabled() then return end
     local current, added = {}, {}
     for squad_id, _ in pairs(raid_simulation_dungeons and raid_simulation_dungeons.raid_squads_dunge or {}) do
@@ -753,6 +832,16 @@ local function detect_rvm_squad_changes()
         table.sort(added)
         population_census("rvm_squad_added=" .. join_values(added, ","))
     end
+end
+
+local function detect_rvm_squad_changes()
+    if census_disabled then return false end
+    local ok, err = pcall(detect_rvm_squad_changes_impl)
+    if not ok then
+        disable_census("detect_rvm_squad_changes", err)
+        return false
+    end
+    return true
 end
 
 local function trigger_ambush(zone)

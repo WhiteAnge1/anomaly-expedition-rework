@@ -34,6 +34,10 @@ foreach ($needle in @('generate_scripted_mapspot_at','set_pingspot_persistence',
 foreach ($needle in @('DEV_DEBUG','DEV_DEBUG_DEV','rvm_rework_debug','rvm_rework_census','population_census','owned_by_rework','spawned_info','rvm_debug_target')) {
     if (-not $main.Contains($needle)) { $failures.Add("debug integration missing: $needle") }
 }
+foreach ($needle in @('safe_alive','safe_class_check','census_disabled','pcall(population_census_impl','pcall(detect_rvm_squad_changes_impl')) {
+    if (-not $main.Contains($needle)) { $failures.Add("census safety missing: $needle") }
+}
+if ($main -match 'member:alive\s*\(') { $failures.Add('unsafe squad iterator member:alive() call detected') }
 if ($main -match 'drx_da_main\.spawn_artefact_on_smart\s*=') { $failures.Add('Arrival spawn function must not be wrapped') }
 if ($main -match 'raid_dospawn_dungeons\.raid_start_spawn\s*=') { $failures.Add('RVM dospawn function must not be wrapped') }
 if ($main -match 'for\s+id\s*=\s*1\s*,\s*65534[\s\S]{0,300}IsArtefact') { $failures.Add('post-factum global artefact scan detected') }
