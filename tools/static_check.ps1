@@ -60,6 +60,9 @@ foreach ($needle in @('safe_alive','safe_class_check','census_disabled','pcall(p
 foreach ($needle in @('artifact_snapshot','actor_inventory','server_parent_chain','actor_owns_linked_artifact','artifact diagnostic reason=periodic','zone kept open')) {
     if (-not $main.Contains($needle)) { $failures.Add("artifact ownership safety missing: $needle") }
 }
+foreach ($needle in @('recreated_artifact_zone','actor_pickup_recreated_id','artifact lineage recovered','count == 1 and candidate')) {
+    if (-not $main.Contains($needle)) { $failures.Add("recreated artifact lineage safety missing: $needle") }
+}
 foreach ($needle in @('ARTIFACT_DEBUG_SPOT = "paw_stash_green"','LOOT_DEBUG_SPOT = "paw_stash_red"','ENEMY_DEBUG_SPOT = "alife_presentation_squad_enemy_1"','sync_artifact_debug_spot','sync_enemy_debug_spot','pairs(zone.spawned_ids or {})','owned_by_rework=true')) {
     if (-not $main.Contains($needle)) { $failures.Add("exact debug marker integration missing: $needle") }
 }

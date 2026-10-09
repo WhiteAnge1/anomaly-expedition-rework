@@ -10,7 +10,7 @@
 | Debug tooltip | Обычный текст сохранён; добавлены kind/anchor/radius/linked | Сравнить все четыре kind |
 | Подбор игроком | Одна область закрывается | `reason=actor_pickup` |
 | Подбор NPC | При false область остаётся | Переключить `remove_on_npc_pickup` |
-| NPC → труп → actor | Область остаётся у NPC и закрывается, когда точный linked ID оказывается у actor | `reason=actor_owns_linked_artifact`, не совпадение section |
+| NPC → труп → actor | Область остаётся у NPC и закрывается, когда linked ID оказывается у actor; после телекинеза допустим новый ID только для единственного пропавшего кандидата той же секции | `reason=actor_owns_linked_artifact` либо `actor_pickup_recreated_id`; неоднозначность не закрывает зоны |
 | Диагностика артефакта | Server/online existence, parent chain, позиции, `anchor_dxz/dy`, ближайшая vertex | Периодический debug-log и `rvm_rework_census` |
 | Exact artifact marker | Debug-on: зелёный `paw_stash_green` следует exact linked ID; debug-off/close: исчезает | Tooltip `kind/artifact_id/section/name/position/parent` |
 | Засада | 2–3 разрешённых мутанта вне взгляда/аномалии/радиуса | `spawned`, отсутствие ERROR |

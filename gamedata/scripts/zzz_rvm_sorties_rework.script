@@ -1309,12 +1309,44 @@ local function install_hooks()
     end
 end
 
+-- Some RVM telekinesis paths destroy the original world artefact and create a
+-- replacement object in the NPC inventory. When the actor later loots that
+-- replacement, its ID no longer matches the exact ID captured at spawn time.
+-- Accept that lineage only when the old object is gone, the section matches,
+-- and exactly one open zone qualifies; ambiguity deliberately keeps zones open.
+local function recreated_artifact_zone(item)
+    local section = object_section(item)
+    if not section then return nil end
+    local candidate = nil
+    local count = 0
+    for _, zone in pairs(state.zones or {}) do
+        if not zone.closed and zone.kind == "artifact" and zone.artifact_section == section then
+            local old_ok, old_obj = pcall(alife_object, zone.artifact_id)
+            if old_ok and not old_obj then
+                candidate = zone
+                count = count + 1
+            end
+        end
+    end
+    return count == 1 and candidate or nil
+end
+
 local function actor_on_item_take(item)
     if not item then return end
-    local key = tostring(item:id())
+    local item_id = safe_object_id_any(item)
+    local key = tostring(item_id)
     local anchor_key = state.artifact_zone[key]
     local zone = anchor_key and state.zones[anchor_key]
-    if zone then close_zone(zone, "actor_pickup") end
+    if zone then
+        close_zone(zone, "actor_pickup")
+        return
+    end
+    zone = recreated_artifact_zone(item)
+    if zone then
+        log("artifact lineage recovered anchor=%s old=%s replacement=%s section=%s",
+            tostring(zone.anchor_id), tostring(zone.artifact_id), tostring(item_id), tostring(zone.artifact_section))
+        close_zone(zone, "actor_pickup_recreated_id")
+    end
 end
 
 local function npc_on_item_take(npc, item)
