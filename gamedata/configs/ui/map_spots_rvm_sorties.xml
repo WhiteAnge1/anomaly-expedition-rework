@@ -2,17 +2,18 @@
   One compact visual size per sortie tier. Logical gameplay radii remain in
   rvm_sorties_rework.ltx; map circles are intentionally symbolic UI markers.
   Field testing showed that 40/50/60 at 1.25x was too faint. The deliberately
-  larger 80/96/112 bases and stronger contrast remain bounded at 1.35x.
+  revised 64/80/96 bases stay smaller on the overview while 2.25x close-zoom
+  scaling better represents the logical search radius.
   There is no mini_map entry: RVM has no minimap and this mod must not add one.
 -->
 <rvm_search_small hint="st_rvm_sorties_area_name"><level_map spot="rvm_search_small_spot"/></rvm_search_small>
-<rvm_search_small_spot width="80" height="80" alignment="c" stretch="1" scale="1" scale_min="1" scale_max="1.35"><texture x="730" y="456" width="115" height="115" a="220" r="255" g="210" b="64">ui\ui_common</texture></rvm_search_small_spot>
+<rvm_search_small_spot width="64" height="64" alignment="c" stretch="1" scale="1" scale_min="1" scale_max="2.25"><texture x="730" y="456" width="115" height="115" a="220" r="255" g="210" b="64">ui\ui_common</texture></rvm_search_small_spot>
 
 <rvm_search_medium hint="st_rvm_sorties_area_name"><level_map spot="rvm_search_medium_spot"/></rvm_search_medium>
-<rvm_search_medium_spot width="96" height="96" alignment="c" stretch="1" scale="1" scale_min="1" scale_max="1.35"><texture x="730" y="456" width="115" height="115" a="220" r="255" g="210" b="64">ui\ui_common</texture></rvm_search_medium_spot>
+<rvm_search_medium_spot width="80" height="80" alignment="c" stretch="1" scale="1" scale_min="1" scale_max="2.25"><texture x="730" y="456" width="115" height="115" a="220" r="255" g="210" b="64">ui\ui_common</texture></rvm_search_medium_spot>
 
 <rvm_search_large hint="st_rvm_sorties_area_name"><level_map spot="rvm_search_large_spot"/></rvm_search_large>
-<rvm_search_large_spot width="112" height="112" alignment="c" stretch="1" scale="1" scale_min="1" scale_max="1.35"><texture x="730" y="456" width="115" height="115" a="220" r="255" g="210" b="64">ui\ui_common</texture></rvm_search_large_spot>
+<rvm_search_large_spot width="96" height="96" alignment="c" stretch="1" scale="1" scale_min="1" scale_max="2.25"><texture x="730" y="456" width="115" height="115" a="220" r="255" g="210" b="64">ui\ui_common</texture></rvm_search_large_spot>
 
 <!-- Compatibility only: refresh removes this old debug dot and uses PAW paw_stash_red. -->
 <rvm_debug_target hint="st_rvm_sorties_area_name"><level_map spot="rvm_debug_target_spot"/></rvm_debug_target>

@@ -575,7 +575,7 @@ local function create_artifact_zone(artifact_id)
     return false
 end
 
-local function random_decoy_anchor(kind)
+local function random_decoy_anchor(kind, radius)
     local attempts = math.floor(C.get_number("global", "placement_attempts", 60))
     for _ = 1, attempts do
         local id = raid_objects_arranger.spawn_object_rand_point("raid_shelter_gag", level.name(), -1)
@@ -583,7 +583,10 @@ local function random_decoy_anchor(kind)
         if obj then
             local valid = separated(obj.position)
             if kind == "enemy" and state.start_pos then
-                valid = valid and distance_xz(obj.position, state.start_pos) >= balanced("ambush_start_exclusion_radius", 180)
+                local armed_distance = (radius or 0) + balanced("ambush_trigger_padding", 130)
+                    + balanced("ambush_start_trigger_margin", 20)
+                local start_exclusion = math.max(balanced("ambush_start_exclusion_radius", 180), armed_distance)
+                valid = valid and distance_xz(obj.position, state.start_pos) >= start_exclusion
             end
             if valid then
                 local position = pos_table(obj.position)
@@ -830,9 +833,10 @@ end
 
 local function create_decoy(kind)
     if kind == "loot" then return create_loot_zone() end
-    local anchor_id, center, paw_anchor = random_decoy_anchor(kind)
+    local radius = random_radius()
+    local anchor_id, center, paw_anchor = random_decoy_anchor(kind, radius)
     if not anchor_id then return false end
-    return add_zone(kind, anchor_id, center, random_radius(), { paw_anchor = paw_anchor }) ~= nil
+    return add_zone(kind, anchor_id, center, radius, { paw_anchor = paw_anchor }) ~= nil
 end
 
 local function enabled_weights()
@@ -916,31 +920,51 @@ local function collect_anomaly_positions()
     return result
 end
 
-local function point_clear_of_anomalies(pos, anomaly_positions)
+local function anomaly_distance(pos, anomaly_positions)
+    local nearest = 999999
     for _, anomaly_pos in ipairs(anomaly_positions or {}) do
-        if distance_xz(pos, anomaly_pos) < 15 then return false end
+        nearest = math.min(nearest, distance_xz(pos, anomaly_pos))
     end
-    return true
+    return nearest
 end
 
 local function ambush_spawn_point(zone)
     local min_d = math.floor(balanced("enemy_spawn_distance_min", 35))
     local max_d = math.floor(balanced("enemy_spawn_distance_max", 90))
-    local safe = stock_spawn_radius() + balanced("ambush_extra_padding", 20)
+    local stock_safe = stock_spawn_radius()
+    local strict_safe = stock_safe + balanced("ambush_extra_padding", 20)
+    local strict_anomaly = balanced("ambush_anomaly_clearance", 15)
+    local fallback_anomaly = balanced("ambush_anomaly_clearance_fallback", 8)
     local attempts = math.floor(C.get_number("global", "placement_attempts", 60))
+    local fallback_pos, fallback_lvid = nil, nil
+    local valid_vertices = 0
     for _ = 1, attempts do
         local angle = math.random() * math.pi * 2
         local dist = math.random(min_d, math.max(min_d, max_d))
         local p = vector():set(zone.center.x + math.cos(angle) * dist, zone.center.y, zone.center.z + math.sin(angle) * dist)
         local lvid = valid_vertex(p)
         if lvid then
+            valid_vertices = valid_vertices + 1
             p = level.vertex_position(lvid)
-            if distance_xz(p, db.actor:position()) >= safe and point_outside_view(p)
-            and point_clear_of_anomalies(p, zone.anomaly_positions) then
+            local actor_distance = distance_xz(p, db.actor:position())
+            local outside_view = point_outside_view(p)
+            local anomaly_clearance = anomaly_distance(p, zone.anomaly_positions)
+            if actor_distance >= strict_safe and outside_view and anomaly_clearance >= strict_anomaly then
                 return p, lvid
+            end
+            if not fallback_pos and actor_distance >= stock_safe and outside_view
+            and anomaly_clearance >= fallback_anomaly then
+                fallback_pos, fallback_lvid = p, lvid
             end
         end
     end
+    if fallback_pos then
+        log("ambush spawn fallback=relaxed_out_of_view anchor=%s valid_vertices=%s stock_safe=%s",
+            tostring(zone.anchor_id), tostring(valid_vertices), fmt_number(stock_safe))
+        return fallback_pos, fallback_lvid
+    end
+    log("ambush spawn search exhausted anchor=%s attempts=%s valid_vertices=%s stock_safe=%s anomaly_clearance=%s",
+        tostring(zone.anchor_id), tostring(attempts), tostring(valid_vertices), fmt_number(stock_safe), fmt_number(fallback_anomaly))
     return nil, nil
 end
 
@@ -1309,7 +1333,7 @@ local function install_hooks()
     end
 end
 
--- Some RVM telekinesis paths destroy the original world artefact and create a
+-- Some RVM remote NPC pickup paths destroy the original world artefact and create a
 -- replacement object in the NPC inventory. When the actor later loots that
 -- replacement, its ID no longer matches the exact ID captured at spawn time.
 -- Accept that lineage only when the old object is gone, the section matches,

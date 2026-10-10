@@ -63,6 +63,10 @@ foreach ($needle in @('artifact_snapshot','actor_inventory','server_parent_chain
 foreach ($needle in @('recreated_artifact_zone','actor_pickup_recreated_id','artifact lineage recovered','count == 1 and candidate')) {
     if (-not $main.Contains($needle)) { $failures.Add("recreated artifact lineage safety missing: $needle") }
 }
+foreach ($needle in @('ambush_start_trigger_margin','fallback=relaxed_out_of_view','anomaly_distance','ambush spawn search exhausted')) {
+    if (-not $main.Contains($needle)) { $failures.Add("ambush placement safety missing: $needle") }
+}
+if ($main.Contains('fallback=visible_but_safe')) { $failures.Add('ambush must never fall back to a point in the actor view') }
 foreach ($needle in @('ARTIFACT_DEBUG_SPOT = "paw_stash_green"','LOOT_DEBUG_SPOT = "paw_stash_red"','ENEMY_DEBUG_SPOT = "alife_presentation_squad_enemy_1"','sync_artifact_debug_spot','sync_enemy_debug_spot','pairs(zone.spawned_ids or {})','owned_by_rework=true')) {
     if (-not $main.Contains($needle)) { $failures.Add("exact debug marker integration missing: $needle") }
 }
@@ -81,6 +85,9 @@ if ($main -match '%\.\d+f') { $failures.Add('X-Ray printf-incompatible floating-
 $ltx = Get-Content -LiteralPath (Join-Path $ModRoot 'gamedata\configs\plugins\rvm_sorties_rework.ltx') -Raw
 foreach ($needle in @('stash_mode = scouting','weight_artifact = 60','remove_on_npc_pickup = false','valuable_first_chance = 35','valuable_second_chance = 10','valuable_third_chance = 1.5','loot_valuable = itm_ammokit, af_iam, lead_box','loot_valuable = detector_advanced, itm_ammokit, itm_advancedkit, af_iam, af_aac, lead_box','loot_valuable = detector_elite, detector_scientific, itm_ammokit, itm_expertkit, af_iam, af_aac, af_aam, lead_box','rare_artifact_chance = 70','loot_rare_non_artifact = raid_intelligence_note','loot_container_visuals = raid_small_stash_1','map_spot = rvm_search_small','max_false_zones = 1','debug_mode = auto','debug_log = false','[level_y04_pole]','[level_k01_darkscape]','[level_l09_deadcity]')) {
     if (-not $ltx.Contains($needle)) { $failures.Add("config invariant missing: $needle") }
+}
+foreach ($needle in @('ambush_start_trigger_margin = 20','ambush_anomaly_clearance = 15','ambush_anomaly_clearance_fallback = 8')) {
+    if (-not $ltx.Contains($needle)) { $failures.Add("ambush config invariant missing: $needle") }
 }
 foreach ($forbidden in @('simk_card','artifact_container')) {
     if ($ltx -match "(?m)^loot_[^=]+=[^`r`n]*\b$([regex]::Escape($forbidden))\b") { $failures.Add("invalid configured loot section: $forbidden") }
@@ -103,6 +110,7 @@ if (-not $infectedText.Contains('%c[255,160,160,160] \n')) { $failures.Add('infe
 if (-not $scoutingText.Contains('\n \n') -or -not $infectedText.Contains('\n \n')) { $failures.Add('route descriptions must keep the original blank-line token \n \n') }
 if ($stashSuffix -ne '\nНа документе отмечены координаты тайника.') { $failures.Add('stash suffix differs from the RVM-style final text') }
 if (-not $scoutingText.Contains('На документе отмечены стратегические точки и схроны, которые можно проверить.')) { $failures.Add('scouting intelligence text differs from the approved wording') }
+if (-not $infectedText.Contains('вывести прямо к логову мутантов или к стоянке недружественных людей')) { $failures.Add('infected danger text differs from the approved wording') }
 $scoutingUiText = $scoutingText + $stashSuffix
 $infectedUiText = $infectedText
 if ([regex]::Matches($scoutingUiText, [regex]::Escape('На документе отмечены координаты тайника.')).Count -ne 1) { $failures.Add('build_desc_header simulation must add the stash sentence exactly once to scouting') }
@@ -110,9 +118,14 @@ if ($infectedUiText.Contains('координаты тайника')) { $failures
 if ($scoutingUiText -match '(?i)экспедиц' -or $infectedUiText -match '(?i)экспедиц') { $failures.Add('route UI text must use original RVM terminology, not expedition') }
 $fragment = Get-Content -LiteralPath (Join-Path $ModRoot 'gamedata\configs\ui\map_spots_rvm_sorties.xml') -Raw
 [xml]("<map_spots>" + $fragment + "</map_spots>") | Out-Null
-foreach ($needle in @('rvm_search_small','rvm_search_medium','rvm_search_large','rvm_debug_target','width="80" height="80"','width="96" height="96"','width="112" height="112"','scale_min="1" scale_max="1.35"','a="220" r="255" g="210" b="64"')) {
+foreach ($needle in @('rvm_search_small','rvm_search_medium','rvm_search_large','rvm_debug_target','width="64" height="64"','width="80" height="80"','width="96" height="96"','scale_min="1" scale_max="2.25"','a="220" r="255" g="210" b="64"')) {
     if (-not $fragment.Contains($needle)) { $failures.Add("map spot invariant missing: $needle") }
 }
+$watcher = Get-Content -LiteralPath (Join-Path $ModRoot 'tools\watch_live_log.ps1') -Raw
+foreach ($needle in @('CreationTimeUtc.Ticks','FileShare]::Delete','Log recreated or truncated','Start-Sleep -Milliseconds 250')) {
+    if (-not $watcher.Contains($needle)) { $failures.Add("live log reopen support missing: $needle") }
+}
+if ($watcher.Contains('Get-Content -LiteralPath $LogPath -Wait')) { $failures.Add('live log watcher must not retain the old file handle with Get-Content -Wait') }
 
 if ($BuildModsRoot) {
     if (-not (Test-Path -LiteralPath $BuildModsRoot)) { $failures.Add("build mods root missing: $BuildModsRoot") }

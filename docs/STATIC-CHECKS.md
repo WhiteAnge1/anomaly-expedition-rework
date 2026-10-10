@@ -10,7 +10,7 @@
 - Проверено динамическое чтение штатной таблицы артефактов, точное соответствие групп пулов `{1..5}`, `{5,6}`, `{6,7}` и вызов сохраняемой очереди `raid_artefacts.addToQueuedArtefacts`.
 - Проверено использование PAW `script_zone`, видимых `raid_small_stash_*`, отсутствие несовместимых `printf`-форматов и запрещённых после полевого теста loot-секций.
 - Проверены global-debug auto/default-off, безопасный вывод runtime-команд в Debug UI, PAW stash-marker/tooltip, census и отсутствие обёртки штатного `raid_dospawn_dungeons.raid_start_spawn`.
-- Проверены exact-ID fallback владения артефактом, fail-closed сохранение области при ошибке API и новые заметные bounded размеры кругов `80/96/112` при `scale_max=1.35`.
+- Проверены exact-ID fallback владения артефактом, fail-closed сохранение области при ошибке API, калиброванные размеры кругов `64/80/96` при `scale_max=2.25` и запрет видимого fallback для засад.
 - `test_loot_policy.ps1` проверяет точную формулу квоты `65/31.5/3.4475/0.0525`, 200000 детерминированных выборок и инварианты `actual <= quota`, `ordinary <= target`; static check запрещает возврат старого 45/55 fill.
 - Проверены debug-marker IDs `paw_stash_green` и `alife_presentation_squad_enemy_1` в фактических XML сборки, exact artifact scope и enemy scope только через `zone.spawned_ids`; quest-pointer `crlc_squad_red` запрещён.
 - Регрессия same-level cleanup закрыта статическим запретом прямого `cleanup()` из `on_before_level_changing`; очистка разрешена только после определения фактического уровня на `actor_on_first_update`.
