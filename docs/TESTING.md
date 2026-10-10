@@ -8,11 +8,12 @@
 | Плотность Поляны | Все настоящие области + не более одной ложной | `decoy plan ... cap=1` |
 | PAW | Контекстное меню не предлагает переход; маршрут указывает на центр-якорь | Сравнить с `center` в логе |
 | Debug tooltip | Обычный текст сохранён; добавлены kind/anchor/radius/linked | Сравнить все четыре kind |
+| Казуальные exact-маркеры | Каждый `show_exact_*` независимо показывает только выбранную категорию без kind/ID/координат и без включения census/лога | По очереди включить artifact/loot/enemy при `debug_mode=off`, затем все выключить |
 | Подбор игроком | Одна область закрывается | `reason=actor_pickup` |
 | Подбор NPC | При false область остаётся | Переключить `remove_on_npc_pickup` |
 | NPC → труп → actor | Область остаётся у NPC и закрывается, когда linked ID оказывается у actor; после дистанционного подбора NPC допустим новый ID только для единственного пропавшего кандидата той же секции | `reason=actor_owns_linked_artifact` либо `actor_pickup_recreated_id`; неоднозначность не закрывает зоны |
 | Диагностика артефакта | Server/online existence, parent chain, позиции, `anchor_dxz/dy`, ближайшая vertex | Периодический debug-log и `rvm_rework_census` |
-| Exact artifact marker | Debug-on: зелёный `paw_stash_green` следует exact linked ID; debug-off/close: исчезает | Tooltip `kind/artifact_id/section/name/position/parent` |
+| Exact artifact marker | Debug-on: зелёный `paw_stash_green` следует exact linked ID; при debug-off исчезает только если `show_exact_artifact_markers=false`; при close исчезает всегда | Debug-tooltip содержит `kind/artifact_id/section/name/position/parent`, пользовательский — ничего из этого |
 | Засада | 2–3 разрешённых мутанта вне взгляда, штатного spawn-radius и заданного зазора от аномалий; старт находится дальше полного порога активации | `ambush entity ... owned_by_rework=true`, `spawned`; допустим `fallback=relaxed_out_of_view`, но не видимый fallback |
 | Enemy debug markers | Красная точка только на каждом живом `zone.spawned_ids`; смерть/пропажа удаляет её на update | Tooltip `section/id/owned_by_rework/alive`; штатные RVM без точек |
 | Контейнер | Видимая модель открывается; ordinary target 1–6, при исчерпании low pool допустимо меньше, rare независим | `target/created/ordinary/valuable_quota/actual/sections/rare`, затем `reason=container_opened` |
@@ -30,12 +31,14 @@
 | Fast travel на той же локации | Незакрытые zones/anchors/loot сохраняются | `transition pending`, затем `transition resolved same_level` |
 | Настоящий выход | Нет оставшихся якорей/мутантов/boxes | `cleanup reason=confirmed_level_change` |
 | Тайники | `scouting`: только разведка; `anomaly`: только infected; `disabled`: нигде | Проверить все три режима |
-| Arrival | Его артефакты не получают кругов | ID отсутствуют в `captured` |
+| Система аномалий Arrival | Её артефакты не получают кругов и точных меток | ID отсутствуют в `captured` |
 | Производительность | Нет заметного постоянного stutter | Обновление раз в 1000 мс |
 
 Если игра падает до главного меню, приложите конец `xray_*.log` со строками `[Anomaly Expedition Rework]`. Если круги есть, но PAW не предлагает маршрут, приложите версию PAW и результат теста на минимальном/максимальном масштабе карты.
 
 Для runtime-проверки откройте **Debug UI debug launcher**, не обычную консоль `~`. Используйте `rvm_rework_debug_off`, затем `rvm_rework_debug_on`: Debug UI должен подтвердить mode/effective, а круги — переключиться между обычным и техническим tooltip без изменения количества зон. Команда `rvm_rework_census` должна показать краткие `squads/stalkers/mutants` в Debug UI и не создавать/удалять население.
+
+Пользовательские exact-маркеры проверяются отдельно от debug. При `debug_mode=off` и всех `show_exact_*=false` их быть не должно. Затем включить по одному параметру: зелёная метка только у связанного артефакта, красная stash-метка только у loot-контейнера, красные squad-точки только у живых `owned_by_rework` врагов. Tooltip каждой такой метки должен содержать только понятное пользовательское описание без `RVM DEBUG`, `kind=`, ID, координат и состава контейнера. После save/load не должно быть дублей; подбор/открытие/смерть/cleanup удаляют соответствующую метку.
 
 После spawn enemy decoy проверить каждого живого mod-owned врага отдельно: красная точка должна следовать его object ID и исчезать не позднее следующего update после смерти. Повторить debug-off/on и same-level save/load. Наличие точек на штатных `owned_by_rework=false` squad является ошибкой.
 

@@ -3,9 +3,9 @@
 
 local C = rvm_sorties_config
 local PREFIX = "[Anomaly Expedition Rework]"
-local ARTIFACT_DEBUG_SPOT = "paw_stash_green"
-local LOOT_DEBUG_SPOT = "paw_stash_red"
-local ENEMY_DEBUG_SPOT = "alife_presentation_squad_enemy_1"
+local ARTIFACT_EXACT_SPOT = "paw_stash_green"
+local LOOT_EXACT_SPOT = "paw_stash_red"
+local ENEMY_EXACT_SPOT = "alife_presentation_squad_enemy_1"
 local callbacks_registered = false
 local hooks_installed = false
 local next_update = 0
@@ -50,6 +50,21 @@ local function debug_enabled()
     if mode == "off" then return false end
     if mode == "auto" then return DEV_DEBUG == true or DEV_DEBUG_DEV == true end
     return C.get_bool("global", "debug_log", false)
+end
+
+-- Exact object markers are optional accessibility/casual aids. Full debug
+-- always enables them, but their individual user switches do not enable logs,
+-- census, technical zone text or any other diagnostic behavior.
+local function artifact_exact_marker_enabled()
+    return debug_enabled() or C.get_bool("global", "show_exact_artifact_markers", false)
+end
+
+local function loot_exact_marker_enabled()
+    return debug_enabled() or C.get_bool("global", "show_exact_loot_markers", false)
+end
+
+local function enemy_exact_marker_enabled()
+    return debug_enabled() or C.get_bool("global", "show_exact_enemy_markers", false)
 end
 
 local function log(fmt, ...)
@@ -354,38 +369,45 @@ local function enemy_exact_debug_text(id, info, alive, alive_source)
         .. " alive_source=" .. tostring(alive_source)
 end
 
-local function sync_artifact_debug_spot(zone, snapshot, force_refresh)
+local function exact_marker_hint(string_id, debug_text)
+    if debug_enabled() then return debug_text end
+    return game.translate_string(string_id)
+end
+
+local function sync_artifact_exact_spot(zone, snapshot, force_refresh)
     if not (zone and zone.artifact_id) then return end
-    if debug_enabled() and snapshot and snapshot.server_exists then
+    if artifact_exact_marker_enabled() and snapshot and snapshot.server_exists then
         local parent = snapshot.online_parent_id or snapshot.parent_id
-        local signature = tostring(parent)
-        if force_refresh or zone.artifact_debug_signature ~= signature then
-            safe_remove_map_spot(zone.artifact_id, ARTIFACT_DEBUG_SPOT)
+        local signature = tostring(parent) .. ":" .. tostring(debug_enabled())
+        if force_refresh or zone.artifact_exact_signature ~= signature then
+            safe_remove_map_spot(zone.artifact_id, ARTIFACT_EXACT_SPOT)
         end
-        safe_add_map_spot(zone.artifact_id, ARTIFACT_DEBUG_SPOT, artifact_exact_debug_text(zone, snapshot))
-        zone.artifact_debug_signature = signature
+        local hint = exact_marker_hint("st_rvm_sorties_exact_artifact_hint", artifact_exact_debug_text(zone, snapshot))
+        safe_add_map_spot(zone.artifact_id, ARTIFACT_EXACT_SPOT, hint)
+        zone.artifact_exact_signature = signature
     else
-        safe_remove_map_spot(zone.artifact_id, ARTIFACT_DEBUG_SPOT)
-        zone.artifact_debug_signature = nil
+        safe_remove_map_spot(zone.artifact_id, ARTIFACT_EXACT_SPOT)
+        zone.artifact_exact_signature = nil
     end
 end
 
-local function sync_enemy_debug_spot(id, info, alive, alive_source)
-    if debug_enabled() and alive == true then
-        safe_add_map_spot(id, ENEMY_DEBUG_SPOT, enemy_exact_debug_text(id, info, alive, alive_source))
+local function sync_enemy_exact_spot(id, info, alive, alive_source)
+    if enemy_exact_marker_enabled() and alive == true then
+        local hint = exact_marker_hint("st_rvm_sorties_exact_enemy_hint", enemy_exact_debug_text(id, info, alive, alive_source))
+        safe_add_map_spot(id, ENEMY_EXACT_SPOT, hint)
     else
-        safe_remove_map_spot(id, ENEMY_DEBUG_SPOT)
+        safe_remove_map_spot(id, ENEMY_EXACT_SPOT)
     end
 end
 
 local function remove_spot(zone)
     if not zone then return end
     safe_remove_map_spot(zone.anchor_id, zone.spot)
-    safe_remove_map_spot(zone.artifact_id, ARTIFACT_DEBUG_SPOT)
-    zone.artifact_debug_signature = nil
-    safe_remove_map_spot(zone.visual_id, LOOT_DEBUG_SPOT)
+    safe_remove_map_spot(zone.artifact_id, ARTIFACT_EXACT_SPOT)
+    zone.artifact_exact_signature = nil
+    safe_remove_map_spot(zone.visual_id, LOOT_EXACT_SPOT)
     for id, _ in pairs(zone.spawned_ids or {}) do
-        safe_remove_map_spot(id, ENEMY_DEBUG_SPOT)
+        safe_remove_map_spot(id, ENEMY_EXACT_SPOT)
     end
     -- Remove the pre-0.2.1-alpha debug dot when loading an older test save.
     safe_remove_map_spot(zone.visual_id, "rvm_debug_target")
@@ -395,19 +417,20 @@ local function add_zone_spots(zone)
     if not (zone and not zone.closed and zone.anchor_id and alife_object(zone.anchor_id)) then return end
     local hint = game.translate_string("st_rvm_sorties_area_hint") .. zone_debug_text(zone, false)
     level.map_add_object_spot_ser(zone.anchor_id, zone.spot, hint)
-    if debug_enabled() and zone.kind == "artifact" and zone.artifact_id then
+    if artifact_exact_marker_enabled() and zone.kind == "artifact" and zone.artifact_id then
         local ok, snapshot = pcall(artifact_snapshot, zone)
-        if ok then sync_artifact_debug_spot(zone, snapshot, true) end
-    elseif debug_enabled() and zone.kind == "loot" and zone.visual_id and alife_object(zone.visual_id) then
-        local exact_hint = game.translate_string("st_rvm_sorties_area_hint") .. zone_debug_text(zone, true)
-        safe_add_map_spot(zone.visual_id, LOOT_DEBUG_SPOT, exact_hint)
-    elseif debug_enabled() and zone.kind == "enemy" and zone.triggered then
+        if ok then sync_artifact_exact_spot(zone, snapshot, true) end
+    elseif loot_exact_marker_enabled() and zone.kind == "loot" and zone.visual_id and alife_object(zone.visual_id) then
+        local debug_hint = game.translate_string("st_rvm_sorties_area_hint") .. zone_debug_text(zone, true)
+        local exact_hint = exact_marker_hint("st_rvm_sorties_exact_loot_hint", debug_hint)
+        safe_add_map_spot(zone.visual_id, LOOT_EXACT_SPOT, exact_hint)
+    elseif enemy_exact_marker_enabled() and zone.kind == "enemy" and zone.triggered then
         for id, _ in pairs(zone.spawned_ids or {}) do
             local info = zone.spawned_info and zone.spawned_info[id]
             local obj_ok, obj = pcall(alife_object, id)
             obj = obj_ok and obj or nil
             local alive, alive_source = safe_alive(id, obj)
-            sync_enemy_debug_spot(id, info, alive, alive_source)
+            sync_enemy_exact_spot(id, info, alive, alive_source)
         end
     end
 end
@@ -1042,7 +1065,6 @@ end
 
 local function population_census_impl(reason)
     if not debug_enabled() then
-        printf(PREFIX .. " census skipped: diagnostics disabled")
         return nil, "diagnostics disabled"
     end
     local stalkers, mutants, squads = 0, 0, 0
@@ -1204,7 +1226,7 @@ local function update_artifact_zones(now)
                 end
             else
                 zone.ownership_error_reported = nil
-                sync_artifact_debug_spot(zone, snapshot, emit_diagnostic)
+                sync_artifact_exact_spot(zone, snapshot, emit_diagnostic)
                 if snapshot.actor_owned then
                     log("artifact ownership acquired anchor=%s linked=%s source=%s chain=%s",
                         tostring(zone.anchor_id), tostring(zone.artifact_id), tostring(snapshot.ownership_source),
@@ -1233,7 +1255,7 @@ local function update_zones(now)
                     obj = obj_ok and obj or nil
                     local info = zone.spawned_info and zone.spawned_info[id]
                     local entity_alive, alive_source = safe_alive(id, obj)
-                    sync_enemy_debug_spot(id, info, entity_alive, alive_source)
+                    sync_enemy_exact_spot(id, info, entity_alive, alive_source)
                     if entity_alive == true or (entity_alive == nil and obj) then
                         alive = alive + 1
                     elseif info and not info.resolved then

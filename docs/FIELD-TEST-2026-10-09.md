@@ -64,7 +64,7 @@
 13. Дать NPC подобрать linked artifact при `remove_on_npc_pickup=false`, убить его и снять именно этот предмет с трупа. Область должна сохраниться у NPC, затем закрыться с `reason=actor_owns_linked_artifact` у игрока.
 14. Для подозрительного пропавшего артефакта сохранить строки `artifact diagnostic`: отрицательный `vertex_dy`/`anchor_dy` и позиции позволят проверить гипотезу провала под карту без вмешательства в spawn.
 15. После enemy-проверки отдельным рейдом вернуть `debug_force_decoy_type = loot` и сохранить полную строку `target/created/ordinary/valuable_quota/valuable_actual/valuable_sections/rare`; `valuable_actual` не должен превышать quota, а T1 valuable должны принадлежать только списку из трёх секций.
-16. В debug-on проверить зелёную stash-иконку на каждом exact linked artifact и красную squad-точку на каждом живом mod-owned enemy. После debug-off должны остаться круги, но исчезнуть все exact-маркеры; после debug-on они восстанавливаются.
+16. В debug-on проверить зелёную stash-иконку на каждом exact linked artifact и красную squad-точку на каждом живом mod-owned enemy. При всех `show_exact_*=false` после debug-off должны остаться круги, но исчезнуть все exact-маркеры; после debug-on они восстанавливаются.
 17. Убить врагов по одному: соответствующая красная точка исчезает на следующем update, остальные остаются. После same-level save/load точки живых целей восстанавливаются без дублей; `owned_by_rework=false` население не маркируется.
 
 ## Дополнительное расследование населения

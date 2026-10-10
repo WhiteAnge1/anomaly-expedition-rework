@@ -10,8 +10,11 @@
   - runtime-команды `rvm_rework_debug_auto`, `rvm_rework_debug_on`, `rvm_rework_debug_off` и `rvm_rework_census`;
   - тестовые настройки `debug_force_decoy_type`, `debug_force_tier` и `debug_cleanup_current_sortie`;
   - технические tooltip областей и точный loot-marker;
+  - независимые пользовательские `show_exact_*`: defaults OFF, казуальный режим без ID/координат/census и приоритет полного debug;
   - census, признак `owned_by_rework` и ожидаемые строки журнала, включая безопасное отключение census при диагностической ошибке;
   - просмотр live-лога во время тестирования;
   - обязательное возвращение forced-настроек в `off`, `0` и `false` после теста.
 
   Пункт закрывается только после добавления и проверки самого руководства. Этот checklist не является руководством.
+
+- [ ] Проверить пользовательские exact-маркеры в игре: три независимых переключателя, отсутствие технического текста при debug-off, восстановление без дублей после save/load и удаление при pickup/open/death/cleanup.
