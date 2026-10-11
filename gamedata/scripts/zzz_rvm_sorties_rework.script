@@ -956,38 +956,112 @@ local function ambush_spawn_point(zone)
     local max_d = math.floor(balanced("enemy_spawn_distance_max", 90))
     local stock_safe = stock_spawn_radius()
     local strict_safe = stock_safe + balanced("ambush_extra_padding", 20)
+    local profile_safe = math.max(stock_safe, min_d)
+    local strict_distance = math.max(strict_safe, profile_safe)
     local strict_anomaly = balanced("ambush_anomaly_clearance", 15)
     local fallback_anomaly = balanced("ambush_anomaly_clearance_fallback", 8)
     local attempts = math.floor(C.get_number("global", "placement_attempts", 60))
-    local fallback_pos, fallback_lvid = nil, nil
-    local valid_vertices = 0
+    local fallback_pos, fallback_lvid, fallback_phase = nil, nil, nil
+    local seen_vertices = {}
+    local stats = {
+        attempts = 0,
+        valid = 0,
+        invalid = 0,
+        duplicate = 0,
+        occupied = 0,
+        far_from_zone = 0,
+        too_close_stock = 0,
+        too_close_profile = 0,
+        too_close_strict = 0,
+        in_view = 0,
+        anomaly_fallback = 0,
+        anomaly_strict = 0,
+    }
+
+    local function report(result, phase)
+        log("ambush spawn search anchor=%s result=%s phase=%s attempts=%s valid=%s reject=invalid:%s,duplicate:%s,occupied:%s,far:%s,stock:%s,profile:%s,extra:%s,view:%s,anomaly_fallback:%s,anomaly_strict:%s",
+            tostring(zone.anchor_id), tostring(result), tostring(phase), tostring(stats.attempts), tostring(stats.valid),
+            tostring(stats.invalid), tostring(stats.duplicate), tostring(stats.occupied), tostring(stats.far_from_zone),
+            tostring(stats.too_close_stock), tostring(stats.too_close_profile), tostring(stats.too_close_strict), tostring(stats.in_view),
+            tostring(stats.anomaly_fallback), tostring(stats.anomaly_strict))
+    end
+
+    local function evaluate(candidate, phase, max_zone_distance)
+        stats.attempts = stats.attempts + 1
+        local lvid = valid_vertex(candidate)
+        if not lvid then
+            stats.invalid = stats.invalid + 1
+            return nil, nil
+        end
+        local vertex_key = tostring(lvid)
+        if seen_vertices[vertex_key] then
+            stats.duplicate = stats.duplicate + 1
+            return nil, nil
+        end
+        seen_vertices[vertex_key] = true
+        local p = level.vertex_position(lvid)
+        stats.valid = stats.valid + 1
+        if max_zone_distance and distance_xz(p, zone.center) > max_zone_distance then
+            stats.far_from_zone = stats.far_from_zone + 1
+            return nil, nil
+        end
+        for _, info in pairs(zone.spawned_info or {}) do
+            if info.pos and distance_xz(p, info.pos) < 8 then
+                stats.occupied = stats.occupied + 1
+                return nil, nil
+            end
+        end
+
+        local actor_distance = distance_xz(p, db.actor:position())
+        local outside_view = point_outside_view(p)
+        local anomaly_clearance = anomaly_distance(p, zone.anomaly_positions)
+        if actor_distance < stock_safe then stats.too_close_stock = stats.too_close_stock + 1 end
+        if actor_distance < profile_safe then stats.too_close_profile = stats.too_close_profile + 1 end
+        if actor_distance < strict_safe then stats.too_close_strict = stats.too_close_strict + 1 end
+        if not outside_view then stats.in_view = stats.in_view + 1 end
+        if anomaly_clearance < fallback_anomaly then stats.anomaly_fallback = stats.anomaly_fallback + 1 end
+        if anomaly_clearance < strict_anomaly then stats.anomaly_strict = stats.anomaly_strict + 1 end
+
+        if actor_distance >= strict_distance and outside_view and anomaly_clearance >= strict_anomaly then
+            report("strict", phase)
+            return p, lvid
+        end
+        if not fallback_pos and actor_distance >= profile_safe and outside_view
+        and anomaly_clearance >= fallback_anomaly then
+            fallback_pos, fallback_lvid, fallback_phase = p, lvid, phase
+        end
+        return nil, nil
+    end
+
+    -- Prefer the marked area. If the actor is still far away and looking at its
+    -- centre, however, the whole original ring can remain inside the view cone.
     for _ = 1, attempts do
         local angle = math.random() * math.pi * 2
         local dist = math.random(min_d, math.max(min_d, max_d))
-        local p = vector():set(zone.center.x + math.cos(angle) * dist, zone.center.y, zone.center.z + math.sin(angle) * dist)
-        local lvid = valid_vertex(p)
-        if lvid then
-            valid_vertices = valid_vertices + 1
-            p = level.vertex_position(lvid)
-            local actor_distance = distance_xz(p, db.actor:position())
-            local outside_view = point_outside_view(p)
-            local anomaly_clearance = anomaly_distance(p, zone.anomaly_positions)
-            if actor_distance >= strict_safe and outside_view and anomaly_clearance >= strict_anomaly then
-                return p, lvid
-            end
-            if not fallback_pos and actor_distance >= stock_safe and outside_view
-            and anomaly_clearance >= fallback_anomaly then
-                fallback_pos, fallback_lvid = p, lvid
-            end
-        end
+        local candidate = vector():set(zone.center.x + math.cos(angle) * dist, zone.center.y, zone.center.z + math.sin(angle) * dist)
+        local p, lvid = evaluate(candidate, "zone", nil)
+        if p then return p, lvid end
     end
+
+    -- Search a second ring around the actor so a safe side/rear ambush remains
+    -- possible without ever relaxing view, anomaly or stock-distance rules.
+    local actor_pos = db.actor:position()
+    local actor_min = strict_distance
+    local actor_max = math.max(actor_min, max_d)
+    local zone_reach = zone.radius + balanced("ambush_trigger_padding", 130) + strict_safe
+    for _ = 1, attempts do
+        local angle = math.random() * math.pi * 2
+        local dist = math.random(math.floor(actor_min), math.floor(actor_max))
+        local candidate = vector():set(actor_pos.x + math.cos(angle) * dist, actor_pos.y, actor_pos.z + math.sin(angle) * dist)
+        local p, lvid = evaluate(candidate, "actor", zone_reach)
+        if p then return p, lvid end
+    end
+
     if fallback_pos then
-        log("ambush spawn fallback=relaxed_out_of_view anchor=%s valid_vertices=%s stock_safe=%s",
-            tostring(zone.anchor_id), tostring(valid_vertices), fmt_number(stock_safe))
+        report("fallback=relaxed_out_of_view", fallback_phase)
         return fallback_pos, fallback_lvid
     end
-    log("ambush spawn search exhausted anchor=%s attempts=%s valid_vertices=%s stock_safe=%s anomaly_clearance=%s",
-        tostring(zone.anchor_id), tostring(attempts), tostring(valid_vertices), fmt_number(stock_safe), fmt_number(fallback_anomaly))
+    report("exhausted", "zone+actor")
     return nil, nil
 end
 

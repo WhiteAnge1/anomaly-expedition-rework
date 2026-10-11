@@ -14,7 +14,7 @@
 | NPC → труп → actor | Область остаётся у NPC и закрывается, когда linked ID оказывается у actor; после дистанционного подбора NPC допустим новый ID только для единственного пропавшего кандидата той же секции | `reason=actor_owns_linked_artifact` либо `actor_pickup_recreated_id`; неоднозначность не закрывает зоны |
 | Диагностика артефакта | Server/online existence, parent chain, позиции, `anchor_dxz/dy`, ближайшая vertex | Периодический debug-log и `rvm_rework_census` |
 | Exact artifact marker | Debug-on: зелёный `paw_stash_green` следует exact linked ID; при debug-off исчезает только если `show_exact_artifact_markers=false`; при close исчезает всегда | Debug-tooltip содержит `kind/artifact_id/section/name/position/parent`, пользовательский — ничего из этого |
-| Засада | 2–3 разрешённых мутанта вне взгляда, штатного spawn-radius и заданного зазора от аномалий; старт находится дальше полного порога активации | `ambush entity ... owned_by_rework=true`, `spawned`; допустим `fallback=relaxed_out_of_view`, но не видимый fallback |
+| Засада | 2–3 разрешённых мутанта вне взгляда, штатного spawn-radius и заданного зазора от аномалий; старт находится дальше полного порога активации | `ambush spawn search ... result=strict ... phase=zone|actor` и `reject=...`, затем `ambush entity ... owned_by_rework=true`, `spawned`; допустим `fallback=relaxed_out_of_view`, но не видимый fallback |
 | Enemy debug markers | Красная точка только на каждом живом `zone.spawned_ids`; смерть/пропажа удаляет её на update | Tooltip `section/id/owned_by_rework/alive`; штатные RVM без точек |
 | Контейнер | Видимая модель открывается; ordinary target 1–6, при исчерпании low pool допустимо меньше, rare независим | `target/created/ordinary/valuable_quota/actual/sections/rare`, затем `reason=container_opened` |
 | Valuable quota T1 | Quota 0/1/2/3: 65/31.5/3.4475/0.0525%; actual никогда не выше quota | `tools\test_loot_policy.ps1`, затем серия полевых логов |
@@ -42,7 +42,7 @@
 
 После spawn enemy decoy проверить каждого живого mod-owned врага отдельно: красная точка должна следовать его object ID и исчезать не позднее следующего update после смерти. Повторить debug-off/on и same-level save/load. Наличие точек на штатных `owned_by_rework=false` squad является ошибкой.
 
-После несовпадения логического круга и изображения в полевом тесте базы изменены на `64/80/96 px`, `scale_max=2.25`, alpha `220`: на общем плане они компактнее, а на максимальном приближении на треть крупнее прежнего варианта. Особенно проверить T1 на обоих крайних zoom и нахождение linked artifact внутри нарисованной окружности с первого кадра.
+Круги используют базы `64/80/96 px`, `scale_min=1`, `scale_max=1.6`, alpha `220`: близкий zoom сохраняет принятый размер, а на общем плане рост должен быть примерно вдвое слабее прежнего `scale_max=2.25`. Особенно проверить T1 на обоих крайних zoom и нахождение linked artifact внутри нарисованной окружности с первого кадра. После старта физика X-Ray может столкнуть или скатить артефакт за исходную область либо доступную карту; это допустимое последующее движение, но не оправдание, если предмет был вне окружности уже на первом кадре.
 
 Live-log: запустите `tools\watch_live_log.cmd` либо `.\tools\watch_live_log.ps1`. До первого совпадения watcher явно показывает `Waiting for matches...`; при пересоздании/обнулении файла он сообщает о повторном открытии и продолжает вывод без ожидания выхода из игры. Остановка — `Ctrl+C`.
 
