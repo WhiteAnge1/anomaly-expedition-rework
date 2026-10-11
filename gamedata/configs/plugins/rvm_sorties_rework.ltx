@@ -163,11 +163,15 @@ enemy_spawn_distance_max = 150
 tier = 2
 zone_radius_min = 150
 zone_radius_max = 240
-enemy_spawn_distance_min = 60
-enemy_spawn_distance_max = 110
+; Largest stock exclusion radius; use a correspondingly wider safe ring.
+enemy_spawn_distance_min = 120
+enemy_spawn_distance_max = 170
 
 ; Мёртвый город — фактический идентификатор l09_deadcity, тир 3.
 [level_l09_deadcity]
 tier = 3
 zone_radius_min = 140
 zone_radius_max = 220
+; Urban layout: moderate distance leaves enough navigable side/rear candidates.
+enemy_spawn_distance_min = 80
+enemy_spawn_distance_max = 120
