@@ -124,6 +124,14 @@ local function balanced_list(key)
     return C.get_balanced_list(level.name(), key)
 end
 
+local function balanced_string(key, default)
+    local forced = math.floor(C.get_number("global", "debug_force_tier", 0))
+    if forced >= 1 and forced <= 3 then
+        return C.get_string("tier_" .. tostring(forced), key, C.get_string("global", key, default))
+    end
+    return C.get_balanced_string(level.name(), key, default)
+end
+
 local function spot_for_level()
     local forced = math.floor(C.get_number("global", "debug_force_tier", 0))
     if forced >= 1 and forced <= 3 then

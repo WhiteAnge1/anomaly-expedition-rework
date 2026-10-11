@@ -43,6 +43,18 @@ if (Test-Path -LiteralPath $watchCmdPath) {
 }
 
 $main = Get-Content -LiteralPath (Join-Path $ModRoot 'gamedata\scripts\zzz_rvm_sorties_rework.script') -Raw
+foreach ($helper in @([regex]::Matches($main, '\b(balanced(?:_[A-Za-z0-9_]+)?)\s*\(') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)) {
+    if ($main -notmatch ("local\s+function\s+" + [regex]::Escape($helper) + "\s*\(")) {
+        $failures.Add("balanced helper is called without a local definition: $helper")
+    }
+}
+foreach ($needle in @(
+    'local function balanced_string(key, default)',
+    'C.get_string("tier_" .. tostring(forced), key, C.get_string("global", key, default))',
+    'C.get_balanced_string(level.name(), key, default)'
+)) {
+    if (-not $main.Contains($needle)) { $failures.Add("balanced string helper regression: $needle") }
+}
 foreach ($needle in @('raid_anomalys.spawn_artefact_in_zone','actor_on_item_take','npc_on_item_take','save_state','load_state','on_before_level_changing')) {
     if (-not $main.Contains($needle)) { $failures.Add("main hook missing: $needle") }
 }
