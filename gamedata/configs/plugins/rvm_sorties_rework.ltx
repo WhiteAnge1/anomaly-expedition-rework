@@ -55,6 +55,8 @@ ambush_spawn_timing = proximity
 ; Предпочтительный и аварийный отступ от известных аномалий при появлении врагов.
 ambush_anomaly_clearance = 15
 ambush_anomaly_clearance_fallback = 8
+; Start-spawn остаётся внутри отмеченной области на таком расстоянии от её края.
+ambush_start_zone_margin = 8
 ; Если размер формы аномалии безопасно прочитать нельзя, используется этот радиус.
 ambush_unknown_anomaly_radius = 20
 ; Не удалять область при временном отсутствии безопасной точки: повторить поиск позже.
@@ -119,7 +121,7 @@ zone_radius_max = 100
 enemy_count_min = 2
 enemy_count_max = 2
 medicine_chance = 70
-enemy_sections = dog_normal, boar_normal, flesh_normal
+enemy_sections = dog_normal, boar_normal
 loot_medicine = medkit_army, medkit, antirad, stimpack
 loot_utility = detector_simple, itm_ammokit, itm_sleepbag
 loot_modules = af_iam, lead_box
@@ -133,7 +135,7 @@ zone_radius_max = 180
 enemy_count_min = 2
 enemy_count_max = 3
 medicine_chance = 78
-enemy_sections = dog_normal, boar_normal, flesh_normal, snork_normal, pseudodog_normal
+enemy_sections = dog_normal, boar_normal, snork_normal, pseudodog_normal
 loot_medicine = medkit_army, medkit_scientic, antirad, stimpack_army
 loot_utility = detector_advanced, itm_ammokit, itm_advancedkit
 loot_modules = af_iam, af_aac, lead_box

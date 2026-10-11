@@ -1,6 +1,6 @@
 # Результат статических проверок
 
-Последнее обновление: 2026-10-11.
+Последнее обновление: 2026-10-12.
 
 - Все три `.script` разобраны `luaparser 4.2.0`: синтаксических ошибок нет.
 - `fomod/info.xml` и русская string table разобраны XML-парсером; для string table отдельно проверены Windows-1251, декларация кодировки и контрольная русская строка.
@@ -15,6 +15,7 @@
 - Проверены debug-marker IDs `paw_stash_green` и `alife_presentation_squad_enemy_1` в фактических XML сборки, exact artifact scope и enemy scope только через `zone.spawned_ids`; quest-pointer `crlc_squad_red` запрещён.
 - Регрессия same-level cleanup закрыта статическим запретом прямого `cleanup()` из `on_before_level_changing`; очистка разрешена только после определения фактического уровня на `actor_on_first_update`.
 - Каждый вызванный helper семейства `balanced*` обязан иметь локальное определение; отдельно проверяется строковая ветка forced tier → global default → `C.get_balanced_string`. Это закрывает runtime-регрессию `attempt to call global 'balanced_string'` до запуска игры.
+- Для `start` статически закреплены расчёт `start_zone_limit = zone.radius - ambush_start_zone_margin`, повторная проверка `zone_dxz` после nav-привязки и возврат из start-ветки до actor-phase. Переход start → удалённый proximity запрещён. Во всех строках `enemy_sections` запрещён `flesh_normal`.
 - `tools/*.ps1` с кириллицей обязаны иметь UTF-8 BOM и проверяются запуском через Windows PowerShell 5.1 (`powershell.exe`), а `.cmd`-обёртка остаётся ASCII.
 - При передаче `-BuildModsRoot` дополнительно проверяется наличие сборочных секций модулей, разведданных и всех 17 моделей тайников.
 - Стохастическая симуляция 100 000 вылазок дала:

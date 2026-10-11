@@ -1103,6 +1103,8 @@ local function ambush_spawn_point(zone, spawn_timing)
     local strict_distance = math.max(strict_safe, profile_safe)
     local strict_anomaly = balanced("ambush_anomaly_clearance", 15)
     local fallback_anomaly = balanced("ambush_anomaly_clearance_fallback", 8)
+    local start_zone_margin = math.max(0, balanced("ambush_start_zone_margin", 8))
+    local start_zone_limit = math.max(0, zone.radius - math.min(zone.radius, start_zone_margin))
     local attempts = math.floor(C.get_number("global", "placement_attempts", 60))
     local fallback_pos, fallback_lvid, fallback_phase = nil, nil, nil
     local fallback_details = nil
@@ -1192,9 +1194,10 @@ local function ambush_spawn_point(zone, spawn_timing)
             tostring(stats.invalid), tostring(stats.duplicate), tostring(stats.occupied), tostring(stats.far_from_zone),
             tostring(stats.too_close_stock), tostring(stats.too_close_profile), tostring(stats.too_close_strict), tostring(stats.too_close_start), tostring(stats.in_view),
             tostring(stats.anomaly_fallback), tostring(stats.anomaly_strict))
-        log("ambush spawn candidate anchor=%s spawn_timing=%s result=%s phase=%s %s profile=%s..%s strict_actor=%s anomaly_clearance=%s/%s",
+        log("ambush spawn candidate anchor=%s spawn_timing=%s result=%s phase=%s %s profile=%s..%s strict_actor=%s zone_radius=%s start_zone_margin=%s start_zone_limit=%s anomaly_clearance=%s/%s",
             tostring(zone.anchor_id), tostring(spawn_timing), tostring(result), tostring(phase), candidate_details_text(details),
-            tostring(min_d), tostring(max_d), fmt_number(strict_distance), fmt_number(fallback_anomaly), fmt_number(strict_anomaly))
+            tostring(min_d), tostring(max_d), fmt_number(strict_distance), fmt_number(zone.radius), fmt_number(start_zone_margin),
+            fmt_number(start_zone_limit), fmt_number(fallback_anomaly), fmt_number(strict_anomaly))
         log("ambush search basis anchor=%s direction_source=%s direction=(%s,%s) sampling=rear_first_full_ring",
             tostring(zone.anchor_id), tostring(search_dir_source), fmt_number(forward_x), fmt_number(forward_z))
     end
@@ -1274,16 +1277,32 @@ local function ambush_spawn_point(zone, spawn_timing)
         return nil, nil
     end
 
-    -- Prefer the marked area. If the actor is still far away and looking at its
-    -- centre, however, the whole original ring can remain inside the view cone.
+    -- A start ambush belongs to the marked danger area. Actor/start distances
+    -- are safety gates only; they must never move the spawn outside that area.
+    -- Vertex snapping is checked again by evaluate against start_zone_limit.
+    if spawn_timing == "start" then
+        for attempt = 1, attempts do
+            local candidate = ring_candidate(zone.center, 0, start_zone_limit, attempt)
+            local p, lvid = evaluate(candidate, "zone_start", start_zone_limit)
+            if p then return p, lvid end
+        end
+        if fallback_pos then
+            report("fallback=relaxed_start", fallback_phase, fallback_details)
+            return fallback_pos, fallback_lvid
+        end
+        report("exhausted", "zone_start", best_rejected)
+        return nil, nil
+    end
+
+    -- Proximity ambushes retain the original zone-first, actor-ring fallback
+    -- and camera gate used by Darkscape.
     for attempt = 1, attempts do
         local candidate = ring_candidate(zone.center, min_d, math.max(min_d, max_d), attempt)
         local p, lvid = evaluate(candidate, "zone", nil)
         if p then return p, lvid end
     end
 
-    -- Search a second ring around the actor. Proximity keeps the side/rear
-    -- camera gate; start keeps its saved-start, anomaly and distance gates.
+    -- Search a second ring around the actor for proximity ambushes only.
     local actor_pos = db.actor:position()
     local actor_min = strict_distance
     local actor_max = math.max(actor_min, max_d)
@@ -1500,11 +1519,6 @@ local function trigger_ambush(zone, now, spawn_timing)
         zone.anomaly_positions, zone.anomaly_scan_complete = collect_anomaly_positions()
     end
     if zone.anomaly_scan_complete == false then
-        if spawn_timing == "start" then
-            zone.spawn_timing = "proximity"
-            log("ambush start fallback anchor=%s spawn_timing=start next_spawn_timing=proximity reason=anomaly_scan_incomplete",
-                tostring(zone.anchor_id))
-        end
         defer_ambush(zone, now, "anomaly_scan_incomplete")
         return
     end
@@ -1526,12 +1540,7 @@ local function trigger_ambush(zone, now, spawn_timing)
         end
     end
     if size_table(zone.spawned_ids) == 0 then
-        if spawn_timing == "start" then
-            zone.spawn_timing = "proximity"
-            log("ambush start fallback anchor=%s spawn_timing=start next_spawn_timing=proximity reason=no_safe_spawn_point",
-                tostring(zone.anchor_id))
-        end
-        defer_ambush(zone, now, spawn_timing == "start" and "start_no_safe_spawn_fallback_proximity" or "no_safe_spawn_point")
+        defer_ambush(zone, now, spawn_timing == "start" and "start_no_safe_point_inside_zone" or "no_safe_spawn_point")
     else
         zone.triggered = true
         zone.spawn_timing_resolved = spawn_timing
