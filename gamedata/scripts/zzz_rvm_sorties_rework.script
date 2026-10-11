@@ -6,6 +6,11 @@ local PREFIX = "[Anomaly Expedition Rework]"
 local ARTIFACT_EXACT_SPOT = "paw_stash_green"
 local LOOT_EXACT_SPOT = "paw_stash_red"
 local ENEMY_EXACT_SPOT = "alife_presentation_squad_enemy_1"
+-- Level-map markers flatten world coordinates to X/Z. At this distance two
+-- 12 px exact artifact spots are effectively co-located in the tested maps.
+-- Keep their truthful object positions and diagnose the overlap; inventing an
+-- offset would make an "exact" marker point away from its artifact.
+local ARTIFACT_EXACT_OVERLAP_DISTANCE = 2
 local callbacks_registered = false
 local hooks_installed = false
 local next_update = 0
@@ -13,6 +18,7 @@ local debug_override = nil
 local census_disabled = false
 local census_error_reported = false
 local next_artifact_diagnostic = 0
+local reported_artifact_overlaps = {}
 local safe_alive = nil
 
 local function fresh_state()
@@ -391,6 +397,29 @@ local function sync_artifact_exact_spot(zone, snapshot, force_refresh)
     end
 end
 
+local function diagnose_artifact_exact_overlaps(candidates)
+    if not debug_enabled() then return end
+    for left = 1, #candidates - 1 do
+        for right = left + 1, #candidates do
+            local a = candidates[left]
+            local b = candidates[right]
+            local map_distance = distance_xz(a.pos, b.pos)
+            if map_distance <= ARTIFACT_EXACT_OVERLAP_DISTANCE then
+                local low = math.min(a.id, b.id)
+                local high = math.max(a.id, b.id)
+                local key = tostring(low) .. ":" .. tostring(high)
+                if not reported_artifact_overlaps[key] then
+                    reported_artifact_overlaps[key] = true
+                    log("exact artifact marker overlap ids=%s,%s sections=%s,%s map_dxz=%s threshold=%s positions=(%s)/(%s); exact positions preserved",
+                        tostring(a.id), tostring(b.id), tostring(a.section), tostring(b.section),
+                        fmt_number(map_distance), tostring(ARTIFACT_EXACT_OVERLAP_DISTANCE),
+                        fmt_position(a.pos), fmt_position(b.pos))
+                end
+            end
+        end
+    end
+end
+
 local function sync_enemy_exact_spot(id, info, alive, alive_source)
     if enemy_exact_marker_enabled() and alive == true then
         local hint = exact_marker_hint("st_rvm_sorties_exact_enemy_hint", enemy_exact_debug_text(id, info, alive, alive_source))
@@ -510,6 +539,7 @@ function cleanup(reason)
     end
     cleanup_stashes()
     state = fresh_state()
+    reported_artifact_overlaps = {}
 end
 
 local function create_anchor(pos)
@@ -1289,6 +1319,7 @@ end
 local function update_artifact_zones(now)
     local emit_diagnostic = debug_enabled() and now >= next_artifact_diagnostic
     if emit_diagnostic then next_artifact_diagnostic = now + 15000 end
+    local exact_candidates = {}
     for _, zone in pairs(state.zones or {}) do
         if not zone.closed and zone.kind == "artifact" then
             local ok, snapshot = pcall(artifact_snapshot, zone)
@@ -1301,18 +1332,29 @@ local function update_artifact_zones(now)
             else
                 zone.ownership_error_reported = nil
                 sync_artifact_exact_spot(zone, snapshot, emit_diagnostic)
+                local exact_pos = snapshot.online_pos or snapshot.server_pos
                 if snapshot.actor_owned then
                     log("artifact ownership acquired anchor=%s linked=%s source=%s chain=%s",
                         tostring(zone.anchor_id), tostring(zone.artifact_id), tostring(snapshot.ownership_source),
                         join_values(snapshot.parent_chain, ">"))
                     close_zone(zone, "actor_owns_linked_artifact")
-                elseif emit_diagnostic then
-                    log("artifact diagnostic reason=periodic anchor=%s linked=%s %s",
-                        tostring(zone.anchor_id), tostring(zone.artifact_id), artifact_diagnostic_text(snapshot))
+                else
+                    if artifact_exact_marker_enabled() and snapshot.server_exists and exact_pos then
+                        exact_candidates[#exact_candidates + 1] = {
+                            id = zone.artifact_id,
+                            section = zone.artifact_section,
+                            pos = exact_pos,
+                        }
+                    end
+                    if emit_diagnostic then
+                        log("artifact diagnostic reason=periodic anchor=%s linked=%s %s",
+                            tostring(zone.anchor_id), tostring(zone.artifact_id), artifact_diagnostic_text(snapshot))
+                    end
                 end
             end
         end
     end
+    diagnose_artifact_exact_overlaps(exact_candidates)
 end
 
 local function update_zones(now)
@@ -1555,6 +1597,7 @@ end
 
 local function load_state(m_data)
     state = m_data.rvm_sorties_rework or fresh_state()
+    reported_artifact_overlaps = {}
     state.zones = state.zones or {}
     state.artifact_zone = state.artifact_zone or {}
     state.pending_artifacts = state.pending_artifacts or {}

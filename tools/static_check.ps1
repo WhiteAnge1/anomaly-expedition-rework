@@ -71,6 +71,9 @@ if ($main.Contains('fallback=visible_but_safe')) { $failures.Add('ambush must ne
 foreach ($needle in @('ARTIFACT_EXACT_SPOT = "paw_stash_green"','LOOT_EXACT_SPOT = "paw_stash_red"','ENEMY_EXACT_SPOT = "alife_presentation_squad_enemy_1"','artifact_exact_marker_enabled','loot_exact_marker_enabled','enemy_exact_marker_enabled','exact_marker_hint','sync_artifact_exact_spot','sync_enemy_exact_spot','pairs(zone.spawned_ids or {})','owned_by_rework=true')) {
     if (-not $main.Contains($needle)) { $failures.Add("exact debug marker integration missing: $needle") }
 }
+foreach ($needle in @('ARTIFACT_EXACT_OVERLAP_DISTANCE = 2','diagnose_artifact_exact_overlaps','exact artifact marker overlap','exact positions preserved')) {
+    if (-not $main.Contains($needle)) { $failures.Add("exact artifact overlap diagnostic missing: $needle") }
+}
 foreach ($needle in @(
     'return debug_enabled() or C.get_bool("global", "show_exact_artifact_markers", false)',
     'return debug_enabled() or C.get_bool("global", "show_exact_loot_markers", false)',
@@ -157,7 +160,7 @@ if ($infectedUiText.Contains('координаты тайника')) { $failures
 if ($scoutingUiText -match '(?i)экспедиц' -or $infectedUiText -match '(?i)экспедиц') { $failures.Add('route UI text must use original RVM terminology, not expedition') }
 $fragment = Get-Content -LiteralPath (Join-Path $ModRoot 'gamedata\configs\ui\map_spots_rvm_sorties.xml') -Raw
 [xml]("<map_spots>" + $fragment + "</map_spots>") | Out-Null
-foreach ($needle in @('rvm_search_small','rvm_search_medium','rvm_search_large','rvm_debug_target','width="64" height="64"','width="80" height="80"','width="96" height="96"','scale_min="1" scale_max="1.6"','a="220" r="255" g="210" b="64"')) {
+foreach ($needle in @('rvm_search_small','rvm_search_medium','rvm_search_large','rvm_debug_target','width="32" height="32"','width="40" height="40"','width="48" height="48"','scale_min="1" scale_max="4.5"','a="220" r="255" g="210" b="64"')) {
     if (-not $fragment.Contains($needle)) { $failures.Add("map spot invariant missing: $needle") }
 }
 $watcher = Get-Content -LiteralPath (Join-Path $ModRoot 'tools\watch_live_log.ps1') -Raw
