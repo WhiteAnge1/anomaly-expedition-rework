@@ -50,9 +50,15 @@ ambush_start_trigger_margin = 20
 ambush_trigger_padding = 130
 ; Запас сверх штатного радиуса доспавна РВМ.
 ambush_extra_padding = 20
+; proximity: при приближении с проверкой камеры; start: при создании зоны без camera-check.
+ambush_spawn_timing = proximity
 ; Предпочтительный и аварийный отступ от известных аномалий при появлении врагов.
 ambush_anomaly_clearance = 15
 ambush_anomaly_clearance_fallback = 8
+; Если размер формы аномалии безопасно прочитать нельзя, используется этот радиус.
+ambush_unknown_anomaly_radius = 20
+; Не удалять область при временном отсутствии безопасной точки: повторить поиск позже.
+ambush_retry_delay_ms = 10000
 ; Резерв, если таблица РВМ недоступна.
 ambush_spawn_safe_fallback = 85
 ; Расстояние точки появления от центра области.
@@ -151,6 +157,7 @@ loot_rare_non_artifact = raid_intelligence_note
 ; Поляна — фактический идентификатор y04_pole, тир 1.
 [level_y04_pole]
 tier = 1
+ambush_spawn_timing = start
 zone_radius_min = 55
 zone_radius_max = 85
 max_false_zones = 1
@@ -161,6 +168,7 @@ enemy_spawn_distance_max = 150
 ; Тёмная лощина — фактический идентификатор k01_darkscape, тир 2.
 [level_k01_darkscape]
 tier = 2
+ambush_spawn_timing = proximity
 zone_radius_min = 150
 zone_radius_max = 240
 ; Largest stock exclusion radius; use a correspondingly wider safe ring.
@@ -170,6 +178,7 @@ enemy_spawn_distance_max = 170
 ; Мёртвый город — фактический идентификатор l09_deadcity, тир 3.
 [level_l09_deadcity]
 tier = 3
+ambush_spawn_timing = start
 zone_radius_min = 140
 zone_radius_max = 220
 ; Urban layout: moderate distance leaves enough navigable side/rear candidates.

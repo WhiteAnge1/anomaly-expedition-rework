@@ -64,10 +64,11 @@ foreach ($needle in @('artifact_snapshot','actor_inventory','server_parent_chain
 foreach ($needle in @('recreated_artifact_zone','actor_pickup_recreated_id','artifact lineage recovered','count == 1 and candidate')) {
     if (-not $main.Contains($needle)) { $failures.Add("recreated artifact lineage safety missing: $needle") }
 }
-foreach ($needle in @('ambush_start_trigger_margin','fallback=relaxed_out_of_view','anomaly_distance','ambush spawn search','"actor", zone_reach','profile_safe','reject=invalid:')) {
+foreach ($needle in @('ambush_start_trigger_margin','fallback=relaxed_out_of_view','fallback=relaxed_start','anomaly_distance','ambush anomaly scan','offlevel_ignored','unreadable_fail_closed','anomaly_scan_incomplete','spawn_timing=%s','ambush start fallback','next_spawn_timing=proximity','start_distance','device().cam_dir','ambush spawn search','ambush spawn candidate','sampling=rear_first_full_ring','ambush_retry_context_changed','resume_after=actor_moves_10m_or_camera_turns_20deg','ambush deferred','zone remains armed','"actor", zone_reach','profile_safe','reject=invalid:')) {
     if (-not $main.Contains($needle)) { $failures.Add("ambush placement safety missing: $needle") }
 }
 if ($main.Contains('fallback=visible_but_safe')) { $failures.Add('ambush must never fall back to a point in the actor view') }
+if ($main.Contains('close_zone(zone, "unsafe_spawn_rejected")')) { $failures.Add('unsafe ambush search must defer while keeping the zone armed') }
 foreach ($needle in @('ARTIFACT_EXACT_SPOT = "paw_stash_green"','LOOT_EXACT_SPOT = "paw_stash_red"','ENEMY_EXACT_SPOT = "alife_presentation_squad_enemy_1"','artifact_exact_marker_enabled','loot_exact_marker_enabled','enemy_exact_marker_enabled','exact_marker_hint','sync_artifact_exact_spot','sync_enemy_exact_spot','pairs(zone.spawned_ids or {})','owned_by_rework=true')) {
     if (-not $main.Contains($needle)) { $failures.Add("exact debug marker integration missing: $needle") }
 }
@@ -101,9 +102,9 @@ if ($main -match '%\.\d+f') { $failures.Add('X-Ray printf-incompatible floating-
 
 $ltx = Get-Content -LiteralPath (Join-Path $ModRoot 'gamedata\configs\plugins\rvm_sorties_rework.ltx') -Raw
 $ambushProfiles = @{
-    'level_y04_pole' = @('enemy_spawn_distance_min = 90','enemy_spawn_distance_max = 150')
-    'level_k01_darkscape' = @('enemy_spawn_distance_min = 120','enemy_spawn_distance_max = 170')
-    'level_l09_deadcity' = @('enemy_spawn_distance_min = 80','enemy_spawn_distance_max = 120')
+    'level_y04_pole' = @('ambush_spawn_timing = start','enemy_spawn_distance_min = 90','enemy_spawn_distance_max = 150')
+    'level_k01_darkscape' = @('ambush_spawn_timing = proximity','enemy_spawn_distance_min = 120','enemy_spawn_distance_max = 170')
+    'level_l09_deadcity' = @('ambush_spawn_timing = start','enemy_spawn_distance_min = 80','enemy_spawn_distance_max = 120')
 }
 foreach ($section in $ambushProfiles.Keys) {
     $sectionMatch = [regex]::Match($ltx, "(?ms)^\[$([regex]::Escape($section))\]\s*(.*?)(?=^\[|\z)")
@@ -115,7 +116,7 @@ foreach ($section in $ambushProfiles.Keys) {
 foreach ($needle in @('stash_mode = scouting','weight_artifact = 60','remove_on_npc_pickup = false','valuable_first_chance = 35','valuable_second_chance = 10','valuable_third_chance = 1.5','loot_valuable = itm_ammokit, af_iam, lead_box','loot_valuable = detector_advanced, itm_ammokit, itm_advancedkit, af_iam, af_aac, lead_box','loot_valuable = detector_elite, detector_scientific, itm_ammokit, itm_expertkit, af_iam, af_aac, af_aam, lead_box','rare_artifact_chance = 70','loot_rare_non_artifact = raid_intelligence_note','loot_container_visuals = raid_small_stash_1','map_spot = rvm_search_small','max_false_zones = 1','debug_mode = auto','debug_log = false','[level_y04_pole]','[level_k01_darkscape]','[level_l09_deadcity]')) {
     if (-not $ltx.Contains($needle)) { $failures.Add("config invariant missing: $needle") }
 }
-foreach ($needle in @('ambush_start_trigger_margin = 20','ambush_anomaly_clearance = 15','ambush_anomaly_clearance_fallback = 8')) {
+foreach ($needle in @('ambush_spawn_timing = proximity','ambush_start_trigger_margin = 20','ambush_anomaly_clearance = 15','ambush_anomaly_clearance_fallback = 8','ambush_unknown_anomaly_radius = 20','ambush_retry_delay_ms = 10000')) {
     if (-not $ltx.Contains($needle)) { $failures.Add("ambush config invariant missing: $needle") }
 }
 foreach ($needle in @('show_exact_artifact_markers = false','show_exact_loot_markers = false','show_exact_enemy_markers = false')) {
