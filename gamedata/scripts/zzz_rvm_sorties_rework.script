@@ -21,9 +21,70 @@ local next_artifact_diagnostic = 0
 local reported_artifact_overlaps = {}
 local safe_alive = nil
 
+-- Category selection is a separate weighted roll. Every entry points to an
+-- exact online_offline_group section; the section's fixed npc list is the
+-- authoritative composition and is validated after creation.
+local ENEMY_SQUAD_PRESETS = {
+    y04_pole = {
+        frequent = {
+            "aer_pole_frequent_dog_weak_normal", "aer_pole_frequent_dog_normal_2",
+            "aer_pole_frequent_cat_weak_normal", "aer_pole_frequent_cat_normal_2",
+            "aer_pole_frequent_boar_weak_2",
+        },
+        rare = {
+            "aer_pole_rare_boar_weak_normal", "aer_pole_rare_lurker_weak_2",
+            "aer_pole_rare_lurker_weak_normal", "aer_pole_rare_dog_pseudodog",
+        },
+        superrare = {
+            "aer_pole_superrare_pseudodog_strong", "aer_pole_superrare_boar_strong",
+            "aer_pole_superrare_lurker_normal_2",
+        },
+    },
+    k01_darkscape = {
+        frequent = {
+            "aer_darkscape_frequent_dog_normal_3", "aer_darkscape_frequent_dog_normal_2_strong",
+            "aer_darkscape_frequent_cat_normal_3", "aer_darkscape_frequent_cat_normal_2_strong",
+            "aer_darkscape_frequent_boar_normal_2", "aer_darkscape_frequent_boar_normal_strong",
+            "aer_darkscape_frequent_boar_normal_3", "aer_darkscape_frequent_lurker_normal_2",
+            "aer_darkscape_frequent_lurker_normal_3", "aer_darkscape_frequent_lurker_normal_2_strong",
+            "aer_darkscape_frequent_pseudodog_normal_2", "aer_darkscape_frequent_pseudodog_normal_3",
+        },
+        rare = {
+            "aer_darkscape_rare_dog_pseudodog_strong", "aer_darkscape_rare_dog_strong_3",
+            "aer_darkscape_rare_cat_strong_3", "aer_darkscape_rare_lurker_strong_3",
+            "aer_darkscape_rare_pseudodog_strong_3", "aer_darkscape_rare_boar_normal_2_strong",
+        },
+        superrare = {
+            "aer_darkscape_superrare_psydog_dogs", "aer_darkscape_superrare_bloodsucker_normal_2",
+            "aer_darkscape_superrare_bloodsucker_normal_3", "aer_darkscape_superrare_lurker_strong_5",
+            "aer_darkscape_superrare_boar_strong_4", "aer_darkscape_superrare_cat_strong_7",
+            "aer_darkscape_superrare_dog_strong_3", "aer_darkscape_superrare_pseudodog_strong_2",
+        },
+    },
+    l09_deadcity = {
+        frequent = {
+            "aer_deadcity_frequent_snork_normal_2_strong", "aer_deadcity_frequent_snork_strong_2_normal",
+            "aer_deadcity_frequent_fracture_strong_5", "aer_deadcity_frequent_zombie_strong_10",
+            "aer_deadcity_frequent_lurker_strong_5",
+        },
+        rare = {
+            "aer_deadcity_rare_psydog_pseudodogs", "aer_deadcity_rare_burer_zombies_fractures",
+            "aer_deadcity_rare_burer_snorks", "aer_deadcity_rare_psysucker_normal_3",
+            "aer_deadcity_rare_bloodsucker_normal_3", "aer_deadcity_rare_chimera_normal",
+            "aer_deadcity_rare_controller_zombies",
+        },
+        superrare = {
+            "aer_deadcity_superrare_chimera_strong", "aer_deadcity_superrare_burers_fractures",
+            "aer_deadcity_superrare_burers_snorks", "aer_deadcity_superrare_psysucker_strong_3",
+            "aer_deadcity_superrare_psydogs_pseudodog", "aer_deadcity_superrare_controller_horde",
+            "aer_deadcity_superrare_bloodsucker_strong_3",
+        },
+    },
+}
+
 local function fresh_state()
     return {
-        schema = 2,
+        schema = 3,
         level_name = nil,
         sortie_type = nil,
         pending_transition = false,
@@ -180,6 +241,169 @@ local function safe_object_id_any(obj)
     if ok and type(id) == "number" then return id end
     ok, id = pcall(function() return obj:id() end)
     return ok and type(id) == "number" and id or nil
+end
+
+local function split_csv(value)
+    local result = {}
+    for token in string.gmatch(tostring(value or ""), "[^,]+") do
+        token = string.gsub(token, "^%s+", "")
+        token = string.gsub(token, "%s+$", "")
+        if token ~= "" then result[#result + 1] = token end
+    end
+    return result
+end
+
+local function sorted_copy(values)
+    local result = {}
+    for _, value in ipairs(values or {}) do result[#result + 1] = tostring(value) end
+    table.sort(result)
+    return result
+end
+
+local function same_members(expected, actual)
+    local left, right = sorted_copy(expected), sorted_copy(actual)
+    if #left ~= #right then return false end
+    for index = 1, #left do
+        if left[index] ~= right[index] then return false end
+    end
+    return true
+end
+
+local function preset_members(section)
+    if not (section and ini_sys and ini_sys:section_exist(section)) then return nil, "missing_section" end
+    local ok, value = pcall(function() return ini_sys:r_string_ex(section, "npc") end)
+    if not (ok and value) then return nil, "missing_fixed_npc" end
+    local members = split_csv(value)
+    if #members == 0 then return nil, "empty_fixed_npc" end
+    local random_ok, random_value = pcall(function() return ini_sys:r_string_ex(section, "npc_random") end)
+    if random_ok and random_value and tostring(random_value) ~= "" then return nil, "npc_random_forbidden" end
+    local count_ok, count = pcall(function() return ini_sys:r_u32(section, "npc_in_squad") end)
+    if not count_ok or tonumber(count) ~= #members then return nil, "npc_in_squad_mismatch" end
+    return members, nil
+end
+
+local function enumerate_squad_members(squad)
+    local ids, sections, objects = {}, {}, {}
+    local ok, err = pcall(function()
+        for member in squad:squad_members() do
+            local id = safe_object_id_any(member)
+            local server = nil
+            local object_ok, object_value = pcall(function() return member.object end)
+            if object_ok then server = object_value end
+            if not server and id then
+                local resolve_ok, resolved = pcall(alife_object, id)
+                if resolve_ok then server = resolved end
+            end
+            id = id or safe_object_id_any(server)
+            if not (id and server) then error("unresolved_squad_member") end
+            ids[#ids + 1] = id
+            sections[#sections + 1] = object_section(server) or "unknown"
+            objects[#objects + 1] = server
+        end
+    end)
+    if not ok then return nil, nil, nil, tostring(err) end
+    return ids, sections, objects, nil
+end
+
+local function squad_commander_id(squad)
+    if not squad then return nil end
+    local ok, id = pcall(function() return squad:commander_id() end)
+    return ok and type(id) == "number" and id or nil
+end
+
+local function release_enemy_squad(zone, reason)
+    if not zone then return end
+    local released = false
+    local squad = zone._squad_object
+    if zone.squad_id then
+        local found, value = pcall(alife_object, zone.squad_id)
+        if found and value then squad = value end
+    end
+    if squad then
+        local ok, err = pcall(alife_release, squad)
+        released = ok
+        if not ok then
+            log("ERROR squad release squad_id=%s preset=%s reason=%s error=%s; orphan fallback follows",
+                tostring(zone.squad_id), tostring(zone.squad_section), tostring(reason), tostring(err))
+        end
+    end
+    if not released then
+        for id, _ in pairs(zone.member_ids or zone.spawned_ids or {}) do safe_release(id) end
+    end
+    log("ambush squad cleanup squad_id=%s preset=%s reason=%s released_as_group=%s",
+        tostring(zone.squad_id), tostring(zone.squad_section), tostring(reason), tostring(released))
+    zone.squad_id = nil
+end
+
+local function choose_enemy_preset(zone)
+    if zone.squad_section and zone.squad_category then return zone.squad_category, zone.squad_section end
+    local level_presets = ENEMY_SQUAD_PRESETS[level.name()]
+    if not level_presets then return nil, nil, "unsupported_level" end
+    local weights = {
+        frequent = math.max(0, balanced("enemy_category_weight_frequent", 4)),
+        rare = math.max(0, balanced("enemy_category_weight_rare", 2)),
+        superrare = math.max(0, balanced("enemy_category_weight_superrare", 1)),
+    }
+    local total = weights.frequent + weights.rare + weights.superrare
+    if total <= 0 then return nil, nil, "all_category_weights_zero" end
+    local roll = math.random() * total
+    local category = roll < weights.frequent and "frequent"
+        or roll < weights.frequent + weights.rare and "rare" or "superrare"
+    local presets = level_presets[category] or {}
+    if #presets == 0 then return nil, nil, "empty_category_" .. tostring(category) end
+    local preset = presets[math.random(1, #presets)]
+    zone.squad_category = category
+    zone.squad_section = preset
+    log("ambush preset selected tier=%s level=%s category=%s weights=%s:%s:%s normalized=%s/%s/%s preset=%s category_size=%s",
+        tostring(current_tier()), tostring(level.name()), tostring(category), tostring(weights.frequent), tostring(weights.rare),
+        tostring(weights.superrare), fmt_number(weights.frequent * 100 / total), fmt_number(weights.rare * 100 / total),
+        fmt_number(weights.superrare * 100 / total), tostring(preset), tostring(#presets))
+    return category, preset, nil
+end
+
+local function spawn_exact_squad(zone, pos, lvid, cascade_step)
+    local expected, preset_error = preset_members(zone.squad_section)
+    if not expected then return false, "preset_" .. tostring(preset_error) end
+    local create_ok, squad = pcall(alife_create, zone.squad_section, pos, lvid, db.actor:game_vertex_id())
+    if not (create_ok and squad) then return false, "group_create_failed:" .. tostring(squad) end
+
+    local temporary = { squad_id = safe_object_id_any(squad), squad_section = zone.squad_section, member_ids = {}, _squad_object = squad }
+    local populate_ok, populate_error = pcall(function() squad:create_npc(nil, pos, lvid, db.actor:game_vertex_id()) end)
+    local ids, sections, objects, enumerate_error = enumerate_squad_members(squad)
+    if ids then for _, id in ipairs(ids) do temporary.member_ids[id] = true end end
+    if not populate_ok or enumerate_error or not same_members(expected, sections) then
+        local reason = not populate_ok and ("create_npc_failed:" .. tostring(populate_error))
+            or enumerate_error and ("enumerate_failed:" .. tostring(enumerate_error))
+            or ("composition_mismatch expected=" .. join_values(sorted_copy(expected), ",")
+                .. " actual=" .. join_values(sorted_copy(sections), ","))
+        release_enemy_squad(temporary, "partial_spawn_rollback")
+        return false, reason
+    end
+
+    local setup_ok, setup_error = pcall(function()
+        for _, member in ipairs(objects) do
+            SIMBOARD:setup_squad_and_group(member)
+            SendScriptCallback("squad_on_npc_creation", squad, member)
+        end
+    end)
+    if not setup_ok then
+        release_enemy_squad(temporary, "callback_rollback")
+        return false, "setup_or_callback_failed:" .. tostring(setup_error)
+    end
+
+    zone.squad_id = temporary.squad_id
+    zone.member_ids = temporary.member_ids
+    zone.spawned_ids = temporary.member_ids
+    zone.spawned_info = {}
+    local members_log = {}
+    for index, id in ipairs(ids) do
+        zone.spawned_info[id] = { section = sections[index], pos = pos_table(pos), resolved = false }
+        members_log[#members_log + 1] = tostring(sections[index]) .. "#" .. tostring(id)
+    end
+    log("ambush squad created tier=%s category=%s preset=%s squad_id=%s cascade=%s members=[%s] owned_by_rework=true",
+        tostring(current_tier()), tostring(zone.squad_category), tostring(zone.squad_section), tostring(zone.squad_id),
+        tostring(cascade_step), join_values(members_log, ";"))
+    return true, nil
 end
 
 local function safe_parent_id(obj)
@@ -437,12 +661,58 @@ local function sync_enemy_exact_spot(id, info, alive, alive_source)
     end
 end
 
+local function sync_enemy_squad_exact_spot(zone)
+    if not (zone and zone.kind == "enemy") then return end
+    if not zone.squad_id then
+        -- Compatibility with schema 2 alpha saves that contained independent
+        -- entities. Newly created zones always take the commander-only path.
+        for id, _ in pairs(zone.spawned_ids or {}) do
+            local ok, obj = pcall(alife_object, id)
+            obj = ok and obj or nil
+            local alive, alive_source = safe_alive(id, obj)
+            sync_enemy_exact_spot(id, zone.spawned_info and zone.spawned_info[id], alive, alive_source)
+        end
+        return
+    end
+    local squad = nil
+    if zone.squad_id then
+        local ok, value = pcall(alife_object, zone.squad_id)
+        if ok then squad = value end
+    end
+    local commander_id = squad_commander_id(squad)
+    local commander = nil
+    if commander_id then
+        local ok, value = pcall(alife_object, commander_id)
+        if ok then commander = value end
+    end
+    local alive, alive_source = safe_alive(commander_id, commander)
+    if not enemy_exact_marker_enabled() or alive ~= true then commander_id = nil end
+
+    if zone.marker_target_id and zone.marker_target_id ~= commander_id then
+        safe_remove_map_spot(zone.marker_target_id, ENEMY_EXACT_SPOT)
+        log("ambush marker detached squad_id=%s old_commander=%s new_commander=%s",
+            tostring(zone.squad_id), tostring(zone.marker_target_id), tostring(commander_id))
+        zone.marker_target_id = nil
+    end
+    if commander_id then
+        local info = zone.spawned_info and zone.spawned_info[commander_id]
+        sync_enemy_exact_spot(commander_id, info, alive, alive_source)
+        if zone.marker_target_id ~= commander_id then
+            log("ambush marker attached squad_id=%s commander_id=%s section=%s",
+                tostring(zone.squad_id), tostring(commander_id), tostring(info and info.section or object_section(commander)))
+        end
+        zone.marker_target_id = commander_id
+    end
+end
+
 local function remove_spot(zone)
     if not zone then return end
     safe_remove_map_spot(zone.anchor_id, zone.spot)
     safe_remove_map_spot(zone.artifact_id, ARTIFACT_EXACT_SPOT)
     zone.artifact_exact_signature = nil
     safe_remove_map_spot(zone.visual_id, LOOT_EXACT_SPOT)
+    safe_remove_map_spot(zone.marker_target_id, ENEMY_EXACT_SPOT)
+    zone.marker_target_id = nil
     for id, _ in pairs(zone.spawned_ids or {}) do
         safe_remove_map_spot(id, ENEMY_EXACT_SPOT)
     end
@@ -462,13 +732,7 @@ local function add_zone_spots(zone)
         local exact_hint = exact_marker_hint("st_rvm_sorties_exact_loot_hint", debug_hint)
         safe_add_map_spot(zone.visual_id, LOOT_EXACT_SPOT, exact_hint)
     elseif enemy_exact_marker_enabled() and zone.kind == "enemy" and zone.triggered then
-        for id, _ in pairs(zone.spawned_ids or {}) do
-            local info = zone.spawned_info and zone.spawned_info[id]
-            local obj_ok, obj = pcall(alife_object, id)
-            obj = obj_ok and obj or nil
-            local alive, alive_source = safe_alive(id, obj)
-            sync_enemy_exact_spot(id, info, alive, alive_source)
-        end
+        sync_enemy_squad_exact_spot(zone)
     end
 end
 
@@ -539,7 +803,11 @@ function cleanup(reason)
     log("cleanup reason=%s level=%s zones=%s", tostring(reason), tostring(state.level_name), tostring(size_table(state.zones or {})))
     for _, zone in pairs(state.zones or {}) do
         remove_spot(zone)
-        if zone.spawned_ids then
+        if zone.squad_id then
+            release_enemy_squad(zone, reason)
+        elseif zone.spawned_ids then
+            -- Schema 2 saves used independent entities. Keep a narrow legacy
+            -- fallback so old alpha saves remain removable after this update.
             for id, _ in pairs(zone.spawned_ids) do safe_release(id) end
         end
         release_loot(zone)
@@ -1093,233 +1361,112 @@ local function anomaly_distance(pos, anomaly_positions)
     return nearest_edge, nearest_anomaly, nearest_center
 end
 
-local function ambush_spawn_point(zone, spawn_timing)
-    local view_required = spawn_timing ~= "start"
+local function ambush_spawn_squad(zone, spawn_timing)
     local min_d = math.floor(balanced("enemy_spawn_distance_min", 35))
     local max_d = math.floor(balanced("enemy_spawn_distance_max", 90))
     local stock_safe = stock_spawn_radius()
-    local strict_safe = stock_safe + balanced("ambush_extra_padding", 20)
-    local profile_safe = math.max(stock_safe, min_d)
-    local strict_distance = math.max(strict_safe, profile_safe)
-    local strict_anomaly = balanced("ambush_anomaly_clearance", 15)
-    local fallback_anomaly = balanced("ambush_anomaly_clearance_fallback", 8)
-    local start_zone_margin = math.max(0, balanced("ambush_start_zone_margin", 8))
-    local start_zone_limit = math.max(0, zone.radius - math.min(zone.radius, start_zone_margin))
-    local attempts = math.floor(C.get_number("global", "placement_attempts", 60))
-    local fallback_pos, fallback_lvid, fallback_phase = nil, nil, nil
-    local fallback_details = nil
-    local best_rejected = nil
-    local seen_vertices = {}
-    local stats = {
-        attempts = 0,
-        valid = 0,
-        invalid = 0,
-        duplicate = 0,
-        occupied = 0,
-        far_from_zone = 0,
-        too_close_stock = 0,
-        too_close_profile = 0,
-        too_close_strict = 0,
-        too_close_start = 0,
-        in_view = 0,
-        anomaly_fallback = 0,
-        anomaly_strict = 0,
-    }
+    local actor_safe = math.max(stock_safe + balanced("ambush_extra_padding", 20), min_d)
+    local anomaly_clearance = balanced("ambush_anomaly_clearance", 15)
+    local inside_margin = math.max(0, balanced("ambush_start_zone_margin", 8))
+    local inside_limit = math.max(0, zone.radius - math.min(zone.radius, inside_margin))
+    local outside_padding = math.max(1, balanced("ambush_outside_zone_padding", 25))
+    local attempts = math.max(1, math.floor(C.get_number("global", "placement_attempts", 60)))
 
     local search_dir = db.actor:direction()
-    local search_dir_source = "actor"
-    if view_required then
-        local camera_ok, camera_dir = pcall(function() return device().cam_dir end)
-        if camera_ok and camera_dir then
-            search_dir = camera_dir
-            search_dir_source = "camera"
-        end
+    local direction_source = "actor"
+    if spawn_timing == "proximity" then
+        local ok, camera_dir = pcall(function() return device().cam_dir end)
+        if ok and camera_dir then search_dir, direction_source = camera_dir, "camera" end
     elseif state.start_pos then
-        search_dir = {
-            x = zone.center.x - state.start_pos.x,
-            y = 0,
-            z = zone.center.z - state.start_pos.z,
-        }
-        search_dir_source = "start_to_zone"
+        search_dir = { x = zone.center.x - state.start_pos.x, y = 0, z = zone.center.z - state.start_pos.z }
+        direction_source = "start_to_zone"
     end
-    local search_len = math.sqrt(search_dir.x * search_dir.x + search_dir.z * search_dir.z)
-    local forward_x = search_len >= 0.01 and search_dir.x / search_len or 1
-    local forward_z = search_len >= 0.01 and search_dir.z / search_len or 0
+    local length = math.sqrt(search_dir.x * search_dir.x + search_dir.z * search_dir.z)
+    local forward_x = length >= 0.01 and search_dir.x / length or 1
+    local forward_z = length >= 0.01 and search_dir.z / length or 0
     local right_x, right_z = -forward_z, forward_x
 
-    -- Cover the full ring deterministically, beginning behind the current
-    -- camera for proximity or on the far side from the saved start for start
-    -- spawn. Five radii per angle avoid wasting an entire random pass on the
-    -- same invalid edge of sparse Pole navigation.
-    local function ring_candidate(origin, distance_min, distance_max, index)
+    local function ring_candidate(distance_min, distance_max, index)
         local radial_slots = 5
         local radial_index = (index - 1) % radial_slots
         local angular_index = math.floor((index - 1) / radial_slots)
         local angular_slots = math.max(1, math.ceil(attempts / radial_slots))
         local angle = math.pi + angular_index * math.pi * 2 / angular_slots
-        local distance = distance_min
-        if radial_slots > 1 then
-            distance = distance_min + (distance_max - distance_min) * radial_index / (radial_slots - 1)
-        end
+        local distance = distance_min + (distance_max - distance_min) * radial_index / math.max(1, radial_slots - 1)
         local offset_forward = math.cos(angle) * distance
         local offset_right = math.sin(angle) * distance
-        return vector():set(
-            origin.x + forward_x * offset_forward + right_x * offset_right,
-            origin.y,
-            origin.z + forward_z * offset_forward + right_z * offset_right)
+        return vector():set(zone.center.x + forward_x * offset_forward + right_x * offset_right,
+            zone.center.y, zone.center.z + forward_z * offset_forward + right_z * offset_right)
     end
 
-    local function candidate_details_text(details)
-        if not details then return "candidate=none" end
-        local anomaly = details.anomaly
-        return "candidate=(" .. fmt_position(details.pos) .. ")"
-            .. " actor_dxz=" .. fmt_number(details.actor_distance)
-            .. " start_dxz=" .. fmt_number(details.start_distance)
-            .. " zone_dxz=" .. fmt_number(details.zone_distance)
-            .. " view_cos=" .. fmt_number(details.view_cosine)
-            .. " view_source=" .. tostring(details.view_source)
-            .. " view_required=" .. tostring(view_required)
-            .. " outside_view=" .. tostring(details.outside_view)
-            .. " nearest_anomaly_id=" .. tostring(anomaly and anomaly.id or "none")
-            .. " nearest_anomaly_section=" .. tostring(anomaly and anomaly.section or "none")
-            .. " anomaly_center_dxz=" .. fmt_number(details.anomaly_center_distance)
-            .. " anomaly_radius=" .. fmt_number(anomaly and anomaly.radius or 0)
-            .. " anomaly_radius_source=" .. tostring(anomaly and anomaly.radius_source or "none")
-            .. " anomaly_edge_clearance=" .. fmt_number(details.anomaly_edge_clearance)
+    local stages = nil
+    if spawn_timing == "start" then
+        stages = {
+            { name = "inside_clear", min_zone = 0, max_zone = inside_limit, require_view = false, require_anomaly_clear = true },
+            { name = "inside_anomaly_allowed", min_zone = 0, max_zone = inside_limit, require_view = false, require_anomaly_clear = false },
+            { name = "outside_anomaly_allowed", min_zone = zone.radius + 1, max_zone = zone.radius + outside_padding, require_view = false, require_anomaly_clear = false },
+        }
+    else
+        stages = {
+            { name = "inside_hidden_clear", min_zone = 0, max_zone = inside_limit, require_view = true, require_anomaly_clear = true },
+            { name = "inside_hidden_anomaly_allowed", min_zone = 0, max_zone = inside_limit, require_view = true, require_anomaly_clear = false },
+            { name = "outside_hidden_anomaly_allowed", min_zone = zone.radius + 1, max_zone = zone.radius + outside_padding, require_view = true, require_anomaly_clear = false },
+            { name = "outside_visible_last_resort", min_zone = zone.radius + 1, max_zone = zone.radius + outside_padding, require_view = false, require_anomaly_clear = false },
+        }
     end
 
-    local function report(result, phase, details)
-        log("ambush spawn search anchor=%s spawn_timing=%s result=%s phase=%s attempts=%s valid=%s reject=invalid:%s,duplicate:%s,occupied:%s,far:%s,stock:%s,profile:%s,extra:%s,start:%s,view:%s,anomaly_fallback:%s,anomaly_strict:%s",
-            tostring(zone.anchor_id), tostring(spawn_timing), tostring(result), tostring(phase), tostring(stats.attempts), tostring(stats.valid),
-            tostring(stats.invalid), tostring(stats.duplicate), tostring(stats.occupied), tostring(stats.far_from_zone),
-            tostring(stats.too_close_stock), tostring(stats.too_close_profile), tostring(stats.too_close_strict), tostring(stats.too_close_start), tostring(stats.in_view),
-            tostring(stats.anomaly_fallback), tostring(stats.anomaly_strict))
-        log("ambush spawn candidate anchor=%s spawn_timing=%s result=%s phase=%s %s profile=%s..%s strict_actor=%s zone_radius=%s start_zone_margin=%s start_zone_limit=%s anomaly_clearance=%s/%s",
-            tostring(zone.anchor_id), tostring(spawn_timing), tostring(result), tostring(phase), candidate_details_text(details),
-            tostring(min_d), tostring(max_d), fmt_number(strict_distance), fmt_number(zone.radius), fmt_number(start_zone_margin),
-            fmt_number(start_zone_limit), fmt_number(fallback_anomaly), fmt_number(strict_anomaly))
-        log("ambush search basis anchor=%s direction_source=%s direction=(%s,%s) sampling=rear_first_full_ring",
-            tostring(zone.anchor_id), tostring(search_dir_source), fmt_number(forward_x), fmt_number(forward_z))
-    end
-
-    local function evaluate(candidate, phase, max_zone_distance)
-        stats.attempts = stats.attempts + 1
-        local lvid = valid_vertex(candidate)
-        if not lvid then
-            stats.invalid = stats.invalid + 1
-            return nil, nil
-        end
-        local vertex_key = tostring(lvid)
-        if seen_vertices[vertex_key] then
-            stats.duplicate = stats.duplicate + 1
-            return nil, nil
-        end
-        seen_vertices[vertex_key] = true
-        local p = level.vertex_position(lvid)
-        stats.valid = stats.valid + 1
-        if max_zone_distance and distance_xz(p, zone.center) > max_zone_distance then
-            stats.far_from_zone = stats.far_from_zone + 1
-            return nil, nil
-        end
-        for _, info in pairs(zone.spawned_info or {}) do
-            if info.pos and distance_xz(p, info.pos) < 8 then
-                stats.occupied = stats.occupied + 1
-                return nil, nil
+    for stage_index, stage in ipairs(stages) do
+        local stats = { invalid = 0, duplicate = 0, band = 0, actor = 0, start = 0, view = 0, anomaly = 0, unreadable = 0, spawn = 0 }
+        local seen_vertices = {}
+        log("ambush cascade begin anchor=%s tier=%s preset=%s step=%s/%s name=%s timing=%s zone_band=%s..%s view_required=%s anomaly_clear_required=%s scan_complete=%s",
+            tostring(zone.anchor_id), tostring(current_tier()), tostring(zone.squad_section), tostring(stage_index), tostring(#stages),
+            tostring(stage.name), tostring(spawn_timing), fmt_number(stage.min_zone), fmt_number(stage.max_zone),
+            tostring(stage.require_view), tostring(stage.require_anomaly_clear), tostring(zone.anomaly_scan_complete))
+        for attempt = 1, attempts do
+            local candidate = ring_candidate(stage.min_zone, stage.max_zone, attempt)
+            local lvid = valid_vertex(candidate)
+            if not lvid then
+                stats.invalid = stats.invalid + 1
+            elseif seen_vertices[tostring(lvid)] then
+                stats.duplicate = stats.duplicate + 1
+            else
+                seen_vertices[tostring(lvid)] = true
+                local pos = level.vertex_position(lvid)
+                local zone_distance = distance_xz(pos, zone.center)
+                local actor_distance = distance_xz(pos, db.actor:position())
+                local start_distance = state.start_pos and distance_xz(pos, state.start_pos) or actor_distance
+                local outside_view, view_cosine, view_source = view_metrics(pos)
+                local edge_clearance, nearest_anomaly = anomaly_distance(pos, zone.anomaly_positions)
+                local accepted = true
+                if zone_distance < stage.min_zone or zone_distance > stage.max_zone then stats.band = stats.band + 1; accepted = false end
+                if actor_distance < actor_safe then stats.actor = stats.actor + 1; accepted = false end
+                if spawn_timing == "start" and start_distance < actor_safe then stats.start = stats.start + 1; accepted = false end
+                if stage.require_view and not outside_view then stats.view = stats.view + 1; accepted = false end
+                if stage.require_anomaly_clear and zone.anomaly_scan_complete == false then stats.unreadable = stats.unreadable + 1; accepted = false end
+                if stage.require_anomaly_clear and edge_clearance < anomaly_clearance then stats.anomaly = stats.anomaly + 1; accepted = false end
+                if accepted then
+                    local created, create_error = spawn_exact_squad(zone, pos, lvid, stage.name)
+                    if created then
+                        log("ambush cascade success anchor=%s tier=%s preset=%s step=%s/%s name=%s position=(%s) actor_dxz=%s start_dxz=%s zone_dxz=%s view_cos=%s view_source=%s nearest_anomaly=%s anomaly_edge_clearance=%s profile=%s..%s direction_source=%s",
+                            tostring(zone.anchor_id), tostring(current_tier()), tostring(zone.squad_section), tostring(stage_index), tostring(#stages),
+                            tostring(stage.name), fmt_position(pos), fmt_number(actor_distance), fmt_number(start_distance), fmt_number(zone_distance),
+                            fmt_number(view_cosine), tostring(view_source), tostring(nearest_anomaly and nearest_anomaly.id or "none"),
+                            fmt_number(edge_clearance), tostring(min_d), tostring(max_d), tostring(direction_source))
+                        zone.spawn_cascade_step = stage.name
+                        return true
+                    end
+                    stats.spawn = stats.spawn + 1
+                    log("ambush cascade candidate spawn failed anchor=%s preset=%s step=%s attempt=%s reason=%s; rollback complete",
+                        tostring(zone.anchor_id), tostring(zone.squad_section), tostring(stage.name), tostring(attempt), tostring(create_error))
+                end
             end
         end
-
-        local actor_distance = distance_xz(p, db.actor:position())
-        local start_distance = state.start_pos and distance_xz(p, state.start_pos) or actor_distance
-        local zone_distance = distance_xz(p, zone.center)
-        local outside_view, view_cosine, view_source = view_metrics(p)
-        local anomaly_clearance, nearest_anomaly, anomaly_center_distance = anomaly_distance(p, zone.anomaly_positions)
-        local details = {
-            pos = pos_table(p),
-            actor_distance = actor_distance,
-            start_distance = start_distance,
-            zone_distance = zone_distance,
-            outside_view = outside_view,
-            view_cosine = view_cosine,
-            view_source = view_source,
-            anomaly_edge_clearance = anomaly_clearance,
-            anomaly_center_distance = anomaly_center_distance,
-            anomaly = nearest_anomaly,
-        }
-        if actor_distance < stock_safe then stats.too_close_stock = stats.too_close_stock + 1 end
-        if actor_distance < profile_safe then stats.too_close_profile = stats.too_close_profile + 1 end
-        if actor_distance < strict_safe then stats.too_close_strict = stats.too_close_strict + 1 end
-        if spawn_timing == "start" and start_distance < profile_safe then stats.too_close_start = stats.too_close_start + 1 end
-        if view_required and not outside_view then stats.in_view = stats.in_view + 1 end
-        if anomaly_clearance < fallback_anomaly then stats.anomaly_fallback = stats.anomaly_fallback + 1 end
-        if anomaly_clearance < strict_anomaly then stats.anomaly_strict = stats.anomaly_strict + 1 end
-
-        local score = 0
-        if actor_distance >= profile_safe then score = score + 1 end
-        if spawn_timing ~= "start" or start_distance >= profile_safe then score = score + 1 end
-        if not view_required or outside_view then score = score + 2 end
-        if anomaly_clearance >= fallback_anomaly then score = score + 2 end
-        if not best_rejected or score > best_rejected.score then
-            details.score = score
-            best_rejected = details
-        end
-
-        if actor_distance >= strict_distance and (spawn_timing ~= "start" or start_distance >= profile_safe)
-        and (not view_required or outside_view) and anomaly_clearance >= strict_anomaly then
-            report("strict", phase, details)
-            return p, lvid
-        end
-        if not fallback_pos and actor_distance >= profile_safe
-        and (spawn_timing ~= "start" or start_distance >= profile_safe) and (not view_required or outside_view)
-        and anomaly_clearance >= fallback_anomaly then
-            fallback_pos, fallback_lvid, fallback_phase = p, lvid, phase
-            fallback_details = details
-        end
-        return nil, nil
+        log("ambush cascade exhausted anchor=%s tier=%s preset=%s step=%s/%s name=%s attempts=%s reject=invalid:%s,duplicate:%s,band:%s,actor:%s,start:%s,view:%s,anomaly:%s,unreadable:%s,spawn:%s",
+            tostring(zone.anchor_id), tostring(current_tier()), tostring(zone.squad_section), tostring(stage_index), tostring(#stages),
+            tostring(stage.name), tostring(attempts), tostring(stats.invalid), tostring(stats.duplicate), tostring(stats.band),
+            tostring(stats.actor), tostring(stats.start), tostring(stats.view), tostring(stats.anomaly), tostring(stats.unreadable), tostring(stats.spawn))
     end
-
-    -- A start ambush belongs to the marked danger area. Actor/start distances
-    -- are safety gates only; they must never move the spawn outside that area.
-    -- Vertex snapping is checked again by evaluate against start_zone_limit.
-    if spawn_timing == "start" then
-        for attempt = 1, attempts do
-            local candidate = ring_candidate(zone.center, 0, start_zone_limit, attempt)
-            local p, lvid = evaluate(candidate, "zone_start", start_zone_limit)
-            if p then return p, lvid end
-        end
-        if fallback_pos then
-            report("fallback=relaxed_start", fallback_phase, fallback_details)
-            return fallback_pos, fallback_lvid
-        end
-        report("exhausted", "zone_start", best_rejected)
-        return nil, nil
-    end
-
-    -- Proximity ambushes retain the original zone-first, actor-ring fallback
-    -- and camera gate used by Darkscape.
-    for attempt = 1, attempts do
-        local candidate = ring_candidate(zone.center, min_d, math.max(min_d, max_d), attempt)
-        local p, lvid = evaluate(candidate, "zone", nil)
-        if p then return p, lvid end
-    end
-
-    -- Search a second ring around the actor for proximity ambushes only.
-    local actor_pos = db.actor:position()
-    local actor_min = strict_distance
-    local actor_max = math.max(actor_min, max_d)
-    local zone_reach = zone.radius + balanced("ambush_trigger_padding", 130) + strict_safe
-    for attempt = 1, attempts do
-        local candidate = ring_candidate(actor_pos, actor_min, actor_max, attempt)
-        local p, lvid = evaluate(candidate, "actor", zone_reach)
-        if p then return p, lvid end
-    end
-
-    if fallback_pos then
-        local fallback_result = view_required and "fallback=relaxed_out_of_view" or "fallback=relaxed_start"
-        report(fallback_result, fallback_phase, fallback_details)
-        return fallback_pos, fallback_lvid
-    end
-    report("exhausted", "zone+actor", best_rejected)
-    return nil, nil
+    return false
 end
 
 local function owned_enemy(id)
@@ -1513,46 +1660,69 @@ end
 local function trigger_ambush(zone, now, spawn_timing)
     if zone.triggered then return end
     spawn_timing = spawn_timing == "start" and "start" or "proximity"
-    zone.spawned_ids = {}
-    zone.spawned_info = {}
+    zone.member_ids = zone.member_ids or {}
+    zone.spawned_ids = zone.member_ids
+    zone.spawned_info = zone.spawned_info or {}
+    local category, preset, preset_error = choose_enemy_preset(zone)
+    if not (category and preset) then
+        log("ERROR ambush preset unavailable anchor=%s tier=%s reason=%s; zone remains armed",
+            tostring(zone.anchor_id), tostring(current_tier()), tostring(preset_error))
+        defer_ambush(zone, now, "preset_unavailable")
+        return
+    end
+    local fixed_members, validation_error = preset_members(preset)
+    if not fixed_members then
+        log("ERROR ambush preset invalid anchor=%s tier=%s preset=%s reason=%s; zone remains armed",
+            tostring(zone.anchor_id), tostring(current_tier()), tostring(preset), tostring(validation_error))
+        defer_ambush(zone, now, "invalid_exact_preset")
+        return
+    end
     if not zone.anomaly_positions then
         zone.anomaly_positions, zone.anomaly_scan_complete = collect_anomaly_positions()
     end
-    if zone.anomaly_scan_complete == false then
-        defer_ambush(zone, now, "anomaly_scan_incomplete")
-        return
-    end
-    local sections = valid_sections(balanced_list("enemy_sections"))
-    local min_n = math.max(1, math.floor(balanced("enemy_count_min", 2)))
-    local max_n = math.max(min_n, math.floor(balanced("enemy_count_max", 3)))
-    local count = math.random(min_n, max_n)
-    for _ = 1, count do
-        local pos, lvid = ambush_spawn_point(zone, spawn_timing)
-        if pos and #sections > 0 then
-            local section = sections[math.random(1, #sections)]
-            local obj = alife_create(section, pos, lvid, db.actor:game_vertex_id())
-            if obj then
-                zone.spawned_ids[obj.id] = true
-                zone.spawned_info[obj.id] = { section = section, pos = pos_table(pos), resolved = false }
-                log("ambush entity section=%s id=%s position=(%s,%s,%s) owned_by_rework=true",
-                    tostring(section), tostring(obj.id), fmt_number(pos.x), fmt_number(pos.y), fmt_number(pos.z))
-            end
-        end
-    end
-    if size_table(zone.spawned_ids) == 0 then
-        defer_ambush(zone, now, spawn_timing == "start" and "start_no_safe_point_inside_zone" or "no_safe_spawn_point")
+    if not ambush_spawn_squad(zone, spawn_timing) then
+        defer_ambush(zone, now, "cascade_exhausted_no_complete_squad")
     else
         zone.triggered = true
         zone.spawn_timing_resolved = spawn_timing
         zone.ambush_retry_at = nil
         zone.ambush_retry_actor_pos = nil
         zone.ambush_retry_view_dir = nil
-        log("ambush anchor=%s spawn_timing=%s spawned=%s", tostring(zone.anchor_id), tostring(spawn_timing), tostring(size_table(zone.spawned_ids)))
+        log("ambush anchor=%s tier=%s category=%s preset=%s squad_id=%s spawn_timing=%s cascade=%s spawned=%s",
+            tostring(zone.anchor_id), tostring(current_tier()), tostring(zone.squad_category), tostring(zone.squad_section),
+            tostring(zone.squad_id), tostring(spawn_timing), tostring(zone.spawn_cascade_step), tostring(size_table(zone.spawned_ids)))
         refresh_zone_spots(zone)
         population_census("rework_enemy_created anchor=" .. tostring(zone.anchor_id))
         zone.anomaly_positions = nil
         zone.anomaly_scan_complete = nil
     end
+end
+
+local function refresh_zone_squad_members(zone)
+    if not (zone and zone.squad_id) then return true end
+    local ok, squad = pcall(alife_object, zone.squad_id)
+    if not (ok and squad) then return true end
+    local ids, sections, _, err = enumerate_squad_members(squad)
+    if not ids then
+        if not zone.member_refresh_error_reported then
+            zone.member_refresh_error_reported = true
+            log("ERROR ambush squad enumeration failed squad_id=%s preset=%s error=%s; zone kept open",
+                tostring(zone.squad_id), tostring(zone.squad_section), tostring(err))
+        end
+        return false
+    end
+    zone.member_refresh_error_reported = nil
+    zone.member_ids = zone.member_ids or {}
+    zone.spawned_ids = zone.member_ids
+    zone.spawned_info = zone.spawned_info or {}
+    for index, id in ipairs(ids) do
+        zone.member_ids[id] = true
+        local info = zone.spawned_info[id] or {}
+        info.section = sections[index]
+        if info.resolved == nil then info.resolved = false end
+        zone.spawned_info[id] = info
+    end
+    return true
 end
 
 local function update_artifact_zones(now)
@@ -1613,12 +1783,12 @@ local function update_zones(now)
                 if retry_ready and timing_ready then trigger_ambush(zone, now, spawn_timing) end
             else
                 local alive = 0
+                local members_known = refresh_zone_squad_members(zone)
                 for id, _ in pairs(zone.spawned_ids or {}) do
                     local obj_ok, obj = pcall(alife_object, id)
                     obj = obj_ok and obj or nil
                     local info = zone.spawned_info and zone.spawned_info[id]
                     local entity_alive, alive_source = safe_alive(id, obj)
-                    sync_enemy_exact_spot(id, info, entity_alive, alive_source)
                     if entity_alive == true or (entity_alive == nil and obj) then
                         alive = alive + 1
                     elseif info and not info.resolved then
@@ -1628,7 +1798,11 @@ local function update_zones(now)
                             tostring(info.section), tostring(id), tostring(info.reason))
                     end
                 end
-                if alive == 0 then close_zone(zone, "ambush_resolved_all_dead_or_missing") end
+                sync_enemy_squad_exact_spot(zone)
+                if not members_known then
+                    alive = math.max(alive, 1)
+                end
+                if alive == 0 then close_zone(zone, "ambush_squad_resolved_all_dead_or_missing") end
             end
         end
     end
@@ -1856,6 +2030,9 @@ local function load_state(m_data)
     state.transition_from_level = state.transition_from_level or nil
     for _, zone in pairs(state.zones) do
         if zone.kind == "enemy" then
+            zone.member_ids = zone.member_ids or zone.spawned_ids or {}
+            zone.spawned_ids = zone.member_ids
+            zone.spawned_info = zone.spawned_info or {}
             -- time_global is process-local and cached ALife anomaly data may
             -- have changed across load. Allow one fresh, safe attempt.
             zone.ambush_retry_at = 0
@@ -1865,7 +2042,7 @@ local function load_state(m_data)
             zone.anomaly_scan_complete = nil
         end
     end
-    state.schema = 2
+    state.schema = 3
 end
 
 local function find_debug_ui(...)

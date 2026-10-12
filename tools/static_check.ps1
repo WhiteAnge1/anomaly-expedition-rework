@@ -12,6 +12,7 @@ $required = @(
     'gamedata\scripts\zzz_rvm_sorties_rework.script',
     'gamedata\scripts\modxml_rvm_sorties_map_spots.script',
     'gamedata\configs\plugins\rvm_sorties_rework.ltx',
+    'gamedata\configs\mod_system_rvm_sorties_squads.ltx',
     'gamedata\configs\ui\map_spots_rvm_sorties.xml',
     'gamedata\configs\text\rus\st_rvm_sorties_rework.xml',
     'fomod\info.xml',
@@ -76,29 +77,29 @@ foreach ($needle in @('artifact_snapshot','actor_inventory','server_parent_chain
 foreach ($needle in @('recreated_artifact_zone','actor_pickup_recreated_id','artifact lineage recovered','count == 1 and candidate')) {
     if (-not $main.Contains($needle)) { $failures.Add("recreated artifact lineage safety missing: $needle") }
 }
-foreach ($needle in @('ambush_start_trigger_margin','ambush_start_zone_margin','fallback=relaxed_out_of_view','fallback=relaxed_start','anomaly_distance','ambush anomaly scan','offlevel_ignored','unreadable_fail_closed','anomaly_scan_incomplete','spawn_timing=%s','start_no_safe_point_inside_zone','start_distance','device().cam_dir','ambush spawn search','ambush spawn candidate','sampling=rear_first_full_ring','ambush_retry_context_changed','resume_after=actor_moves_10m_or_camera_turns_20deg','ambush deferred','zone remains armed','"actor", zone_reach','profile_safe','reject=invalid:')) {
+foreach ($needle in @('ambush_start_trigger_margin','ambush_start_zone_margin','ambush_outside_zone_padding','anomaly_distance','ambush anomaly scan','offlevel_ignored','spawn_timing=%s','start_distance','device().cam_dir','ambush cascade begin','ambush cascade exhausted','ambush cascade success','inside_clear','inside_anomaly_allowed','outside_anomaly_allowed','inside_hidden_clear','inside_hidden_anomaly_allowed','outside_hidden_anomaly_allowed','outside_visible_last_resort','ambush_retry_context_changed','resume_after=actor_moves_10m_or_camera_turns_20deg','ambush deferred','zone remains armed','reject=invalid:')) {
     if (-not $main.Contains($needle)) { $failures.Add("ambush placement safety missing: $needle") }
 }
 foreach ($needle in @(
-    'local start_zone_limit = math.max(0, zone.radius - math.min(zone.radius, start_zone_margin))',
-    'ring_candidate(zone.center, 0, start_zone_limit, attempt)',
-    'evaluate(candidate, "zone_start", start_zone_limit)',
-    'report("exhausted", "zone_start", best_rejected)',
-    '-- Search a second ring around the actor for proximity ambushes only.'
+    'local function ambush_spawn_squad(zone, spawn_timing)',
+    'local inside_limit = math.max(0, zone.radius - math.min(zone.radius, inside_margin))',
+    'min_zone = zone.radius + 1, max_zone = zone.radius + outside_padding',
+    'if stage.require_view and not outside_view',
+    'if stage.require_anomaly_clear and zone.anomaly_scan_complete == false',
+    'if not ambush_spawn_squad(zone, spawn_timing) then'
 )) {
-    if (-not $main.Contains($needle)) { $failures.Add("start ambush must stay inside its marked zone: $needle") }
+    if (-not $main.Contains($needle)) { $failures.Add("ambush cascade regression: $needle") }
 }
 if ($main.Contains('spawn_timing=start next_spawn_timing=proximity')) { $failures.Add('start ambush must not fall back to remote proximity placement') }
-$spawnPointIndex = $main.IndexOf('local function ambush_spawn_point(zone, spawn_timing)')
-$startGateIndex = $main.IndexOf('if spawn_timing == "start" then', $spawnPointIndex)
-$startReturnIndex = $main.IndexOf('report("exhausted", "zone_start", best_rejected)', $startGateIndex)
-$actorPhaseIndex = $main.IndexOf('evaluate(candidate, "actor", zone_reach)', $startGateIndex)
-if ($spawnPointIndex -lt 0 -or $startGateIndex -lt 0 -or $startReturnIndex -lt 0 -or $actorPhaseIndex -lt 0 -or $actorPhaseIndex -lt $startReturnIndex) {
-    $failures.Add('actor-phase search must occur only after the start-only branch returns')
-}
-if ($main.Contains('fallback=visible_but_safe')) { $failures.Add('ambush must never fall back to a point in the actor view') }
 if ($main.Contains('close_zone(zone, "unsafe_spawn_rejected")')) { $failures.Add('unsafe ambush search must defer while keeping the zone armed') }
-foreach ($needle in @('ARTIFACT_EXACT_SPOT = "paw_stash_green"','LOOT_EXACT_SPOT = "paw_stash_red"','ENEMY_EXACT_SPOT = "alife_presentation_squad_enemy_1"','artifact_exact_marker_enabled','loot_exact_marker_enabled','enemy_exact_marker_enabled','exact_marker_hint','sync_artifact_exact_spot','sync_enemy_exact_spot','pairs(zone.spawned_ids or {})','owned_by_rework=true')) {
+foreach ($needle in @('ENEMY_SQUAD_PRESETS','choose_enemy_preset','enemy_category_weight_frequent','enemy_category_weight_rare','enemy_category_weight_superrare','spawn_exact_squad','squad:create_npc(nil, pos, lvid','SIMBOARD:setup_squad_and_group','SendScriptCallback("squad_on_npc_creation"','same_members(expected, sections)','partial_spawn_rollback','callback_rollback','release_enemy_squad','squad_id','member_ids')) {
+    if (-not $main.Contains($needle)) { $failures.Add("exact squad integration missing: $needle") }
+}
+foreach ($needle in @('local roll = math.random() * total','roll < weights.frequent + weights.rare','presets[math.random(1, #presets)]')) {
+    if (-not $main.Contains($needle)) { $failures.Add("two-stage squad probability regression: $needle") }
+}
+if ($main -match 'local\s+section\s*=\s*sections\[math\.random') { $failures.Add('independent random mutant creation returned') }
+foreach ($needle in @('ARTIFACT_EXACT_SPOT = "paw_stash_green"','LOOT_EXACT_SPOT = "paw_stash_red"','ENEMY_EXACT_SPOT = "alife_presentation_squad_enemy_1"','artifact_exact_marker_enabled','loot_exact_marker_enabled','enemy_exact_marker_enabled','exact_marker_hint','sync_artifact_exact_spot','sync_enemy_exact_spot','sync_enemy_squad_exact_spot','squad:commander_id()','marker_target_id','pairs(zone.spawned_ids or {})','owned_by_rework=true')) {
     if (-not $main.Contains($needle)) { $failures.Add("exact debug marker integration missing: $needle") }
 }
 foreach ($needle in @('ARTIFACT_EXACT_OVERLAP_DISTANCE = 2','diagnose_artifact_exact_overlaps','exact artifact marker overlap','exact positions preserved')) {
@@ -145,14 +146,57 @@ foreach ($section in $ambushProfiles.Keys) {
 foreach ($needle in @('stash_mode = scouting','weight_artifact = 60','remove_on_npc_pickup = false','valuable_first_chance = 35','valuable_second_chance = 10','valuable_third_chance = 1.5','loot_valuable = itm_ammokit, af_iam, lead_box','loot_valuable = detector_advanced, itm_ammokit, itm_advancedkit, af_iam, af_aac, lead_box','loot_valuable = detector_elite, detector_scientific, itm_ammokit, itm_expertkit, af_iam, af_aac, af_aam, lead_box','rare_artifact_chance = 70','loot_rare_non_artifact = raid_intelligence_note','loot_container_visuals = raid_small_stash_1','map_spot = rvm_search_small','max_false_zones = 1','debug_mode = auto','debug_log = false','[level_y04_pole]','[level_k01_darkscape]','[level_l09_deadcity]')) {
     if (-not $ltx.Contains($needle)) { $failures.Add("config invariant missing: $needle") }
 }
-foreach ($needle in @('ambush_spawn_timing = proximity','ambush_start_trigger_margin = 20','ambush_start_zone_margin = 8','ambush_anomaly_clearance = 15','ambush_anomaly_clearance_fallback = 8','ambush_unknown_anomaly_radius = 20','ambush_retry_delay_ms = 10000')) {
+foreach ($needle in @('ambush_spawn_timing = proximity','ambush_start_trigger_margin = 20','ambush_start_zone_margin = 8','ambush_outside_zone_padding = 25','ambush_anomaly_clearance = 15','ambush_unknown_anomaly_radius = 20','ambush_retry_delay_ms = 10000','enemy_category_weight_frequent = 4','enemy_category_weight_rare = 2','enemy_category_weight_superrare = 1')) {
     if (-not $ltx.Contains($needle)) { $failures.Add("ambush config invariant missing: $needle") }
 }
-$enemySectionLines = [regex]::Matches($ltx, '(?m)^enemy_sections\s*=.*$')
-if ($enemySectionLines.Count -eq 0) { $failures.Add('enemy_sections config is missing') }
-foreach ($line in $enemySectionLines) {
-    if ($line.Value -match '\bflesh_normal\b') { $failures.Add("passive flesh_normal must not appear in enemy_sections: $($line.Value)") }
+if ($ltx -match '(?m)^enemy_(?:sections|count_min|count_max)\s*=') { $failures.Add('obsolete independent enemy pools/counts must not remain in config') }
+
+$squadLtx = Get-Content -LiteralPath (Join-Path $ModRoot 'gamedata\configs\mod_system_rvm_sorties_squads.ltx') -Raw
+$squadSections = [regex]::Matches($squadLtx, '(?ms)^\[(aer_(?:pole|darkscape|deadcity)_(?:frequent|rare|superrare)_[^\]]+)\]:online_offline_group\s*(.*?)(?=^\[|\z)')
+if ($squadSections.Count -ne 57) { $failures.Add("expected 57 exact squad presets, found $($squadSections.Count)") }
+$declaredPresets = @{}
+$configuredCreatures = [System.Collections.Generic.HashSet[string]]::new()
+$presetCounts = @{}
+foreach ($match in $squadSections) {
+    $name, $body = $match.Groups[1].Value, $match.Groups[2].Value
+    if ($declaredPresets.ContainsKey($name)) { $failures.Add("duplicate exact squad section: $name") }
+    $declaredPresets[$name] = $true
+    if ($name -match '^aer_(pole|darkscape|deadcity)_(frequent|rare|superrare)_') {
+        $countKey = "$($Matches[1])/$($Matches[2])"
+        $presetCounts[$countKey] = 1 + [int]($presetCounts[$countKey])
+    }
+    if ($body -notmatch '(?m)^faction\s*=\s*monster\s*$' -or $body -notmatch '(?m)^common\s*=\s*true\s*$') { $failures.Add("invalid squad base fields: $name") }
+    if ($body -match '(?m)^npc_random\s*=') { $failures.Add("npc_random forbidden in exact squad: $name") }
+    $npcMatch = [regex]::Match($body, '(?m)^npc\s*=\s*([^;\r\n]+)')
+    $countMatch = [regex]::Match($body, '(?m)^npc_in_squad\s*=\s*(\d+)\s*$')
+    $members = @($npcMatch.Groups[1].Value -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    if (-not $npcMatch.Success -or -not $countMatch.Success -or $members.Count -ne [int]$countMatch.Groups[1].Value) { $failures.Add("exact npc/count mismatch: $name") }
+    foreach ($member in $members) {
+        [void]$configuredCreatures.Add($member)
+        if ($member -notmatch '^(dog_|cat_|boar_|lurker_|pseudodog_|psy_dog_|bloodsucker_|snork_|fracture_|zombie_strong$|burer_|psysucker_|chimera_|m_controller_)') {
+            $failures.Add("non-approved/non-mutant member in exact squad $name`: $member")
+        }
+    }
 }
+$expectedPresetCounts = @{
+    'pole/frequent'=5; 'pole/rare'=4; 'pole/superrare'=3
+    'darkscape/frequent'=12; 'darkscape/rare'=6; 'darkscape/superrare'=8
+    'deadcity/frequent'=5; 'deadcity/rare'=7; 'deadcity/superrare'=7
+}
+foreach ($countKey in $expectedPresetCounts.Keys) {
+    if ([int]$presetCounts[$countKey] -ne $expectedPresetCounts[$countKey]) { $failures.Add("preset category count mismatch $countKey`: expected $($expectedPresetCounts[$countKey]), found $([int]$presetCounts[$countKey])") }
+}
+foreach ($forbidden in @('zombie_blind','zombie_ghost')) {
+    if ($squadLtx -match "(?m)^npc\s*=.*\b$forbidden\b") { $failures.Add("forbidden psi/ghost zombie in exact squads: $forbidden") }
+}
+foreach ($preset in $declaredPresets.Keys) {
+    if ([regex]::Matches($main, '"' + [regex]::Escape($preset) + '"').Count -ne 1) { $failures.Add("preset must appear exactly once in Lua manifest: $preset") }
+}
+$manifestPresets = [regex]::Matches($main, '"(aer_(?:pole|darkscape|deadcity)_(?:frequent|rare|superrare)_[^"]+)"') | ForEach-Object { $_.Groups[1].Value }
+foreach ($preset in $manifestPresets) {
+    if (-not $declaredPresets.ContainsKey($preset)) { $failures.Add("Lua manifest references missing exact squad: $preset") }
+}
+if (@($manifestPresets).Count -ne 57) { $failures.Add("Lua manifest must contain 57 exact presets, found $(@($manifestPresets).Count)") }
 foreach ($needle in @('show_exact_artifact_markers = false','show_exact_loot_markers = false','show_exact_enemy_markers = false')) {
     if (-not $ltx.Contains($needle)) { $failures.Add("casual exact marker default missing: $needle") }
 }
@@ -223,6 +267,10 @@ if ($BuildModsRoot) {
         foreach ($section in 1..17 | ForEach-Object { "raid_small_stash_$_" }) {
             & rg -q --glob '*.ltx' "^\[$section\]" $BuildModsRoot
             if ($LASTEXITCODE -ne 0) { $failures.Add("loot visual section not found in build: $section") }
+        }
+        foreach ($section in $configuredCreatures) {
+            & rg -q --glob '*.ltx' "^\[$([regex]::Escape($section))\]" $BuildModsRoot
+            if ($LASTEXITCODE -ne 0) { $failures.Add("exact squad creature section not found in build: $section") }
         }
         & rg -q --glob '*.xml' '<paw_stash_red>' $BuildModsRoot
         if ($LASTEXITCODE -ne 0) { $failures.Add('PAW red stash map spot not found in build: paw_stash_red') }
