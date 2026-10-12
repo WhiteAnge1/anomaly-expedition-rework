@@ -5,7 +5,8 @@
 | Источник артефакта | Область только после `captured raid artifact` | Сопоставить ID в логе |
 | Смещение | Артефакт внутри круга, не в центре | `center`, `radius`, `linked` |
 | Внешний вид | `artifact/enemy/loot/empty` неразличимы | `debug_force_decoy_type` |
-| Плотность Поляны | Все настоящие области + не более одной ложной | `decoy plan ... cap=1` |
+| Число ложных зон | Поляна: 1; Лощина: равномерно 2/3/4; Мёртвый город: 1/2/3 = 20/60/20 | `decoy plan ... false=...` и серия рейдов |
+| Тип ложной зоны | Enemy/loot/empty = 50/25/25; при ошибке исходный тип не заменяется | `decoy result ... type_preserved=true`, при ошибке один `ERROR` |
 | PAW | Контекстное меню не предлагает переход; маршрут указывает на центр-якорь | Сравнить с `center` в логе |
 | Debug tooltip | Обычный текст сохранён; добавлены kind/anchor/radius/linked | Сравнить все четыре kind |
 | Казуальные exact-маркеры | Каждый `show_exact_*` независимо показывает только выбранную категорию без kind/ID/координат и без включения census/лога | По очереди включить artifact/loot/enemy при `debug_mode=off`, затем все выключить |
@@ -16,8 +17,11 @@
 | Exact artifact marker | Debug-on: зелёный `paw_stash_green` следует exact linked ID; при debug-off исчезает только если `show_exact_artifact_markers=false`; при close исчезает всегда | Debug-tooltip содержит `kind/artifact_id/section/name/position/parent`, пользовательский — ничего из этого |
 | Засада | Одна зона создаёт один полный `online_offline_group` из точного preset; частичный состав откатывается. Start-каскад: `inside_clear → inside_anomaly_allowed → outside_anomaly_allowed`. Darkscape: `inside_hidden_clear → inside_hidden_anomaly_allowed → outside_hidden_anomaly_allowed → outside_visible_last_resort` | `ambush preset selected`, отдельные `cascade begin/exhausted`, затем ровно один `cascade success` и `ambush squad created` с tier/preset/squad_id/member IDs |
 | Enemy debug marker | Одна красная точка только на живом `squad:commander_id()` нашего отряда; после смерти командира старая снимается и та же метка появляется на новом | `ambush marker detached/attached`; штатные RVM без точек |
-| Контейнер | Видимая модель открывается; ordinary target 1–6, при исчерпании low pool допустимо меньше, rare независим | `target/created/ordinary/valuable_quota/actual/sections/rare`, затем `reason=container_opened` |
-| Valuable quota T1 | Quota 0/1/2/3: 65/31.5/3.4475/0.0525%; actual никогда не выше quota | `tools\test_loot_policy.ps1`, затем серия полевых логов |
+| Геометрия контейнера | Ящик внутри круга, расстояние ящик→центр не выше `radius/3`, без отдельного 20-метрового cap | Debug-строка `loot center accepted ... offset=... max=...` |
+| Контейнер | Этапы medicine→valuable→ordinary→rare; cap T1/T2/T3 = 6/7/8 плюс независимый rare; ordinary всегда хотя бы 1 | `loot result ... medicine/valuable/ordinary_rolls/rare`, затем `reason=container_opened` |
+| Medicine | Два последовательных броска; распределения 0/1/2: T1 9/66.5/24.5%, T2 4.84/64.74/30.42%, T3 2.25/61.625/36.125% | `tools\test_loot_policy.ps1` |
+| Valuable quota | Quota 0/1/2/3: 65/31.5/3.4475/0.0525%; без повторов, кроме T3 `lead_box` | Симуляция и debug details |
+| Ordinary/осколки | Повторы допустимы; осколок за бросок имеет количество T1 1..3, T2 2..5, T3 3..7 | Симуляция частоты/количества и осмотр box |
 | Точный loot-marker | Обычная красная иконка тайника PAW стоит на visual/box и исчезает при открытии | ID/координаты/contents в tooltip |
 | Enemy ownership | До активации `armed`, после — один squad ID и точный section#ID каждого члена | `ambush squad created ... owned_by_rework=true` |
 | Census | Стартовый снимок и новый снимок после появления raid squad | `census begin/end`, `rvm_squad_added=` |

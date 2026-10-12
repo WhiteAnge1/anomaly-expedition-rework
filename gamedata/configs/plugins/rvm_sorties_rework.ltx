@@ -17,15 +17,11 @@ enable_enemy_decoys = true
 enable_loot_decoys = true
 enable_empty_decoys = true
 
-; Целевые статистические веса. После отключения типов автоматически нормализуются.
-weight_artifact = 60
-weight_enemy = 20
-weight_loot = 10
-weight_empty = 10
-
-; Максимум ложных областей на вылазку. -1 отключает ограничение.
-; Может переопределяться для тира или конкретной локации.
-max_false_zones = -1
+; Относительные веса ложных областей: 50% опасная, 25% добыча, 25% пустая.
+; После отключения типов оставшиеся веса автоматически нормализуются.
+weight_enemy = 50
+weight_loot = 25
+weight_empty = 25
 
 ; Видимые модели контейнеров используют штатную систему малых тайников сборки.
 loot_container_visuals = raid_small_stash_1, raid_small_stash_2, raid_small_stash_3, raid_small_stash_4, raid_small_stash_5, raid_small_stash_6, raid_small_stash_7, raid_small_stash_8, raid_small_stash_9, raid_small_stash_10, raid_small_stash_11, raid_small_stash_12, raid_small_stash_13, raid_small_stash_14, raid_small_stash_15, raid_small_stash_16, raid_small_stash_17
@@ -44,6 +40,9 @@ placement_attempts = 60
 
 ; Радиус запрета опасной области вокруг фактической стартовой позиции игрока.
 ambush_start_exclusion_radius = 180
+; Для start-засад центр области сначала ищется не ближе этого расстояния.
+; Если геометрия уровня не позволяет, поиск ослабляется до enemy_spawn_distance_min.
+ambush_start_center_exclusion_radius = 120
 ; Запас между стартовой позицией и фактическим порогом активации опасной области.
 ambush_start_trigger_margin = 20
 ; Засада активируется заранее; фактический порог = радиус области + это значение.
@@ -75,12 +74,11 @@ enemy_category_weight_superrare = 1
 ; Если созданные существа исчезли из A-Life, область считается разрешённой.
 enemy_missing_resolves = true
 
-; Контейнер: число различных предметов и шанс обязательного медицинского броска.
-loot_distinct_min = 1
-loot_distinct_max = 6
-medicine_chance = 75
+; Обычный этап всегда делает хотя бы один бросок. Повторы разрешены.
+loot_ordinary = flashlight_broken, itm_sleepbag, gloves, ecolog_patch, csky_patch, headlamp, walkie, broken_detector, compression_bag, bolt, bolts_pack, hand_watch, item_raid_art_fragment_gravi, item_raid_art_fragment_electro, item_raid_art_fragment_chem, item_raid_art_fragment_thermo
+loot_fragments = item_raid_art_fragment_gravi, item_raid_art_fragment_electro, item_raid_art_fragment_chem, item_raid_art_fragment_thermo
 ; Цепочка квоты дорогих предметов: 35% хотя бы один, затем 10% второй,
-; затем 1.5% третий. Фактическое число дополнительно ограничено target/pool.
+; затем 1.5% третий. Повторы запрещены, кроме lead_box на тире 3.
 valuable_first_chance = 35
 valuable_second_chance = 10
 valuable_third_chance = 1.5
@@ -122,10 +120,14 @@ map_spot = rvm_search_small
 zone_radius_min = 60
 zone_radius_max = 100
 medicine_chance = 70
-loot_medicine = medkit_army, medkit, antirad, stimpack
-loot_utility = detector_simple, itm_ammokit, itm_sleepbag
-loot_modules = af_iam, lead_box
-loot_valuable = itm_ammokit, af_iam, lead_box
+loot_cap = 6
+loot_medicine = medkit_army, medkit, antirad, stimpack, caffeine
+loot_medicine_half_weight = medkit_army
+loot_valuable = af_iam, lead_box, detector_simple, detector_advanced, af_cooler, af_freon, af_camelbak, af_frames, af_grid, af_surge, device_torch
+loot_ordinary_nonfragment_weight = 1
+loot_hand_watch_weight = 0.5
+loot_fragment_quantity_min = 1
+loot_fragment_quantity_max = 3
 loot_rare_non_artifact = raid_intelligence_note
 
 [tier_2]
@@ -133,10 +135,14 @@ map_spot = rvm_search_medium
 zone_radius_min = 110
 zone_radius_max = 180
 medicine_chance = 78
-loot_medicine = medkit_army, medkit_scientic, antirad, stimpack_army
-loot_utility = detector_advanced, itm_ammokit, itm_advancedkit
-loot_modules = af_iam, af_aac, lead_box
-loot_valuable = detector_advanced, itm_ammokit, itm_advancedkit, af_iam, af_aac, lead_box
+loot_cap = 7
+loot_medicine = medkit_army, medkit_scientic, antirad, stimpack_army, drug_booster
+loot_medicine_half_weight = medkit_scientic
+loot_valuable = detector_advanced, detector_elite, af_iam, af_aac, lead_box, af_grid_up, af_freon_up, af_cooler_up, af_camelbak_up, af_frames_up, device_torch_nv_1, device_torch_nv_2
+loot_ordinary_nonfragment_weight = 0.75
+loot_hand_watch_weight = 0.375
+loot_fragment_quantity_min = 2
+loot_fragment_quantity_max = 5
 loot_rare_non_artifact = raid_intelligence_note
 
 [tier_3]
@@ -144,10 +150,14 @@ map_spot = rvm_search_large
 zone_radius_min = 140
 zone_radius_max = 230
 medicine_chance = 85
-loot_medicine = medkit_scientic, medkit_army, antirad, stimpack_scientic
-loot_utility = detector_elite, detector_scientific, itm_ammokit, itm_expertkit
-loot_modules = af_iam, af_aac, af_aam, lead_box
-loot_valuable = detector_elite, detector_scientific, itm_ammokit, itm_expertkit, af_iam, af_aac, af_aam, lead_box
+loot_cap = 8
+loot_medicine = medkit_scientic, medkit_army, antirad, stimpack_scientic, stimpack_army, adrenalin
+loot_medicine_half_weight = adrenalin
+loot_valuable = detector_elite, detector_scientific, lead_box, af_aac, af_aam, device_torch_nv_3
+loot_ordinary_nonfragment_weight = 0.5
+loot_hand_watch_weight = 0.25
+loot_fragment_quantity_min = 3
+loot_fragment_quantity_max = 7
 loot_rare_non_artifact = raid_intelligence_note
 
 ; Поляна — фактический идентификатор y04_pole, тир 1.
@@ -156,7 +166,6 @@ tier = 1
 ambush_spawn_timing = start
 zone_radius_min = 55
 zone_radius_max = 85
-max_false_zones = 1
 ; Open terrain: keep the ambush farther away while still requiring it outside view.
 enemy_spawn_distance_min = 90
 enemy_spawn_distance_max = 150

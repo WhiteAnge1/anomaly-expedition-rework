@@ -29,7 +29,7 @@ foreach ($relative in $required) {
 
 # Windows PowerShell 5.1 treats BOM-less UTF-8 scripts as the active ANSI code
 # page. Both scripts contain Cyrillic text, so the BOM is a runtime requirement.
-foreach ($relative in @('tools\static_check.ps1','tools\watch_live_log.ps1')) {
+foreach ($relative in @('tools\static_check.ps1','tools\watch_live_log.ps1','tools\test_loot_policy.ps1')) {
     $toolPath = Join-Path $ModRoot $relative
     if (Test-Path -LiteralPath $toolPath) {
         $bytes = [IO.File]::ReadAllBytes($toolPath)
@@ -62,7 +62,7 @@ foreach ($needle in @('raid_anomalys.spawn_artefact_in_zone','actor_on_item_take
 foreach ($needle in @('raid_artefacts_tiers_by_dop','raid_artefacts.addToQueuedArtefacts','{ 1, 2, 3, 4, 5 }','{ 5, 6 }','{ 6, 7 }')) {
     if (-not $main.Contains($needle)) { $failures.Add("artifact integration missing: $needle") }
 }
-foreach ($needle in @('generate_scripted_mapspot_at','set_pingspot_persistence','deregister_script_zone','visual_id','max_false_zones','decoy plan','pending_transition','confirmed_level_change','safe_remove_map_spot')) {
+foreach ($needle in @('generate_scripted_mapspot_at','set_pingspot_persistence','deregister_script_zone','visual_id','decoy plan','pending_transition','confirmed_level_change','safe_remove_map_spot')) {
     if (-not $main.Contains($needle)) { $failures.Add("test-fix integration missing: $needle") }
 }
 foreach ($needle in @('DEV_DEBUG','DEV_DEBUG_DEV','rvm_rework_debug','rvm_rework_census','population_census','owned_by_rework','spawned_info','SendOutput','paw_stash_red')) {
@@ -119,9 +119,13 @@ foreach ($needle in @(
 }
 if ($main.Contains('crlc_squad_red')) { $failures.Add('quest-pointer crlc_squad_red must not be used for enemy debug markers') }
 if ($main.Contains('census skipped: diagnostics disabled')) { $failures.Add('debug-off/casual markers must not emit census diagnostics') }
-foreach ($needle in @('roll_valuable_quota','percent_roll','valuable_first_chance','valuable_second_chance','valuable_third_chance','valuable_actual','loot_valuable')) {
+foreach ($needle in @('roll_valuable_quota','percent_roll','weighted_section','valuable_first_chance','valuable_second_chance','valuable_third_chance','loot_valuable','loot_ordinary','loot_fragments','loot_cap','medicine_rolls','ordinary_capacity','rare_artifact_chance')) {
     if (-not $main.Contains($needle)) { $failures.Add("loot quality policy missing: $needle") }
 }
+foreach ($needle in @('math.random(2, 4)','roll <= 20 and 1 or roll <= 80 and 2 or 3','type preserved, no replacement created','local max_offset = math.max(0, radius / 3)','actual_offset <= max_offset','ambush_start_center_exclusion_radius')) {
+    if (-not $main.Contains($needle)) { $failures.Add("zone policy missing: $needle") }
+}
+if ($main -match 'create_decoy\([^\)]*\)[\s\S]{0,300}create_decoy\(') { $failures.Add('failed decoy type must not be rerolled or replaced') }
 if ($main -match 'member:alive\s*\(') { $failures.Add('unsafe squad iterator member:alive() call detected') }
 if ($main -match 'function on_before_level_changing\(\)[\s\S]{0,250}cleanup\(') { $failures.Add('before-level-change must defer cleanup until the destination level is known') }
 if ($main -match 'drx_da_main\.spawn_artefact_on_smart\s*=') { $failures.Add('Arrival spawn function must not be wrapped') }
@@ -143,13 +147,18 @@ foreach ($section in $ambushProfiles.Keys) {
         if (-not $sectionMatch.Value.Contains($needle)) { $failures.Add("ambush profile $section missing: $needle") }
     }
 }
-foreach ($needle in @('stash_mode = scouting','weight_artifact = 60','remove_on_npc_pickup = false','valuable_first_chance = 35','valuable_second_chance = 10','valuable_third_chance = 1.5','loot_valuable = itm_ammokit, af_iam, lead_box','loot_valuable = detector_advanced, itm_ammokit, itm_advancedkit, af_iam, af_aac, lead_box','loot_valuable = detector_elite, detector_scientific, itm_ammokit, itm_expertkit, af_iam, af_aac, af_aam, lead_box','rare_artifact_chance = 70','loot_rare_non_artifact = raid_intelligence_note','loot_container_visuals = raid_small_stash_1','map_spot = rvm_search_small','max_false_zones = 1','debug_mode = auto','debug_log = false','[level_y04_pole]','[level_k01_darkscape]','[level_l09_deadcity]')) {
+foreach ($needle in @('stash_mode = scouting','weight_enemy = 50','weight_loot = 25','weight_empty = 25','remove_on_npc_pickup = false','ambush_start_center_exclusion_radius = 120','valuable_first_chance = 35','valuable_second_chance = 10','valuable_third_chance = 1.5','loot_cap = 6','loot_cap = 7','loot_cap = 8','loot_medicine_half_weight = medkit_army','loot_medicine_half_weight = medkit_scientic','loot_medicine_half_weight = adrenalin','loot_valuable = af_iam, lead_box, detector_simple, detector_advanced, af_cooler, af_freon, af_camelbak, af_frames, af_grid, af_surge, device_torch','loot_valuable = detector_advanced, detector_elite, af_iam, af_aac, lead_box, af_grid_up, af_freon_up, af_cooler_up, af_camelbak_up, af_frames_up, device_torch_nv_1, device_torch_nv_2','loot_valuable = detector_elite, detector_scientific, lead_box, af_aac, af_aam, device_torch_nv_3','rare_artifact_chance = 70','loot_rare_non_artifact = raid_intelligence_note','loot_container_visuals = raid_small_stash_1','map_spot = rvm_search_small','debug_mode = auto','debug_log = false','[level_y04_pole]','[level_k01_darkscape]','[level_l09_deadcity]')) {
     if (-not $ltx.Contains($needle)) { $failures.Add("config invariant missing: $needle") }
 }
 foreach ($needle in @('ambush_spawn_timing = proximity','ambush_start_trigger_margin = 20','ambush_start_zone_margin = 8','ambush_outside_zone_padding = 25','ambush_anomaly_clearance = 15','ambush_unknown_anomaly_radius = 20','ambush_retry_delay_ms = 10000','enemy_category_weight_frequent = 4','enemy_category_weight_rare = 2','enemy_category_weight_superrare = 1')) {
     if (-not $ltx.Contains($needle)) { $failures.Add("ambush config invariant missing: $needle") }
 }
 if ($ltx -match '(?m)^enemy_(?:sections|count_min|count_max)\s*=') { $failures.Add('obsolete independent enemy pools/counts must not remain in config') }
+foreach ($forbidden in @('itm_ammokit','itm_advancedkit','itm_expertkit')) {
+    if ($ltx -match "(?m)^loot_(?:valuable|rare_non_artifact)\s*=.*\b$forbidden\b") { $failures.Add("forbidden tool in valuable/rare pool: $forbidden") }
+}
+if ($ltx -match '(?m)^loot_rare_non_artifact\s*=.*\bdevice_torch\b') { $failures.Add('device_torch must not be in the rare pool') }
+if ($ltx -match '(?m)^max_false_zones\s*=') { $failures.Add('obsolete max_false_zones must not control per-level false counts') }
 
 $squadLtx = Get-Content -LiteralPath (Join-Path $ModRoot 'gamedata\configs\mod_system_rvm_sorties_squads.ltx') -Raw
 $squadSections = [regex]::Matches($squadLtx, '(?ms)^\[(aer_(?:pole|darkscape|deadcity)_(?:frequent|rare|superrare)_[^\]]+)\]:online_offline_group\s*(.*?)(?=^\[|\z)')
@@ -243,10 +252,11 @@ foreach ($needle in @('rvm_search_small','rvm_search_medium','rvm_search_large',
     if (-not $fragment.Contains($needle)) { $failures.Add("map spot invariant missing: $needle") }
 }
 $watcher = Get-Content -LiteralPath (Join-Path $ModRoot 'tools\watch_live_log.ps1') -Raw
-foreach ($needle in @('CreationTimeUtc.Ticks','FileShare]::Delete','Log recreated or truncated','Start-Sleep -Milliseconds 250')) {
+foreach ($needle in @('CreationTimeUtc.Ticks','FileShare]::Delete','Log recreated or truncated','Start-Sleep -Milliseconds 250','Read-AppendedLines','[switch]$SelfTest','partial line was not completed')) {
     if (-not $watcher.Contains($needle)) { $failures.Add("live log reopen support missing: $needle") }
 }
 if ($watcher.Contains('Get-Content -LiteralPath $LogPath -Wait')) { $failures.Add('live log watcher must not retain the old file handle with Get-Content -Wait') }
+if ($watcher.Contains('New-Object IO.StreamReader')) { $failures.Add('live log watcher must read appended bytes directly, not buffer behind StreamReader') }
 $configReference = Get-Content -LiteralPath (Join-Path $ModRoot 'docs\CONFIG.md') -Raw -Encoding UTF8
 foreach ($needle in @('Необязательный казуальный режим точных меток','show_exact_artifact_markers','show_exact_loot_markers','show_exact_enemy_markers','enemy_spawn_distance_min/max','90..150','120..170','80..120','система аномалий Arrival')) {
     if (-not $configReference.Contains($needle)) { $failures.Add("config reference missing: $needle") }
@@ -255,7 +265,7 @@ foreach ($needle in @('Необязательный казуальный реж�
 if ($BuildModsRoot) {
     if (-not (Test-Path -LiteralPath $BuildModsRoot)) { $failures.Add("build mods root missing: $BuildModsRoot") }
     else {
-        $lootSections = [regex]::Matches($ltx, '(?m)^loot_(?:medicine|utility|modules|valuable|rare_non_artifact)\s*=\s*([^;\r\n]+)') |
+        $lootSections = [regex]::Matches($ltx, '(?m)^loot_(?:medicine|ordinary|fragments|valuable|rare_non_artifact)\s*=\s*([^;\r\n]+)') |
             ForEach-Object { $_.Groups[1].Value -split ',' } |
             ForEach-Object { $_.Trim() } |
             Where-Object { $_ } |
@@ -291,6 +301,7 @@ if ($BuildModsRoot) {
     }
 }
 
+& (Join-Path $ModRoot 'tools\watch_live_log.ps1') -SelfTest
 & (Join-Path $ModRoot 'tools\test_loot_policy.ps1') -Samples 200000
 
 if ($PythonDeps) {

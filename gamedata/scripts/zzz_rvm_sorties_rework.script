@@ -135,7 +135,18 @@ local function enemy_exact_marker_enabled()
 end
 
 local function log(fmt, ...)
-    if debug_enabled() then printf(PREFIX .. " " .. fmt, ...) end
+    if debug_enabled() or string.sub(tostring(fmt), 1, 5) == "ERROR" then
+        printf(PREFIX .. " " .. fmt, ...)
+    end
+end
+
+local SUPPORTED_LEVELS = { y04_pole = true, k01_darkscape = true, l09_deadcity = true }
+
+local function release_log(fmt, ...)
+    if state and state.level_name and SUPPORTED_LEVELS[state.level_name]
+    and (state.sortie_type == "infected" or state.sortie_type == "scouting") then
+        printf(PREFIX .. " " .. fmt, ...)
+    end
 end
 
 local function pos_table(pos)
@@ -782,6 +793,8 @@ local function close_zone(zone, reason)
     release_anchor(zone)
     zone.closed = true
     state.counters.closed = (state.counters.closed or 0) + 1
+    release_log("zone closed type=%s reason=%s progress=%s/%s",
+        tostring(zone.kind), tostring(reason), tostring(state.counters.closed), tostring(state.counters.created))
     log("close type=%s anchor=%s reason=%s closed=%s/%s",
         tostring(zone.kind), tostring(zone.anchor_id), tostring(reason),
         tostring(state.counters.closed), tostring(state.counters.created))
@@ -800,6 +813,10 @@ local function cleanup_stashes()
 end
 
 function cleanup(reason)
+    release_log("cleanup reason=%s zones=%s closed=%s artifact=%s enemy=%s loot=%s empty=%s",
+        tostring(reason), tostring(size_table(state.zones or {})), tostring(state.counters.closed or 0),
+        tostring(state.counters.artifact or 0), tostring(state.counters.enemy or 0),
+        tostring(state.counters.loot or 0), tostring(state.counters.empty or 0))
     log("cleanup reason=%s level=%s zones=%s", tostring(reason), tostring(state.level_name), tostring(size_table(state.zones or {})))
     for _, zone in pairs(state.zones or {}) do
         remove_spot(zone)
@@ -856,6 +873,7 @@ local function add_zone(kind, anchor_id, center, radius, extra)
     state.counters.created = state.counters.created + 1
     state.counters[kind] = (state.counters[kind] or 0) + 1
     add_zone_spots(zone)
+    release_log("zone created type=%s total=%s", tostring(kind), tostring(state.counters.created))
     log("create type=%s center=(%s, %s, %s) radius=%s anchor=%s linked=%s",
         kind, fmt_number(center.x), fmt_number(center.y), fmt_number(center.z), fmt_number(radius), tostring(anchor_id),
         tostring(zone.artifact_id or zone.content_id or "none"))
@@ -906,27 +924,50 @@ end
 
 local function random_decoy_anchor(kind, radius)
     local attempts = math.floor(C.get_number("global", "placement_attempts", 60))
-    for _ = 1, attempts do
-        local id = raid_objects_arranger.spawn_object_rand_point("raid_shelter_gag", level.name(), -1)
-        local obj = id and alife_object(id)
-        if obj then
-            local valid = separated(obj.position)
-            if kind == "enemy" and state.start_pos then
-                local armed_distance = (radius or 0) + balanced("ambush_trigger_padding", 130)
-                    + balanced("ambush_start_trigger_margin", 20)
-                local start_exclusion = math.max(balanced("ambush_start_exclusion_radius", 180), armed_distance)
-                valid = valid and distance_xz(obj.position, state.start_pos) >= start_exclusion
-            end
-            if valid then
-                local position = pos_table(obj.position)
-                raid_objects_arranger.release_raid_objects(id)
-                local anchor_id, center, paw_anchor = create_anchor(pos_vector(position))
-                if anchor_id then return anchor_id, center, paw_anchor end
-            end
-            if alife_object(id) then raid_objects_arranger.release_raid_objects(id) end
+    local timing = kind == "enemy" and string.lower(balanced_string("ambush_spawn_timing", "proximity")) or "none"
+    local stages = { { name = "default", minimum = 0 } }
+    if kind == "enemy" and state.start_pos then
+        if timing == "start" then
+            stages = {
+                { name = "start_center_preferred", minimum = balanced("ambush_start_center_exclusion_radius", 120) },
+                { name = "start_center_relaxed", minimum = math.max(0, balanced("enemy_spawn_distance_min", 80)) },
+            }
+        else
+            local armed_distance = (radius or 0) + balanced("ambush_trigger_padding", 130)
+                + balanced("ambush_start_trigger_margin", 20)
+            stages = { { name = "proximity_center", minimum = math.max(balanced("ambush_start_exclusion_radius", 180), armed_distance) } }
         end
     end
-    return nil, nil
+    for stage_index, stage in ipairs(stages) do
+        local rejected_separation, rejected_start = 0, 0
+        for _ = 1, attempts do
+            local id = raid_objects_arranger.spawn_object_rand_point("raid_shelter_gag", level.name(), -1)
+            local obj = id and alife_object(id)
+            if obj then
+                local valid = separated(obj.position)
+                if not valid then rejected_separation = rejected_separation + 1 end
+                if valid and state.start_pos and stage.minimum > 0 and distance_xz(obj.position, state.start_pos) < stage.minimum then
+                    valid = false
+                    rejected_start = rejected_start + 1
+                end
+                if valid then
+                    local position = pos_table(obj.position)
+                    raid_objects_arranger.release_raid_objects(id)
+                    local anchor_id, center, paw_anchor = create_anchor(pos_vector(position))
+                    if anchor_id then
+                        log("decoy center success kind=%s stage=%s/%s name=%s minimum_start=%s center=(%s)",
+                            tostring(kind), tostring(stage_index), tostring(#stages), tostring(stage.name), fmt_number(stage.minimum), fmt_position(center))
+                        return anchor_id, center, paw_anchor, stage.name
+                    end
+                end
+                if alife_object(id) then raid_objects_arranger.release_raid_objects(id) end
+            end
+        end
+        log("decoy center exhausted kind=%s stage=%s/%s name=%s attempts=%s reject=separation:%s,start:%s",
+            tostring(kind), tostring(stage_index), tostring(#stages), tostring(stage.name), tostring(attempts),
+            tostring(rejected_separation), tostring(rejected_start))
+    end
+    return nil, nil, nil, "all_center_stages_exhausted"
 end
 
 local function valid_sections(list)
@@ -1016,90 +1057,132 @@ local function roll_valuable_quota()
     return 3
 end
 
+local function weighted_section(pool, weight_for)
+    local total = 0
+    local entries = {}
+    for _, section in ipairs(pool or {}) do
+        local weight = math.max(0, tonumber(weight_for(section)) or 0)
+        if weight > 0 then
+            total = total + weight
+            entries[#entries + 1] = { section = section, cumulative = total }
+        end
+    end
+    if total <= 0 then return nil end
+    local roll = math.random() * total
+    for _, entry in ipairs(entries) do
+        if roll < entry.cumulative then return entry.section end
+    end
+    return entries[#entries] and entries[#entries].section or nil
+end
+
 local function fill_loot(box_id)
     local box = alife_object(box_id)
     if not box then return 0 end
-    local target_min = math.max(1, math.floor(balanced("loot_distinct_min", 1)))
-    local target_max = math.max(target_min, math.floor(balanced("loot_distinct_max", 6)))
-    local target = math.random(target_min, target_max)
-    local used, picked = {}, {}
-
+    local tier = current_tier()
+    local cap = math.max(1, math.floor(balanced("loot_cap", tier == 1 and 6 or tier == 2 and 7 or 8)))
     local medicine = valid_sections(balanced_list("loot_medicine"))
-    local utility = valid_sections(balanced_list("loot_utility"))
-    local modules = valid_sections(balanced_list("loot_modules"))
     local valuable = valid_sections(balanced_list("loot_valuable"))
-    local valuable_set = {}
-    for _, section in ipairs(valuable) do valuable_set[section] = true end
-    local low_value = {}
-    append_distinct(low_value, medicine, valuable_set)
-    append_distinct(low_value, utility, valuable_set)
-    append_distinct(low_value, modules, valuable_set)
+    local ordinary = valid_sections(balanced_list("loot_ordinary"))
+    local fragments = {}
+    for _, section in ipairs(valid_sections(balanced_list("loot_fragments"))) do fragments[section] = true end
+    local entries = {}
+    local medicine_sections = {}
+    local valuable_sections = {}
+    local ordinary_rolls = {}
 
-    if percent_roll(balanced("medicine_chance", 75)) then
-        local med = choose_distinct(medicine, used)
-        if med then used[med] = true; picked[#picked + 1] = med end
+    local medicine_chance = balanced("medicine_chance", 75)
+    local medicine_half = balanced_string("loot_medicine_half_weight", "")
+    local first_medicine_success = percent_roll(medicine_chance)
+    local medicine_rolls = {
+        { chance = medicine_chance, success = first_medicine_success },
+        { chance = first_medicine_success and medicine_chance / 2 or medicine_chance },
+    }
+    medicine_rolls[2].success = percent_roll(medicine_rolls[2].chance)
+    for roll_index, roll in ipairs(medicine_rolls) do
+        local selected_section = nil
+        if roll.success then
+            selected_section = weighted_section(medicine, function(candidate)
+                return candidate == medicine_half and 0.5 or 1
+            end)
+            if selected_section then
+                entries[#entries + 1] = { section = selected_section, quantity = 1, stage = "medicine" }
+                medicine_sections[#medicine_sections + 1] = selected_section
+            end
+        end
+        log("loot medicine roll box=%s roll=%s chance=%s success=%s section=%s",
+            tostring(box_id), tostring(roll_index), fmt_number(roll.chance), tostring(roll.success),
+            tostring(selected_section or "none"))
     end
 
     local valuable_quota = roll_valuable_quota()
-    local valuable_sections = {}
-    while #valuable_sections < valuable_quota and #picked < target do
-        local section = choose_distinct(valuable, used)
+    local valuable_used = {}
+    while #valuable_sections < valuable_quota do
+        local candidates = {}
+        for _, section in ipairs(valuable) do
+            if not valuable_used[section] then candidates[#candidates + 1] = section end
+        end
+        local section = #candidates > 0 and candidates[math.random(1, #candidates)] or nil
         if not section then break end
-        used[section] = true
-        picked[#picked + 1] = section
+        if not (tier == 3 and section == "lead_box") then valuable_used[section] = true end
+        entries[#entries + 1] = { section = section, quantity = 1, stage = "valuable" }
         valuable_sections[#valuable_sections + 1] = section
     end
 
-    while #picked < target do
-        local section = choose_distinct(low_value, used)
-        if not section then break end
-        used[section] = true
-        picked[#picked + 1] = section
-    end
-
-    if #picked == 0 then
-        local fallback = choose_distinct(low_value, used)
-        if fallback then
-            used[fallback] = true
-            picked[1] = fallback
+    local ordinary_capacity = math.max(1, cap - #medicine_sections - #valuable_sections)
+    local ordinary_count = math.random(1, ordinary_capacity)
+    local fragment_min = math.max(1, math.floor(balanced("loot_fragment_quantity_min", tier == 1 and 1 or tier == 2 and 2 or 3)))
+    local fragment_max = math.max(fragment_min, math.floor(balanced("loot_fragment_quantity_max", tier == 1 and 3 or tier == 2 and 5 or 7)))
+    local nonfragment_weight = balanced("loot_ordinary_nonfragment_weight", tier == 1 and 1 or tier == 2 and 0.75 or 0.5)
+    local watch_weight = balanced("loot_hand_watch_weight", nonfragment_weight / 2)
+    for roll_index = 1, ordinary_count do
+        local section = weighted_section(ordinary, function(candidate)
+            if fragments[candidate] then return 1 end
+            if candidate == "hand_watch" then return watch_weight end
+            return nonfragment_weight
+        end)
+        if section then
+            local quantity = fragments[section] and math.random(fragment_min, fragment_max) or 1
+            entries[#entries + 1] = { section = section, quantity = quantity, stage = "ordinary" }
+            ordinary_rolls[#ordinary_rolls + 1] = section .. "*" .. tostring(quantity)
         end
     end
+
     local rare_artifact = nil
     local rare_non_artifact = nil
     local rare_reward = nil
-    if math.random(1, 100) <= balanced("rare_slot_chance", 4) then
-        local artifact_roll = math.random(1, 100) <= balanced("rare_artifact_chance", 70)
+    if percent_roll(balanced("rare_slot_chance", 4)) then
+        local artifact_roll = percent_roll(balanced("rare_artifact_chance", 70))
         if artifact_roll then
-            local pool = artifact_pool_for_tier(current_tier())
+            local pool = artifact_pool_for_tier(tier)
             if #pool > 0 then rare_artifact = pool[math.random(1, #pool)] end
-        end
-        if not rare_artifact then
-            local rare = choose_distinct(balanced_list("loot_rare_non_artifact"), used)
+        else
+            local rare = choose_distinct(balanced_list("loot_rare_non_artifact"), {})
             if rare then
-                used[rare] = true
                 rare_non_artifact = rare
                 rare_reward = rare
             end
         end
     end
 
-    local created_sections = {}
-    local created_valuable_sections = {}
-    for _, section in ipairs(picked) do
-        local item = alife_create_item(section, box)
-        if item then
-            created_sections[#created_sections + 1] = section
-            if valuable_set[section] then created_valuable_sections[#created_valuable_sections + 1] = section end
-        else
-            log("ERROR loot item spawn failed: box=%s section=%s", tostring(box_id), tostring(section))
+    local created_entries = {}
+    local physical_items = 0
+    for _, entry in ipairs(entries) do
+        local created_quantity = 0
+        for _ = 1, entry.quantity do
+            local item = alife_create_item(entry.section, box)
+            if item then created_quantity = created_quantity + 1; physical_items = physical_items + 1
+            else log("ERROR loot item spawn failed: box=%s section=%s", tostring(box_id), tostring(entry.section)) end
+        end
+        if created_quantity > 0 then
+            created_entries[#created_entries + 1] = entry.section .. (created_quantity > 1 and ("*" .. tostring(created_quantity)) or "")
         end
     end
     if rare_artifact then
         local item = alife_create_item(rare_artifact, box)
         if item then
             if queue_rvm_artifact(item, rare_artifact) then
-                used[rare_artifact] = true
                 rare_reward = rare_artifact
+                physical_items = physical_items + 1
             else
                 rare_artifact = nil
             end
@@ -1110,19 +1193,50 @@ local function fill_loot(box_id)
     elseif rare_non_artifact then
         local item = alife_create_item(rare_non_artifact, box)
         if item then
-            created_sections[#created_sections + 1] = rare_non_artifact
+            physical_items = physical_items + 1
         else
             log("ERROR rare reward spawn failed: box=%s section=%s", tostring(box_id), tostring(rare_non_artifact))
             rare_reward = nil
         end
     end
-    if rare_artifact then created_sections[#created_sections + 1] = rare_artifact end
-    local total = #created_sections
-    log("loot box=%s target=%s created=%s ordinary=%s valuable_quota=%s valuable_actual=%s valuable_sections=[%s] rare=%s rare_artifact=%s tier=%s",
-        tostring(box_id), tostring(target), tostring(total), tostring(total - (rare_reward and 1 or 0)), tostring(valuable_quota),
-        tostring(#created_valuable_sections), join_values(created_valuable_sections, ","), tostring(rare_reward),
-        tostring(rare_artifact), tostring(current_tier()))
-    return total, created_sections
+    if rare_reward then created_entries[#created_entries + 1] = rare_reward end
+    local total_entries = #created_entries
+    release_log("loot result tier=%s entries=%s/%s medicine=%s valuable=%s ordinary_rolls=%s rare=%s",
+        tostring(tier), tostring(total_entries), tostring(cap + (rare_reward and 1 or 0)),
+        tostring(#medicine_sections), tostring(#valuable_sections), tostring(#ordinary_rolls), tostring(rare_reward or "none"))
+    log("loot details box=%s medicine_rolls=[%s/%s,%s/%s] medicine=[%s] valuable_quota=%s valuable=[%s] ordinary=[%s] rare=%s entries=[%s]",
+        tostring(box_id), fmt_number(medicine_rolls[1].chance), tostring(medicine_rolls[1].success),
+        fmt_number(medicine_rolls[2].chance), tostring(medicine_rolls[2].success), join_values(medicine_sections, ","),
+        tostring(valuable_quota), join_values(valuable_sections, ","), join_values(ordinary_rolls, ","),
+        tostring(rare_reward), join_values(created_entries, ","))
+    return total_entries, created_entries
+end
+
+local function create_loot_anchor(visual_pos, radius)
+    local attempts = math.max(1, math.floor(C.get_number("global", "placement_attempts", 60)))
+    local max_offset = math.max(0, radius / 3)
+    for attempt = 1, attempts do
+        local angle = math.random() * math.pi * 2
+        local distance = math.sqrt(math.random()) * max_offset
+        local candidate = vector():set(
+            visual_pos.x + math.cos(angle) * distance,
+            visual_pos.y,
+            visual_pos.z + math.sin(angle) * distance)
+        local vertex_id = valid_vertex(candidate)
+        if vertex_id then
+            local fixed = level.vertex_position(vertex_id)
+            local actual_offset = distance_xz(fixed, visual_pos)
+            if actual_offset <= max_offset and separated(fixed) then
+                local anchor_id, center, paw_anchor = create_anchor(fixed)
+                if anchor_id then
+                    log("loot center accepted attempt=%s offset=%s max=%s", tostring(attempt),
+                        fmt_number(actual_offset), fmt_number(max_offset))
+                    return anchor_id, center, paw_anchor, actual_offset
+                end
+            end
+        end
+    end
+    return nil
 end
 
 local function create_loot_zone()
@@ -1133,21 +1247,25 @@ local function create_loot_zone()
     end
     local attempts = math.floor(C.get_number("global", "placement_attempts", 60))
     for _ = 1, attempts do
+        local radius = random_radius()
         local section = visuals[math.random(1, #visuals)]
         local visual_id, box_id = raid_objects_arranger.spawn_object_rand_point(section, level.name(), 0, true)
         local visual = visual_id and alife_object(visual_id)
-        if visual and box_id and separated(visual.position) then
-            local anchor_id, center, paw_anchor = create_anchor(visual.position)
-            local total, created_sections = fill_loot(box_id)
-            if anchor_id and total >= 1 then
-                return add_zone("loot", anchor_id, center, random_radius(), {
-                    content_id = box_id,
-                    visual_id = visual_id,
-                    visual_pos = pos_table(visual.position),
-                    loot_sections = created_sections,
-                    managed_visual = true,
-                    paw_anchor = paw_anchor,
-                }) ~= nil
+        if visual and box_id then
+            local anchor_id, center, paw_anchor, loot_offset = create_loot_anchor(visual.position, radius)
+            if anchor_id then
+                local total, created_sections = fill_loot(box_id)
+                if total >= 1 then
+                    return add_zone("loot", anchor_id, center, radius, {
+                        content_id = box_id,
+                        visual_id = visual_id,
+                        visual_pos = pos_table(visual.position),
+                        loot_offset = loot_offset,
+                        loot_sections = created_sections,
+                        managed_visual = true,
+                        paw_anchor = paw_anchor,
+                    }) ~= nil
+                end
             end
             safe_release(box_id)
             if anchor_id then release_anchor({ anchor_id = anchor_id, paw_anchor = paw_anchor }) end
@@ -1163,9 +1281,9 @@ end
 local function create_decoy(kind)
     if kind == "loot" then return create_loot_zone() end
     local radius = random_radius()
-    local anchor_id, center, paw_anchor = random_decoy_anchor(kind, radius)
+    local anchor_id, center, paw_anchor, center_stage = random_decoy_anchor(kind, radius)
     if not anchor_id then return false end
-    local zone = add_zone(kind, anchor_id, center, radius, { paw_anchor = paw_anchor })
+    local zone = add_zone(kind, anchor_id, center, radius, { paw_anchor = paw_anchor, center_stage = center_stage })
     if zone and kind == "enemy" then
         local timing = string.lower(balanced_string("ambush_spawn_timing", "proximity"))
         zone.spawn_timing = timing == "start" and "start" or "proximity"
@@ -1176,10 +1294,9 @@ end
 
 local function enabled_weights()
     local weights = {
-        artifact = math.max(0, C.get_number("global", "weight_artifact", 60)),
-        enemy = C.get_bool("global", "enable_enemy_decoys", true) and math.max(0, C.get_number("global", "weight_enemy", 20)) or 0,
-        loot = C.get_bool("global", "enable_loot_decoys", true) and math.max(0, C.get_number("global", "weight_loot", 10)) or 0,
-        empty = C.get_bool("global", "enable_empty_decoys", true) and math.max(0, C.get_number("global", "weight_empty", 10)) or 0,
+        enemy = C.get_bool("global", "enable_enemy_decoys", true) and math.max(0, C.get_number("global", "weight_enemy", 50)) or 0,
+        loot = C.get_bool("global", "enable_loot_decoys", true) and math.max(0, C.get_number("global", "weight_loot", 25)) or 0,
+        empty = C.get_bool("global", "enable_empty_decoys", true) and math.max(0, C.get_number("global", "weight_empty", 25)) or 0,
     }
     return weights
 end
@@ -1200,25 +1317,30 @@ local function create_decoys()
     state.decoys_created = true
     local true_count = state.counters.artifact or 0
     local weights = enabled_weights()
-    if true_count < 1 or weights.artifact <= 0 then return end
+    if true_count < 1 then return end
     if string.lower(C.get_string("global", "debug_force_decoy_type", "off")) == "artifact" then
         log("debug_force_decoy_type=artifact: only real artifact areas retained")
         return
     end
-    local total_weight = weights.artifact + weights.enemy + weights.loot + weights.empty
-    local exact_total = true_count * total_weight / weights.artifact
-    local total = math.floor(exact_total)
-    if math.random() < (exact_total - total) then total = total + 1 end
-    local false_count = math.max(0, total - true_count)
-    local max_false = math.floor(balanced("max_false_zones", -1))
-    if max_false >= 0 then false_count = math.min(false_count, max_false) end
-    log("decoy plan true=%s false=%s cap=%s", tostring(true_count), tostring(false_count), tostring(max_false))
-    for _ = 1, false_count do
+    local false_count = 1
+    if level.name() == "k01_darkscape" then
+        false_count = math.random(2, 4)
+    elseif level.name() == "l09_deadcity" then
+        local roll = math.random(1, 100)
+        false_count = roll <= 20 and 1 or roll <= 80 and 2 or 3
+    end
+    release_log("decoy plan level=%s true=%s false=%s type_weights=50/25/25",
+        tostring(level.name()), tostring(true_count), tostring(false_count))
+    for index = 1, false_count do
         local kind = weighted_decoy(weights)
-        if kind and not create_decoy(kind) then
-            local fallback = C.get_bool("global", "enable_loot_decoys", true) and "loot" or "empty"
-            if fallback ~= kind and not create_decoy(fallback) then create_decoy("empty") end
-            log("decoy rerolled from %s after placement failure", tostring(kind))
+        if kind then
+            local created = create_decoy(kind)
+            release_log("decoy result index=%s/%s selected=%s created=%s type_preserved=true",
+                tostring(index), tostring(false_count), tostring(kind), tostring(created))
+            if not created then
+                log("ERROR decoy creation failed level=%s index=%s/%s selected=%s; type preserved, no replacement created",
+                    tostring(level.name()), tostring(index), tostring(false_count), tostring(kind))
+            end
         end
     end
 end
@@ -1688,6 +1810,9 @@ local function trigger_ambush(zone, now, spawn_timing)
         zone.ambush_retry_at = nil
         zone.ambush_retry_actor_pos = nil
         zone.ambush_retry_view_dir = nil
+        release_log("enemy squad ready tier=%s preset=%s cascade=%s members=%s",
+            tostring(current_tier()), tostring(zone.squad_section), tostring(zone.spawn_cascade_step),
+            tostring(size_table(zone.spawned_ids)))
         log("ambush anchor=%s tier=%s category=%s preset=%s squad_id=%s spawn_timing=%s cascade=%s spawned=%s",
             tostring(zone.anchor_id), tostring(current_tier()), tostring(zone.squad_category), tostring(zone.squad_section),
             tostring(zone.squad_id), tostring(spawn_timing), tostring(zone.spawn_cascade_step), tostring(size_table(zone.spawned_ids)))
@@ -1812,14 +1937,15 @@ local function create_scouting_stash()
     if state.scouting_stash_created then return end
     state.scouting_stash_created = true
     local id, name, descr, hint = treasure_manager.get_random_stash(nil, game.translate_string("st_stash_of"), nil, nil, nil, nil, level.name())
-    if not id then log("scouting stash: no free stash found"); return end
+    if not id then log("ERROR scouting stash creation failed: no free stash found"); return end
     state.stash_ids[id] = true
     raid_tasks_main.raid_busy_stashes_t[id] = true
     if level.map_has_object_spot(id, "secondary_task_location") == 0 then
         level.map_add_object_spot_ser(id, "secondary_task_location", dynamic_news_helper.GetPointDescription(alife_object(id)))
     end
     treasure_manager.set_random_stash(nil, dynamic_news_helper.GetPointDescription(alife_object(id)), nil, id, true)
-    log("scouting stash created id=%s", tostring(id))
+    release_log("scouting stash created")
+    log("scouting stash details id=%s", tostring(id))
 end
 
 local function prepare_sortie(sortie_type)
@@ -1833,7 +1959,8 @@ local function prepare_sortie(sortie_type)
     elseif sortie_type == "scouting" and string.lower(C.get_string("global", "stash_mode", "scouting")) == "scouting" then
         state.need_scouting_stash = true
     end
-    log("prepare type=%s level=%s", tostring(sortie_type), tostring(level.name()))
+    release_log("prepare type=%s level=%s", tostring(sortie_type), tostring(level.name()))
+    log("prepare details type=%s level=%s", tostring(sortie_type), tostring(level.name()))
 end
 
 local function install_hooks()
@@ -1973,6 +2100,8 @@ local function actor_on_first_update()
         for _, zone in pairs(state.zones) do
             if not zone.closed then refresh_zone_spots(zone) end
         end
+        release_log("runtime initialized type=%s restored_zones=%s",
+            tostring(state.sortie_type), tostring(size_table(state.zones or {})))
     end
 end
 
