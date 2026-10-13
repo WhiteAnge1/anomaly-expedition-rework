@@ -104,6 +104,8 @@ local function fresh_state()
 end
 
 local state = fresh_state()
+local artifact_center_failures = {}
+local ARTIFACT_RETRY_SUMMARY_MS = 60000
 
 local function enabled()
     return C.get_bool("global", "enabled", true)
@@ -836,6 +838,7 @@ function cleanup(reason)
     end
     cleanup_stashes()
     state = fresh_state()
+    artifact_center_failures = {}
     reported_artifact_overlaps = {}
 end
 
@@ -891,6 +894,24 @@ local function random_radius()
     return math.random(min_r, max_r)
 end
 
+local function report_artifact_center_failure(artifact_id)
+    local key = tostring(artifact_id)
+    local now = time_global()
+    local failure = artifact_center_failures[key]
+    if not failure then
+        artifact_center_failures[key] = { count = 1, next_summary_at = now + ARTIFACT_RETRY_SUMMARY_MS }
+        printf(PREFIX .. " ERROR no valid center for raid artifact id=%s; retries continue, duplicate errors suppressed",
+            tostring(artifact_id))
+        return
+    end
+    failure.count = (failure.count or 0) + 1
+    if now >= (failure.next_summary_at or 0) then
+        log("artifact center retry pending id=%s failures=%s; duplicate ERROR suppressed",
+            tostring(artifact_id), tostring(failure.count))
+        failure.next_summary_at = now + ARTIFACT_RETRY_SUMMARY_MS
+    end
+end
+
 local function create_artifact_zone(artifact_id)
     if state.artifact_zone[tostring(artifact_id)] then return true end
     local art = alife_object(artifact_id)
@@ -923,6 +944,7 @@ local function create_artifact_zone(artifact_id)
             })
             if zone then
                 state.artifact_zone[tostring(artifact_id)] = tostring(anchor_id)
+                artifact_center_failures[tostring(artifact_id)] = nil
                 release_log("artifact placement tier=%s level=%s offset=%s fraction=%s limit=%s range=%s..%s",
                     tostring(current_tier()), tostring(level.name()), fmt_number(snapped_offset),
                     fmt_number(radius > 0 and snapped_offset / radius or 0), fmt_number(offset_limit),
@@ -931,7 +953,7 @@ local function create_artifact_zone(artifact_id)
             end
         end
     end
-    log("ERROR no valid center for raid artifact id=%s", tostring(artifact_id))
+    report_artifact_center_failure(artifact_id)
     return false
 end
 
@@ -1997,6 +2019,7 @@ local function install_hooks()
             local artifact_id = base_spawn_artifact(anom_zone, pos, level_tier)
             if enabled() and artifact_id and state.sortie_type == "infected" and state.level_name == level.name() then
                 state.pending_artifacts[tostring(artifact_id)] = artifact_id
+                artifact_center_failures[tostring(artifact_id)] = nil
                 state.last_artifact_time = time_global()
                 log("captured raid artifact id=%s zone=%s", tostring(artifact_id), tostring(anom_zone))
             end
@@ -2171,6 +2194,7 @@ end
 
 local function load_state(m_data)
     state = m_data.rvm_sorties_rework or fresh_state()
+    artifact_center_failures = {}
     reported_artifact_overlaps = {}
     state.zones = state.zones or {}
     state.artifact_zone = state.artifact_zone or {}

@@ -24,7 +24,7 @@ foreach ($case in @(
 
 Assert-Contains $main 'local offset_divisor = math.max(1, balanced("loot_offset_divisor", 3))' 'tier geometry'
 Assert-Contains $main 'local max_offset = math.max(0, radius / offset_divisor)' 'tier geometry'
-$lootDivisors = @{ 1=3; 2=4; 3=8 }
+$lootDivisors = @{ 1=3; 2=5; 3=10 }
 foreach ($tier in 1..3) {
     foreach ($radius in @(60, 111, 180, 240)) {
         $divisor = $lootDivisors[$tier]
@@ -36,8 +36,8 @@ foreach ($tier in 1..3) {
 
 $artifactProfiles = @{
     'tier_1'=@('artifact_offset_fraction_min = 0.35','artifact_offset_fraction_max = 0.80','loot_offset_divisor = 3')
-    'tier_2'=@('artifact_offset_fraction_min = 0.10','artifact_offset_fraction_max = 0.20','loot_offset_divisor = 4')
-    'tier_3'=@('artifact_offset_fraction_min = 0.06','artifact_offset_fraction_max = 0.12','loot_offset_divisor = 8')
+    'tier_2'=@('artifact_offset_fraction_min = 0.10','artifact_offset_fraction_max = 0.20','loot_offset_divisor = 5')
+    'tier_3'=@('artifact_offset_fraction_min = 0.06','artifact_offset_fraction_max = 0.12','loot_offset_divisor = 10')
 }
 $artifactRanges = @{
     1=@(0.35,0.80)
@@ -66,6 +66,16 @@ foreach ($needle in @(
     'artifact placement tier=%s level=%s offset=%s fraction=%s limit=%s range=%s..%s'
 )) {
     Assert-Contains $main $needle 'artifact geometry'
+}
+foreach ($needle in @(
+    'local artifact_center_failures = {}',
+    'local ARTIFACT_RETRY_SUMMARY_MS = 60000',
+    'report_artifact_center_failure(artifact_id)',
+    'retries continue, duplicate errors suppressed',
+    'artifact center retry pending id=%s failures=%s; duplicate ERROR suppressed',
+    'artifact_center_failures[tostring(artifact_id)] = nil'
+)) {
+    Assert-Contains $main $needle 'artifact retry rate limit'
 }
 
 $phases = @(
