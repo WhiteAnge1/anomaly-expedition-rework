@@ -30,9 +30,13 @@ loot_container_visuals = raid_small_stash_1, raid_small_stash_2, raid_small_stas
 ; По умолчанию false, чтобы не раскрывать игроку кражу артефакта.
 remove_on_npc_pickup = false
 
-; Смещение центра настоящей области: доля её радиуса (0.0-1.0).
+; Fallback смещения центра настоящей области: доля её радиуса (0.0-1.0).
+; Точные принятые значения задаются ниже по тирам и могут быть переопределены
+; в секции конкретного уровня благодаря иерархии global -> tier -> level.
 artifact_offset_fraction_min = 0.35
 artifact_offset_fraction_max = 0.80
+; Максимальное смещение центра loot-области от контейнера: radius / divisor.
+loot_offset_divisor = 3
 
 ; Минимальное расстояние между центрами областей и число попыток размещения.
 zone_separation_min = 45
@@ -121,6 +125,9 @@ debug_cleanup_current_sortie = false
 map_spot = rvm_search_small
 zone_radius_min = 60
 zone_radius_max = 100
+artifact_offset_fraction_min = 0.35
+artifact_offset_fraction_max = 0.80
+loot_offset_divisor = 3
 medicine_chance = 70
 loot_cap = 6
 loot_medicine = medkit_army, medkit, antirad, stimpack, caffeine
@@ -136,6 +143,10 @@ loot_rare_non_artifact = raid_intelligence_note
 map_spot = rvm_search_medium
 zone_radius_min = 110
 zone_radius_max = 180
+; Круг 60 px принят в поле; 0.10..0.20 оставляет exact-цель внутри него.
+artifact_offset_fraction_min = 0.10
+artifact_offset_fraction_max = 0.20
+loot_offset_divisor = 4
 medicine_chance = 78
 loot_cap = 7
 loot_medicine = medkit_army, medkit_scientic, antirad, stimpack_army, drug_booster
@@ -151,6 +162,10 @@ loot_rare_non_artifact = raid_intelligence_note
 map_spot = rvm_search_large
 zone_radius_min = 140
 zone_radius_max = 230
+; Круг 48 px визуально уже T2: консервативный предел близок к radius/8.
+artifact_offset_fraction_min = 0.06
+artifact_offset_fraction_max = 0.12
+loot_offset_divisor = 8
 medicine_chance = 85
 loot_cap = 8
 loot_medicine = medkit_scientic, medkit_army, antirad, stimpack_scientic, stimpack_army, adrenalin

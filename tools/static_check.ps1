@@ -101,7 +101,7 @@ foreach ($needle in @('local roll = math.random() * total','roll < weights.frequ
     if (-not $main.Contains($needle)) { $failures.Add("two-stage squad probability regression: $needle") }
 }
 if ($main -match 'local\s+section\s*=\s*sections\[math\.random') { $failures.Add('independent random mutant creation returned') }
-foreach ($needle in @('ARTIFACT_EXACT_SPOT = "rvm_exact_artifact_icon"','LOOT_EXACT_SPOT = "rvm_exact_loot_icon"','ENEMY_EXACT_SPOT = "rvm_exact_enemy_icon"','artifact_exact_marker_enabled','loot_exact_marker_enabled','enemy_exact_marker_enabled','exact_marker_hint','user_exact_overlaps_zone','sync_artifact_exact_spot','sync_enemy_exact_spot','sync_enemy_squad_exact_spot','squad:commander_id()','marker_target_id','pairs(zone.spawned_ids or {})','owned_by_rework=true')) {
+foreach ($needle in @('ARTIFACT_EXACT_SPOT = "rvm_exact_artifact_icon"','LOOT_EXACT_SPOT = "rvm_exact_loot_icon"','ENEMY_EXACT_SPOT = "rvm_exact_enemy_icon"','artifact_exact_marker_enabled','loot_exact_marker_enabled','enemy_exact_marker_enabled','exact_marker_hint','sync_artifact_exact_spot','sync_enemy_exact_spot','sync_enemy_squad_exact_spot','squad:commander_id()','marker_target_id','pairs(zone.spawned_ids or {})','owned_by_rework=true')) {
     if (-not $main.Contains($needle)) { $failures.Add("exact debug marker integration missing: $needle") }
 }
 foreach ($needle in @('ARTIFACT_EXACT_OVERLAP_DISTANCE = 2','diagnose_artifact_exact_overlaps','exact artifact marker overlap','exact positions preserved')) {
@@ -113,16 +113,17 @@ foreach ($needle in @(
     'return debug_enabled() or C.get_bool("global", "show_exact_enemy_markers", false)',
     'if debug_enabled() then return debug_text end',
     'if debug_enabled() then return debug_text end',
-    'user_exact_overlaps_zone(zone) and ""'
+    'local hint = game.translate_string("st_rvm_sorties_area_hint") .. zone_debug_text(zone, false)'
 )) {
     if (-not $main.Contains($needle)) { $failures.Add("casual/debug exact marker separation missing: $needle") }
 }
+if ($main.Contains('user_exact_overlaps_zone')) { $failures.Add('user exact mode must not suppress the normal circle tooltip') }
 if ($main.Contains('crlc_squad_red')) { $failures.Add('quest-pointer crlc_squad_red must not be used for enemy debug markers') }
 if ($main.Contains('census skipped: diagnostics disabled')) { $failures.Add('debug-off/casual markers must not emit census diagnostics') }
 foreach ($needle in @('roll_valuable_quota','percent_roll','weighted_section','valuable_first_chance','valuable_second_chance','valuable_third_chance','loot_valuable','loot_ordinary','loot_fragments','loot_cap','medicine_rolls','ordinary_capacity','rare_artifact_chance')) {
     if (-not $main.Contains($needle)) { $failures.Add("loot quality policy missing: $needle") }
 }
-foreach ($needle in @('math.random(2, 4)','roll <= 20 and 1 or roll <= 80 and 2 or 3','type preserved, no replacement created','local offset_divisor = tier == 1 and 3 or 4','local max_offset = math.max(0, radius / offset_divisor)','actual_offset <= max_offset','ambush_start_center_exclusion_radius')) {
+foreach ($needle in @('math.random(2, 4)','roll <= 20 and 1 or roll <= 80 and 2 or 3','type preserved, no replacement created','local offset_divisor = math.max(1, balanced("loot_offset_divisor", 3))','local max_offset = math.max(0, radius / offset_divisor)','actual_offset <= max_offset','snapped_offset <= offset_limit','artifact placement tier=%s level=%s offset=%s fraction=%s limit=%s range=%s..%s','ambush_start_center_exclusion_radius')) {
     if (-not $main.Contains($needle)) { $failures.Add("zone policy missing: $needle") }
 }
 if ($main -match 'create_decoy\([^\)]*\)[\s\S]{0,300}create_decoy\(') { $failures.Add('failed decoy type must not be rerolled or replaced') }
@@ -147,7 +148,7 @@ foreach ($section in $ambushProfiles.Keys) {
         if (-not $sectionMatch.Value.Contains($needle)) { $failures.Add("ambush profile $section missing: $needle") }
     }
 }
-foreach ($needle in @('stash_mode = scouting','weight_enemy = 50','weight_loot = 25','weight_empty = 25','remove_on_npc_pickup = false','ambush_start_center_exclusion_radius = 120','valuable_first_chance = 35','valuable_second_chance = 10','valuable_third_chance = 1.5','loot_cap = 6','loot_cap = 7','loot_cap = 8','loot_medicine_half_weight = medkit_army','loot_medicine_half_weight = medkit_scientic','loot_medicine_half_weight = adrenalin','loot_valuable = af_iam, lead_box, detector_simple, detector_advanced, af_cooler, af_freon, af_camelbak, af_frames, af_grid, af_surge, device_torch','loot_valuable = detector_advanced, detector_elite, af_iam, af_aac, lead_box, af_grid_up, af_freon_up, af_cooler_up, af_camelbak_up, af_frames_up, device_torch_nv_1, device_torch_nv_2','loot_valuable = detector_elite, detector_scientific, lead_box, af_aac, af_aam, device_torch_nv_3','rare_artifact_chance = 70','loot_rare_non_artifact = raid_intelligence_note','loot_container_visuals = raid_small_stash_1','map_spot = rvm_search_small','debug_mode = auto','debug_log = false','[level_y04_pole]','[level_k01_darkscape]','[level_l09_deadcity]')) {
+foreach ($needle in @('stash_mode = scouting','weight_enemy = 50','weight_loot = 25','weight_empty = 25','remove_on_npc_pickup = false','ambush_start_center_exclusion_radius = 120','artifact_offset_fraction_min = 0.10','artifact_offset_fraction_max = 0.20','artifact_offset_fraction_min = 0.06','artifact_offset_fraction_max = 0.12','loot_offset_divisor = 3','loot_offset_divisor = 4','loot_offset_divisor = 8','valuable_first_chance = 35','valuable_second_chance = 10','valuable_third_chance = 1.5','loot_cap = 6','loot_cap = 7','loot_cap = 8','loot_medicine_half_weight = medkit_army','loot_medicine_half_weight = medkit_scientic','loot_medicine_half_weight = adrenalin','loot_valuable = af_iam, lead_box, detector_simple, detector_advanced, af_cooler, af_freon, af_camelbak, af_frames, af_grid, af_surge, device_torch','loot_valuable = detector_advanced, detector_elite, af_iam, af_aac, lead_box, af_grid_up, af_freon_up, af_cooler_up, af_camelbak_up, af_frames_up, device_torch_nv_1, device_torch_nv_2','loot_valuable = detector_elite, detector_scientific, lead_box, af_aac, af_aam, device_torch_nv_3','rare_artifact_chance = 70','loot_rare_non_artifact = raid_intelligence_note','loot_container_visuals = raid_small_stash_1','map_spot = rvm_search_small','debug_mode = auto','debug_log = false','[level_y04_pole]','[level_k01_darkscape]','[level_l09_deadcity]')) {
     if (-not $ltx.Contains($needle)) { $failures.Add("config invariant missing: $needle") }
 }
 foreach ($needle in @('ambush_spawn_timing = proximity','ambush_start_trigger_margin = 20','ambush_start_zone_margin = 8','ambush_outside_zone_padding = 25','ambush_anomaly_clearance = 15','ambush_unknown_anomaly_radius = 20','ambush_retry_delay_ms = 10000','enemy_category_weight_frequent = 4','enemy_category_weight_rare = 2','enemy_category_weight_superrare = 1')) {
@@ -250,6 +251,9 @@ $fragment = Get-Content -LiteralPath (Join-Path $ModRoot 'gamedata\configs\ui\ma
 [xml]("<map_spots>" + $fragment + "</map_spots>") | Out-Null
 foreach ($needle in @('rvm_search_small','rvm_search_medium','rvm_search_large','rvm_debug_target','width="32" height="32"','width="60" height="60"','width="48" height="48"','scale_min="1" scale_max="4.5"','a="220" r="255" g="210" b="64"','rvm_exact_artifact_icon','rvm_exact_loot_icon','rvm_exact_enemy_icon','location_level="20"')) {
     if (-not $fragment.Contains($needle)) { $failures.Add("map spot invariant missing: $needle") }
+}
+foreach ($needle in @('rvm_exact_artifact_icon_spot width="14" height="14"','rvm_exact_loot_icon_spot width="14" height="14"','rvm_exact_enemy_icon_spot width="15" height="15"')) {
+    if (-not $fragment.Contains($needle)) { $failures.Add("exact icon sizing invariant missing: $needle") }
 }
 $watcher = Get-Content -LiteralPath (Join-Path $ModRoot 'tools\watch_live_log.ps1') -Raw
 foreach ($needle in @('CreationTimeUtc.Ticks','FileShare]::Delete','Log recreated or truncated','Start-Sleep -Milliseconds 250','Read-AppendedLines','[switch]$SelfTest','partial line was not completed')) {

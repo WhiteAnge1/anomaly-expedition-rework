@@ -623,14 +623,6 @@ local function exact_marker_hint(string_id, debug_text)
     return ""
 end
 
-local function user_exact_overlaps_zone(zone)
-    if debug_enabled() or not zone then return false end
-    if zone.kind == "artifact" then return C.get_bool("global", "show_exact_artifact_markers", false) end
-    if zone.kind == "loot" then return C.get_bool("global", "show_exact_loot_markers", false) end
-    if zone.kind == "enemy" and zone.triggered then return C.get_bool("global", "show_exact_enemy_markers", false) end
-    return false
-end
-
 local function sync_artifact_exact_spot(zone, snapshot, force_refresh)
     if not (zone and zone.artifact_id) then return end
     if artifact_exact_marker_enabled() and snapshot and snapshot.server_exists then
@@ -745,8 +737,7 @@ end
 
 local function add_zone_spots(zone)
     if not (zone and not zone.closed and zone.anchor_id and alife_object(zone.anchor_id)) then return end
-    local hint = user_exact_overlaps_zone(zone) and ""
-        or (game.translate_string("st_rvm_sorties_area_hint") .. zone_debug_text(zone, false))
+    local hint = game.translate_string("st_rvm_sorties_area_hint") .. zone_debug_text(zone, false)
     level.map_add_object_spot_ser(zone.anchor_id, zone.spot, hint)
     if artifact_exact_marker_enabled() and zone.kind == "artifact" and zone.artifact_id then
         local ok, snapshot = pcall(artifact_snapshot, zone)
@@ -908,25 +899,34 @@ local function create_artifact_zone(artifact_id)
         return false
     end
     local radius = random_radius()
-    local fmin = C.get_number("global", "artifact_offset_fraction_min", 0.35)
-    local fmax = C.get_number("global", "artifact_offset_fraction_max", 0.80)
+    local fmin = math.min(1, math.max(0, balanced("artifact_offset_fraction_min", 0.35)))
+    local fmax = math.min(1, math.max(fmin, balanced("artifact_offset_fraction_max", 0.80)))
+    local offset_limit = radius * fmax
     local attempts = math.floor(C.get_number("global", "placement_attempts", 60))
     for _ = 1, attempts do
         local angle = math.random() * math.pi * 2
         local offset = radius * (fmin + math.random() * (fmax - fmin))
         local candidate = vector():set(art.position.x + math.cos(angle) * offset, art.position.y, art.position.z + math.sin(angle) * offset)
         local lvid = valid_vertex(candidate)
-        if lvid and separated(candidate) then
-            local anchor_id, center, paw_anchor = create_anchor(level.vertex_position(lvid))
+        local fixed = lvid and level.vertex_position(lvid) or nil
+        local snapped_offset = fixed and distance_xz(fixed, art.position) or nil
+        if fixed and snapped_offset <= offset_limit and separated(fixed) then
+            local anchor_id, center, paw_anchor = create_anchor(fixed)
             local section = object_section(art)
             local zone = add_zone("artifact", anchor_id, center, radius, {
                 artifact_id = artifact_id,
                 artifact_section = section,
                 artifact_name = section_name(section),
+                artifact_offset = snapped_offset,
+                artifact_offset_fraction = radius > 0 and snapped_offset / radius or 0,
                 paw_anchor = paw_anchor,
             })
             if zone then
                 state.artifact_zone[tostring(artifact_id)] = tostring(anchor_id)
+                release_log("artifact placement tier=%s level=%s offset=%s fraction=%s limit=%s range=%s..%s",
+                    tostring(current_tier()), tostring(level.name()), fmt_number(snapped_offset),
+                    fmt_number(radius > 0 and snapped_offset / radius or 0), fmt_number(offset_limit),
+                    fmt_number(fmin), fmt_number(fmax))
                 return true
             end
         end
@@ -1227,8 +1227,7 @@ end
 
 local function create_loot_anchor(visual_pos, radius)
     local attempts = math.max(1, math.floor(C.get_number("global", "placement_attempts", 60)))
-    local tier = current_tier()
-    local offset_divisor = tier == 1 and 3 or 4
+    local offset_divisor = math.max(1, balanced("loot_offset_divisor", 3))
     local max_offset = math.max(0, radius / offset_divisor)
     for attempt = 1, attempts do
         local angle = math.random() * math.pi * 2

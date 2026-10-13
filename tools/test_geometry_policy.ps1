@@ -22,15 +22,50 @@ foreach ($case in @(
     }
 }
 
-Assert-Contains $main 'local offset_divisor = tier == 1 and 3 or 4' 'tier geometry'
+Assert-Contains $main 'local offset_divisor = math.max(1, balanced("loot_offset_divisor", 3))' 'tier geometry'
 Assert-Contains $main 'local max_offset = math.max(0, radius / offset_divisor)' 'tier geometry'
+$lootDivisors = @{ 1=3; 2=4; 3=8 }
 foreach ($tier in 1..3) {
     foreach ($radius in @(60, 111, 180, 240)) {
-        $divisor = if ($tier -eq 1) { 3 } else { 4 }
+        $divisor = $lootDivisors[$tier]
         $max = $radius / [double]$divisor
-        $expected = if ($tier -eq 1) { $radius / 3.0 } else { $radius / 4.0 }
+        $expected = $radius / [double]$lootDivisors[$tier]
         if ([Math]::Abs($max - $expected) -gt 0.0000001) { throw "T$tier geometry mismatch radius=$radius" }
     }
+}
+
+$artifactProfiles = @{
+    'tier_1'=@('artifact_offset_fraction_min = 0.35','artifact_offset_fraction_max = 0.80','loot_offset_divisor = 3')
+    'tier_2'=@('artifact_offset_fraction_min = 0.10','artifact_offset_fraction_max = 0.20','loot_offset_divisor = 4')
+    'tier_3'=@('artifact_offset_fraction_min = 0.06','artifact_offset_fraction_max = 0.12','loot_offset_divisor = 8')
+}
+$artifactRanges = @{
+    1=@(0.35,0.80)
+    2=@(0.10,0.20)
+    3=@(0.06,0.12)
+}
+foreach ($section in $artifactProfiles.Keys) {
+    $sectionMatch = [regex]::Match($ltx, "(?ms)^\[$([regex]::Escape($section))\]\s*(.*?)(?=^\[|\z)")
+    if (-not $sectionMatch.Success) { throw "artifact geometry profile missing: $section" }
+    foreach ($needle in $artifactProfiles[$section]) {
+        if (-not $sectionMatch.Value.Contains($needle)) { throw "artifact geometry $section missing: $needle" }
+    }
+}
+foreach ($tier in 1..3) {
+    $minimum, $maximum = $artifactRanges[$tier]
+    if ($minimum -lt 0 -or $maximum -lt $minimum -or $maximum -gt 1) { throw "invalid T$tier artifact fraction range" }
+    foreach ($radius in @(55, 85, 150, 180, 220, 240)) {
+        $limit = $radius * $maximum
+        if ($limit -gt $radius -or $limit -lt 0) { throw "T$tier artifact limit invalid radius=$radius" }
+    }
+}
+foreach ($needle in @(
+    'balanced("artifact_offset_fraction_min", 0.35)',
+    'balanced("artifact_offset_fraction_max", 0.80)',
+    'snapped_offset <= offset_limit',
+    'artifact placement tier=%s level=%s offset=%s fraction=%s limit=%s range=%s..%s'
+)) {
+    Assert-Contains $main $needle 'artifact geometry'
 }
 
 $phases = @(
@@ -59,8 +94,19 @@ foreach ($spot in @('rvm_exact_artifact_icon','rvm_exact_loot_icon','rvm_exact_e
 if ([regex]::Matches($xml, '<rvm_exact_(?:artifact|loot|enemy)_icon_spot\s+[^>]+location_level="20"').Count -ne 3) {
     throw 'all three level-map exact icons must have location_level=20'
 }
+foreach ($icon in @(
+    @{ Node='rvm_exact_artifact_icon_spot'; Width=14 },
+    @{ Node='rvm_exact_loot_icon_spot'; Width=14 },
+    @{ Node='rvm_exact_enemy_icon_spot'; Width=15 }
+)) {
+    $match = [regex]::Match($xml, '<' + $icon.Node + '\s+([^>]+)>')
+    if (-not $match.Success -or -not $match.Groups[1].Value.Contains("width=`"$($icon.Width)`" height=`"$($icon.Width)`"")) {
+        throw "exact icon size mismatch: $($icon.Node)"
+    }
+}
 Assert-Contains $main 'if debug_enabled() then return debug_text end' 'exact marker debug hint'
 Assert-Contains $main 'return ""' 'icon-only user exact marker'
-Assert-Contains $main 'user_exact_overlaps_zone(zone) and ""' 'overlapping circle tooltip suppression'
+Assert-Contains $main 'local hint = game.translate_string("st_rvm_sorties_area_hint") .. zone_debug_text(zone, false)' 'normal circle tooltip'
+if ($main.Contains('user_exact_overlaps_zone')) { throw 'circle tooltip suppression must not remain' }
 
 Write-Output 'Geometry and cascade policy test: OK'
