@@ -3,9 +3,9 @@
 
 local C = rvm_sorties_config
 local PREFIX = "[Anomaly Expedition Rework]"
-local ARTIFACT_EXACT_SPOT = "paw_stash_green"
-local LOOT_EXACT_SPOT = "paw_stash_red"
-local ENEMY_EXACT_SPOT = "alife_presentation_squad_enemy_1"
+local ARTIFACT_EXACT_SPOT = "rvm_exact_artifact_icon"
+local LOOT_EXACT_SPOT = "rvm_exact_loot_icon"
+local ENEMY_EXACT_SPOT = "rvm_exact_enemy_icon"
 -- Level-map markers flatten world coordinates to X/Z. At this distance two
 -- 12 px exact artifact spots are effectively co-located in the tested maps.
 -- Keep their truthful object positions and diagnose the overlap; inventing an
@@ -620,7 +620,15 @@ end
 
 local function exact_marker_hint(string_id, debug_text)
     if debug_enabled() then return debug_text end
-    return game.translate_string(string_id)
+    return ""
+end
+
+local function user_exact_overlaps_zone(zone)
+    if debug_enabled() or not zone then return false end
+    if zone.kind == "artifact" then return C.get_bool("global", "show_exact_artifact_markers", false) end
+    if zone.kind == "loot" then return C.get_bool("global", "show_exact_loot_markers", false) end
+    if zone.kind == "enemy" and zone.triggered then return C.get_bool("global", "show_exact_enemy_markers", false) end
+    return false
 end
 
 local function sync_artifact_exact_spot(zone, snapshot, force_refresh)
@@ -720,12 +728,16 @@ local function remove_spot(zone)
     if not zone then return end
     safe_remove_map_spot(zone.anchor_id, zone.spot)
     safe_remove_map_spot(zone.artifact_id, ARTIFACT_EXACT_SPOT)
+    safe_remove_map_spot(zone.artifact_id, "paw_stash_green")
     zone.artifact_exact_signature = nil
     safe_remove_map_spot(zone.visual_id, LOOT_EXACT_SPOT)
+    safe_remove_map_spot(zone.visual_id, "paw_stash_red")
     safe_remove_map_spot(zone.marker_target_id, ENEMY_EXACT_SPOT)
+    safe_remove_map_spot(zone.marker_target_id, "alife_presentation_squad_enemy_1")
     zone.marker_target_id = nil
     for id, _ in pairs(zone.spawned_ids or {}) do
         safe_remove_map_spot(id, ENEMY_EXACT_SPOT)
+        safe_remove_map_spot(id, "alife_presentation_squad_enemy_1")
     end
     -- Remove the pre-0.2.1-alpha debug dot when loading an older test save.
     safe_remove_map_spot(zone.visual_id, "rvm_debug_target")
@@ -733,7 +745,8 @@ end
 
 local function add_zone_spots(zone)
     if not (zone and not zone.closed and zone.anchor_id and alife_object(zone.anchor_id)) then return end
-    local hint = game.translate_string("st_rvm_sorties_area_hint") .. zone_debug_text(zone, false)
+    local hint = user_exact_overlaps_zone(zone) and ""
+        or (game.translate_string("st_rvm_sorties_area_hint") .. zone_debug_text(zone, false))
     level.map_add_object_spot_ser(zone.anchor_id, zone.spot, hint)
     if artifact_exact_marker_enabled() and zone.kind == "artifact" and zone.artifact_id then
         local ok, snapshot = pcall(artifact_snapshot, zone)
@@ -1214,7 +1227,9 @@ end
 
 local function create_loot_anchor(visual_pos, radius)
     local attempts = math.max(1, math.floor(C.get_number("global", "placement_attempts", 60)))
-    local max_offset = math.max(0, radius / 3)
+    local tier = current_tier()
+    local offset_divisor = tier == 1 and 3 or 4
+    local max_offset = math.max(0, radius / offset_divisor)
     for attempt = 1, attempts do
         local angle = math.random() * math.pi * 2
         local distance = math.sqrt(math.random()) * max_offset
@@ -1231,7 +1246,7 @@ local function create_loot_anchor(visual_pos, radius)
                 if anchor_id then
                     log("loot center accepted attempt=%s offset=%s max=%s", tostring(attempt),
                         fmt_number(actual_offset), fmt_number(max_offset))
-                    return anchor_id, center, paw_anchor, actual_offset
+                    return anchor_id, center, paw_anchor, actual_offset, max_offset, offset_divisor
                 end
             end
         end
@@ -1252,11 +1267,11 @@ local function create_loot_zone()
         local visual_id, box_id = raid_objects_arranger.spawn_object_rand_point(section, level.name(), 0, true)
         local visual = visual_id and alife_object(visual_id)
         if visual and box_id then
-            local anchor_id, center, paw_anchor, loot_offset = create_loot_anchor(visual.position, radius)
+            local anchor_id, center, paw_anchor, loot_offset, loot_offset_max, loot_offset_divisor = create_loot_anchor(visual.position, radius)
             if anchor_id then
                 local total, created_sections = fill_loot(box_id)
                 if total >= 1 then
-                    return add_zone("loot", anchor_id, center, radius, {
+                    local zone = add_zone("loot", anchor_id, center, radius, {
                         content_id = box_id,
                         visual_id = visual_id,
                         visual_pos = pos_table(visual.position),
@@ -1264,7 +1279,12 @@ local function create_loot_zone()
                         loot_sections = created_sections,
                         managed_visual = true,
                         paw_anchor = paw_anchor,
-                    }) ~= nil
+                    })
+                    if zone then
+                        release_log("loot placement tier=%s offset=%s max=%s divisor=%s",
+                            tostring(current_tier()), fmt_number(loot_offset), fmt_number(loot_offset_max), tostring(loot_offset_divisor))
+                        return true
+                    end
                 end
             end
             safe_release(box_id)
@@ -1508,13 +1528,16 @@ local function ambush_spawn_squad(zone, spawn_timing)
     local forward_z = length >= 0.01 and search_dir.z / length or 0
     local right_x, right_z = -forward_z, forward_x
 
-    local function ring_candidate(distance_min, distance_max, index)
-        local radial_slots = 5
-        local radial_index = (index - 1) % radial_slots
-        local angular_index = math.floor((index - 1) / radial_slots)
-        local angular_slots = math.max(1, math.ceil(attempts / radial_slots))
-        local angle = math.pi + angular_index * math.pi * 2 / angular_slots
-        local distance = distance_min + (distance_max - distance_min) * radial_index / math.max(1, radial_slots - 1)
+    local function ring_candidate(distance_min, distance_max, index, stage_index)
+        -- A deterministic low-discrepancy sweep covers new angles, distances
+        -- and nav vertices instead of revisiting a small polar grid after each
+        -- cascade step. The stage offset prevents identical candidate order.
+        local golden_angle = math.pi * (3 - math.sqrt(5))
+        local phase = (stage_index or 1) * 0.38196601125
+        local fraction = (index * 0.61803398875 + phase) % 1
+        local angle = math.pi + ((index - 1) * golden_angle + phase * math.pi * 2) % (math.pi * 2)
+        local distance = math.sqrt(distance_min * distance_min
+            + (distance_max * distance_max - distance_min * distance_min) * fraction)
         local offset_forward = math.cos(angle) * distance
         local offset_right = math.sin(angle) * distance
         return vector():set(zone.center.x + forward_x * offset_forward + right_x * offset_right,
@@ -1530,22 +1553,24 @@ local function ambush_spawn_squad(zone, spawn_timing)
         }
     else
         stages = {
-            { name = "inside_hidden_clear", min_zone = 0, max_zone = inside_limit, require_view = true, require_anomaly_clear = true },
-            { name = "inside_hidden_anomaly_allowed", min_zone = 0, max_zone = inside_limit, require_view = true, require_anomaly_clear = false },
-            { name = "outside_hidden_anomaly_allowed", min_zone = zone.radius + 1, max_zone = zone.radius + outside_padding, require_view = true, require_anomaly_clear = false },
-            { name = "outside_visible_last_resort", min_zone = zone.radius + 1, max_zone = zone.radius + outside_padding, require_view = false, require_anomaly_clear = false },
+            { name = "inside_hidden_clear", min_zone = 0, max_zone = inside_limit, require_view = true, require_anomaly_clear = true, expanded = true },
+            { name = "inside_hidden_anomaly_allowed", min_zone = 0, max_zone = inside_limit, require_view = true, require_anomaly_clear = false, expanded = true },
+            { name = "outside_hidden_anomaly_allowed", min_zone = zone.radius + 1, max_zone = zone.radius + outside_padding, require_view = true, require_anomaly_clear = false, expanded = true },
+            { name = "inside_visible_anomaly_allowed", min_zone = 0, max_zone = inside_limit, require_view = false, require_anomaly_clear = false },
+            { name = "outside_visible_anomaly_allowed", min_zone = zone.radius + 1, max_zone = zone.radius + outside_padding, require_view = false, require_anomaly_clear = false },
         }
     end
 
     for stage_index, stage in ipairs(stages) do
         local stats = { invalid = 0, duplicate = 0, band = 0, actor = 0, start = 0, view = 0, anomaly = 0, unreadable = 0, spawn = 0 }
         local seen_vertices = {}
-        log("ambush cascade begin anchor=%s tier=%s preset=%s step=%s/%s name=%s timing=%s zone_band=%s..%s view_required=%s anomaly_clear_required=%s scan_complete=%s",
+        local stage_attempts = stage.expanded and attempts * math.max(1, math.floor(C.get_number("global", "ambush_hidden_attempt_multiplier", 3))) or attempts
+        log("ambush cascade begin anchor=%s tier=%s preset=%s step=%s/%s name=%s timing=%s zone_band=%s..%s attempts=%s coverage=golden_angle_nav_sweep view_required=%s anomaly_clear_required=%s scan_complete=%s",
             tostring(zone.anchor_id), tostring(current_tier()), tostring(zone.squad_section), tostring(stage_index), tostring(#stages),
             tostring(stage.name), tostring(spawn_timing), fmt_number(stage.min_zone), fmt_number(stage.max_zone),
-            tostring(stage.require_view), tostring(stage.require_anomaly_clear), tostring(zone.anomaly_scan_complete))
-        for attempt = 1, attempts do
-            local candidate = ring_candidate(stage.min_zone, stage.max_zone, attempt)
+            tostring(stage_attempts), tostring(stage.require_view), tostring(stage.require_anomaly_clear), tostring(zone.anomaly_scan_complete))
+        for attempt = 1, stage_attempts do
+            local candidate = ring_candidate(stage.min_zone, stage.max_zone, attempt, stage_index)
             local lvid = valid_vertex(candidate)
             if not lvid then
                 stats.invalid = stats.invalid + 1
@@ -1585,7 +1610,7 @@ local function ambush_spawn_squad(zone, spawn_timing)
         end
         log("ambush cascade exhausted anchor=%s tier=%s preset=%s step=%s/%s name=%s attempts=%s reject=invalid:%s,duplicate:%s,band:%s,actor:%s,start:%s,view:%s,anomaly:%s,unreadable:%s,spawn:%s",
             tostring(zone.anchor_id), tostring(current_tier()), tostring(zone.squad_section), tostring(stage_index), tostring(#stages),
-            tostring(stage.name), tostring(attempts), tostring(stats.invalid), tostring(stats.duplicate), tostring(stats.band),
+            tostring(stage.name), tostring(stage_attempts), tostring(stats.invalid), tostring(stats.duplicate), tostring(stats.band),
             tostring(stats.actor), tostring(stats.start), tostring(stats.view), tostring(stats.anomaly), tostring(stats.unreadable), tostring(stats.spawn))
     end
     return false

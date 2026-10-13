@@ -2,19 +2,37 @@
   One compact visual size per sortie tier. Logical gameplay radii remain in
   rvm_sorties_rework.ltx; map circles are intentionally symbolic UI markers.
   X-Ray multiplies width/height by clamp(current global-map zoom, scale_min,
-  scale_max). Bases 32/40/48 with a 4.5 cap preserve the previously accepted
-  close-zoom maxima 144/180/216 px (64/80/96 at 2.25), while halving the
-  overview size at zoom 1. The former 1.6 cap incorrectly shrank close zoom.
-  There is no mini_map entry: RVM has no minimap and this mod must not add one.
+  scale_max). T1/T3 retain accepted bases 32/48. Field testing made T2 1.5x
+  larger (40 -> 60) without changing its accepted 1..4.5 zoom dynamics.
+  Search circles have no mini_map entry: RVM has no minimap circles and this
+  mod must not add them. Exact icons preserve their previous minimap behavior.
 -->
 <rvm_search_small hint="st_rvm_sorties_area_name"><level_map spot="rvm_search_small_spot"/></rvm_search_small>
 <rvm_search_small_spot width="32" height="32" alignment="c" stretch="1" scale="1" scale_min="1" scale_max="4.5"><texture x="730" y="456" width="115" height="115" a="220" r="255" g="210" b="64">ui\ui_common</texture></rvm_search_small_spot>
 
 <rvm_search_medium hint="st_rvm_sorties_area_name"><level_map spot="rvm_search_medium_spot"/></rvm_search_medium>
-<rvm_search_medium_spot width="40" height="40" alignment="c" stretch="1" scale="1" scale_min="1" scale_max="4.5"><texture x="730" y="456" width="115" height="115" a="220" r="255" g="210" b="64">ui\ui_common</texture></rvm_search_medium_spot>
+<rvm_search_medium_spot width="60" height="60" alignment="c" stretch="1" scale="1" scale_min="1" scale_max="4.5"><texture x="730" y="456" width="115" height="115" a="220" r="255" g="210" b="64">ui\ui_common</texture></rvm_search_medium_spot>
 
 <rvm_search_large hint="st_rvm_sorties_area_name"><level_map spot="rvm_search_large_spot"/></rvm_search_large>
 <rvm_search_large_spot width="48" height="48" alignment="c" stretch="1" scale="1" scale_min="1" scale_max="4.5"><texture x="730" y="456" width="115" height="115" a="220" r="255" g="210" b="64">ui\ui_common</texture></rvm_search_large_spot>
+
+<!--
+  Exact icons use a higher location_level than the circles. Current modded
+  X-Ray sorts map spots by this value, but exposes no separate Lua hit-test
+  priority. Runtime therefore also removes the overlapping circle tooltip in
+  user exact mode. Debug retains full technical hints on both spot classes.
+-->
+<rvm_exact_artifact_icon><level_map spot="rvm_exact_artifact_icon_spot"/><mini_map spot="rvm_exact_artifact_icon_spot_mini"/></rvm_exact_artifact_icon>
+<rvm_exact_artifact_icon_spot width="12" height="12" alignment="c" stretch="1" scale="1" scale_min="1" scale_max="1.5" location_level="20"><texture>paw_vanilla_stash_icon_green</texture></rvm_exact_artifact_icon_spot>
+<rvm_exact_artifact_icon_spot_mini width="12" height="12" alignment="c" stretch="1" location_level="20"><texture>paw_vanilla_stash_icon_green</texture></rvm_exact_artifact_icon_spot_mini>
+
+<rvm_exact_loot_icon><level_map spot="rvm_exact_loot_icon_spot"/><mini_map spot="rvm_exact_loot_icon_spot_mini"/></rvm_exact_loot_icon>
+<rvm_exact_loot_icon_spot width="12" height="12" alignment="c" stretch="1" scale="1" scale_min="1" scale_max="1.5" location_level="20"><texture>paw_vanilla_stash_icon_red</texture></rvm_exact_loot_icon_spot>
+<rvm_exact_loot_icon_spot_mini width="12" height="12" alignment="c" stretch="1" location_level="20"><texture>paw_vanilla_stash_icon_red</texture></rvm_exact_loot_icon_spot_mini>
+
+<rvm_exact_enemy_icon><level_map spot="rvm_exact_enemy_icon_spot"/><mini_map spot="rvm_exact_enemy_icon_spot_mini"/></rvm_exact_enemy_icon>
+<rvm_exact_enemy_icon_spot width="11" height="11" alignment="c" stretch="1" location_level="20"><texture r="237" g="28" b="36">ui_pda2_squad_leader</texture></rvm_exact_enemy_icon_spot>
+<rvm_exact_enemy_icon_spot_mini width="9" height="9" alignment="c" stretch="1" location_level="20"><texture r="237" g="28" b="36">ui_minimap_squad_leader</texture></rvm_exact_enemy_icon_spot_mini>
 
 <!-- Compatibility only: refresh removes this old debug dot and uses PAW paw_stash_red. -->
 <rvm_debug_target hint="st_rvm_sorties_area_name"><level_map spot="rvm_debug_target_spot"/></rvm_debug_target>
