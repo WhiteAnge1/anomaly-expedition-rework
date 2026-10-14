@@ -859,10 +859,11 @@ local function create_anchor(pos)
     return anchor.id, pos_table(fixed), false
 end
 
-local function separated(pos)
+local function separated(pos, allow_artifact_overlap)
     local minimum = balanced("zone_separation_min", 45)
     for _, zone in pairs(state.zones) do
-        if zone.center and distance_xz(pos, zone.center) < minimum then return false end
+        local blocks = not (allow_artifact_overlap and zone.kind == "artifact")
+        if blocks and zone.center and distance_xz(pos, zone.center) < minimum then return false end
     end
     return true
 end
@@ -894,20 +895,60 @@ local function random_radius()
     return math.random(min_r, max_r)
 end
 
-local function report_artifact_center_failure(artifact_id)
+local ARTIFACT_REJECT_KEYS = { "invalid_vertex", "post_snap_limit", "separation", "anchor_failure" }
+
+local function fresh_artifact_rejects()
+    return { invalid_vertex = 0, post_snap_limit = 0, separation = 0, anchor_failure = 0 }
+end
+
+local function merge_artifact_rejects(target, source)
+    for _, name in ipairs(ARTIFACT_REJECT_KEYS) do
+        target[name] = (target[name] or 0) + (source[name] or 0)
+    end
+end
+
+local function format_artifact_rejects(rejects)
+    local parts = {}
+    for _, name in ipairs(ARTIFACT_REJECT_KEYS) do
+        table.insert(parts, name .. ":" .. tostring(rejects[name] or 0))
+    end
+    return table.concat(parts, ",")
+end
+
+local function artifact_near_world_origin(pos)
+    if not pos then return false end
+    local x, y, z = tonumber(pos.x) or 0, tonumber(pos.y) or 0, tonumber(pos.z) or 0
+    return x * x + y * y + z * z <= 4
+end
+
+local function report_artifact_center_failure(artifact_id, position, attempts, rejects)
     local key = tostring(artifact_id)
     local now = time_global()
     local failure = artifact_center_failures[key]
     if not failure then
-        artifact_center_failures[key] = { count = 1, next_summary_at = now + ARTIFACT_RETRY_SUMMARY_MS }
-        printf(PREFIX .. " ERROR no valid center for raid artifact id=%s; retries continue, duplicate errors suppressed",
-            tostring(artifact_id))
-        return
+        failure = {
+            count = 0,
+            attempts = 0,
+            rejects = fresh_artifact_rejects(),
+            next_summary_at = now + ARTIFACT_RETRY_SUMMARY_MS,
+        }
+        artifact_center_failures[key] = failure
     end
     failure.count = (failure.count or 0) + 1
+    failure.attempts = (failure.attempts or 0) + (attempts or 0)
+    merge_artifact_rejects(failure.rejects, rejects or {})
+    failure.position = position and pos_table(position) or failure.position
+    failure.near_origin = artifact_near_world_origin(position)
+    if failure.count == 1 then
+        printf(PREFIX .. " ERROR no valid center for raid artifact id=%s position=(%s) near_origin=%s passes=%s attempts=%s rejects=[%s]; retries continue, duplicate errors suppressed",
+            tostring(artifact_id), fmt_position(failure.position), tostring(failure.near_origin), tostring(failure.count),
+            tostring(failure.attempts), format_artifact_rejects(failure.rejects))
+        return
+    end
     if now >= (failure.next_summary_at or 0) then
-        log("artifact center retry pending id=%s failures=%s; duplicate ERROR suppressed",
-            tostring(artifact_id), tostring(failure.count))
+        log("artifact center retry pending id=%s position=(%s) near_origin=%s passes=%s attempts=%s rejects=[%s]; duplicate ERROR suppressed",
+            tostring(artifact_id), fmt_position(failure.position), tostring(failure.near_origin), tostring(failure.count),
+            tostring(failure.attempts), format_artifact_rejects(failure.rejects))
         failure.next_summary_at = now + ARTIFACT_RETRY_SUMMARY_MS
     end
 end
@@ -924,14 +965,25 @@ local function create_artifact_zone(artifact_id)
     local fmax = math.min(1, math.max(fmin, balanced("artifact_offset_fraction_max", 0.80)))
     local offset_limit = radius * fmax
     local attempts = math.floor(C.get_number("global", "placement_attempts", 60))
+    local attempted = 0
+    local rejects = fresh_artifact_rejects()
     for _ = 1, attempts do
+        attempted = attempted + 1
         local angle = math.random() * math.pi * 2
         local offset = radius * (fmin + math.random() * (fmax - fmin))
         local candidate = vector():set(art.position.x + math.cos(angle) * offset, art.position.y, art.position.z + math.sin(angle) * offset)
         local lvid = valid_vertex(candidate)
         local fixed = lvid and level.vertex_position(lvid) or nil
         local snapped_offset = fixed and distance_xz(fixed, art.position) or nil
-        if fixed and snapped_offset <= offset_limit and separated(fixed) then
+        if not fixed then
+            rejects.invalid_vertex = rejects.invalid_vertex + 1
+        elseif snapped_offset > offset_limit then
+            rejects.post_snap_limit = rejects.post_snap_limit + 1
+        elseif not separated(fixed, true) then
+            -- True artifact areas may overlap each other. This can only be
+            -- blocked by an already-created decoy area.
+            rejects.separation = rejects.separation + 1
+        else
             local anchor_id, center, paw_anchor = create_anchor(fixed)
             local section = object_section(art)
             local zone = add_zone("artifact", anchor_id, center, radius, {
@@ -951,9 +1003,10 @@ local function create_artifact_zone(artifact_id)
                     fmt_number(fmin), fmt_number(fmax))
                 return true
             end
+            rejects.anchor_failure = rejects.anchor_failure + 1
         end
     end
-    report_artifact_center_failure(artifact_id)
+    report_artifact_center_failure(artifact_id, art.position, attempted, rejects)
     return false
 end
 

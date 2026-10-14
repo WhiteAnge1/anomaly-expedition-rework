@@ -62,17 +62,45 @@ foreach ($tier in 1..3) {
 foreach ($needle in @(
     'balanced("artifact_offset_fraction_min", 0.35)',
     'balanced("artifact_offset_fraction_max", 0.80)',
-    'snapped_offset <= offset_limit',
+    'elseif snapped_offset > offset_limit then',
     'artifact placement tier=%s level=%s offset=%s fraction=%s limit=%s range=%s..%s'
 )) {
     Assert-Contains $main $needle 'artifact geometry'
 }
+
+$artifactZoneBody = [regex]::Match($main, '(?ms)local function create_artifact_zone\(artifact_id\)(.*?)(?=\r?\nlocal function random_decoy_anchor)').Groups[1].Value
+if (-not $artifactZoneBody) { throw 'create_artifact_zone body missing' }
+Assert-Contains $artifactZoneBody 'separated(fixed, true)' 'true artifact overlap policy'
+Assert-Contains $main 'local blocks = not (allow_artifact_overlap and zone.kind == "artifact")' 'true artifact overlap policy'
+Assert-Contains $main 'local valid = separated(obj.position)' 'decoy separation policy'
+Assert-Contains $main 'actual_offset <= max_offset and separated(fixed)' 'loot separation policy'
+
+# Deterministic model of the source policy: opting in ignores only existing
+# true artifact areas; a decoy at the same distance must still block.
+function Test-SeparatedPolicy($Zones, [double]$CandidateX, [bool]$AllowArtifactOverlap) {
+    foreach ($zone in $Zones) {
+        $blocks = -not ($AllowArtifactOverlap -and $zone.Kind -eq 'artifact')
+        if ($blocks -and [Math]::Abs($CandidateX - $zone.X) -lt 45) { return $false }
+    }
+    return $true
+}
+$artifactOnly = @(@{ Kind='artifact'; X=0.0 })
+if (Test-SeparatedPolicy $artifactOnly 10.0 $false) { throw 'strict separation model did not block neighboring artifact' }
+if (-not (Test-SeparatedPolicy $artifactOnly 10.0 $true)) { throw 'true artifact overlap model rejected neighboring artifact' }
+$artifactAndDecoy = @(@{ Kind='artifact'; X=0.0 }, @{ Kind='empty'; X=100.0 })
+if (Test-SeparatedPolicy $artifactAndDecoy 110.0 $true) { throw 'artifact overlap model also ignored decoy separation' }
+
 foreach ($needle in @(
     'local artifact_center_failures = {}',
     'local ARTIFACT_RETRY_SUMMARY_MS = 60000',
-    'report_artifact_center_failure(artifact_id)',
+    'report_artifact_center_failure(artifact_id, art.position, attempted, rejects)',
+    'invalid_vertex',
+    'post_snap_limit',
+    'separation',
+    'anchor_failure',
+    'near_origin=%s',
     'retries continue, duplicate errors suppressed',
-    'artifact center retry pending id=%s failures=%s; duplicate ERROR suppressed',
+    'artifact center retry pending id=%s position=(%s) near_origin=%s passes=%s attempts=%s rejects=[%s]; duplicate ERROR suppressed',
     'artifact_center_failures[tostring(artifact_id)] = nil'
 )) {
     Assert-Contains $main $needle 'artifact retry rate limit'

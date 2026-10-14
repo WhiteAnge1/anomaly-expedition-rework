@@ -22,6 +22,7 @@
 - [x] Подтверждены T2/T3 artifact-профили `0.10..0.20`/`0.06..0.12`, обычный tooltip круга, save/load и artifact/loot exact-иконки `14 px`.
 - [ ] В финальных обычных рейдах оценить новые loot-пределы T2 `radius/5` и T3 `radius/10`.
 - [ ] После forced-enemy тестов пройти по одному forced-empty рейду T1/T2/T3 до artifact rescue.
+- [ ] В forced-empty T1/T2/T3 подтвердить совпадение captured/created artifact count и допустимое перекрытие истинных областей; при отказе приложить position/near-origin/reject counters.
 
 ## Уже подтверждено полем
 

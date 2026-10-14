@@ -124,6 +124,7 @@ Medicine делает два броска: первый `70/78/85%`, второ�
 - [x] T2-размер `60 px`, artifact T2/T3 `0.10..0.20`/`0.06..0.12`, exact artifact/loot `14 px`, tooltip кругов, save/load, squad cohesion и watcher приняты полем после `e9df990`.
 - [ ] Установленный forced type переключён на `enemy`: коротко проверить пятиступенчатый proximity-каскад T2.
 - [ ] После enemy-тестов пройти по одному forced-empty рейду T1/T2/T3 до начала artifact rescue.
+- [ ] В каждом forced-empty рейде сверить `captured raid artifact` с `create type=artifact`: истинные круги могут перекрываться, а любой оставшийся отказ обязан дать position/near-origin и четыре reject-счётчика.
 - [ ] Normal-player рейды с debug off и `show_exact_*` отложены до artifact rescue и последующей балансировки `4/8/6`.
 
 ## Внешние сообщения полного лога

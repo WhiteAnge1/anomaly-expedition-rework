@@ -20,6 +20,7 @@
 | Геометрия контейнера | T1: offset≤radius/3; T2: offset≤radius/5; T3: offset≤radius/10; визуально ящик в центральной трети круга | Release `loot placement tier=... offset=... max=... divisor=...` и deterministic test; T2/T3 повторно оценить в финальном debug-off прогоне |
 | Artifact center retry | Первый невозможный center даёт один ERROR; ID остаётся pending; одинаковые ошибки подавлены, debug-summary не чаще раза в 60 секунд | Не должно быть ежесекундного ERROR-спама; поздний успех создаёт обычную зону |
 | Геометрия artifact-круга | T1 `0.35..0.80`; T2 `0.10..0.20`; T3 `0.06..0.12`; нормальный exact находится внутри круга на max zoom | Release `artifact placement tier=... level=... offset=... fraction=... limit=... range=...` |
+| Кластеры артефактов | Все захваченные доступные артефакты получают область, даже если настоящие круги перекрываются; ложные области всё ещё разнесены | Число `captured raid artifact` совпадает с `create type=artifact`; при ошибке сохранить строку с `near_origin` и `rejects=[...]` |
 | Контейнер | Этапы medicine→valuable→ordinary→rare; cap T1/T2/T3 = 6/7/8 плюс независимый rare; ordinary всегда хотя бы 1 | `loot result ... medicine/valuable/ordinary_rolls/rare`, затем `reason=container_opened` |
 | Medicine | Два последовательных броска; распределения 0/1/2: T1 9/66.5/24.5%, T2 4.84/64.74/30.42%, T3 2.25/61.625/36.125% | `tools\test_loot_policy.ps1` |
 | Valuable quota | Quota 0/1/2/3: 65/31.5/3.4475/0.0525%; без повторов, кроме T3 `lead_box` | Симуляция и debug details |
@@ -54,5 +55,5 @@
 
 Live-log: сначала запустите `tools\watch_live_log.cmd` либо `.\tools\watch_live_log.ps1`, дождитесь `Waiting for matches...`, затем запускайте X-Ray. Поздний запуск во время уже работающей игры не поддерживается. Остановка — `Ctrl+C`.
 
-Полевые проверки уже закрыты: cohesion подтверждён на трёх squad T2 и двух T3; forced-loot counts — T1 `1×5`, T2 `4/2/2`, T3 `3/2/3`; save/load контейнера до/после открытия и закрытие зоны подтверждены; watcher до запуска игры работает. Финальные normal-player рейды с debug off и `show_exact_*` отложены до artifact rescue и последующей балансировки.
+Полевые проверки уже закрыты: cohesion подтверждён на трёх squad T2 и двух T3; forced-loot counts — T1 `1×5`, T2 `4/2/2`, T3 `3/2/3`; save/load контейнера до/после открытия и закрытие зоны подтверждены; watcher до запуска игры работает. Следующий короткий цикл — по одной вылазке T1/T2/T3 с `debug_force_decoy_type=empty`: сверить число captured/created artifact-областей, допустимые перекрытия истинных кругов и отсутствие ERROR без подробных reject-счётчиков. Финальные normal-player рейды с debug off и `show_exact_*` отложены до artifact rescue и последующей балансировки.
 
