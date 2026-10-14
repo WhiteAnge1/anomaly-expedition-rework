@@ -17,6 +17,7 @@ $required = @(
     'gamedata\configs\text\rus\st_rvm_sorties_rework.xml',
     'fomod\info.xml',
     'meta.ini',
+    '.gitignore',
     'docs\CONFIG.md',
     'docs\RELEASE-CHECKLIST.md',
     'tools\watch_live_log.ps1',
@@ -257,11 +258,20 @@ foreach ($needle in @('rvm_exact_artifact_icon_spot width="14" height="14"','rvm
     if (-not $fragment.Contains($needle)) { $failures.Add("exact icon sizing invariant missing: $needle") }
 }
 $watcher = Get-Content -LiteralPath (Join-Path $ModRoot 'tools\watch_live_log.ps1') -Raw
-foreach ($needle in @('CreationTimeUtc.Ticks','FileShare]::Delete','Log recreated or truncated','Start-Sleep -Milliseconds 250','Read-AppendedLines','[switch]$SelfTest','partial line was not completed')) {
+foreach ($needle in @(
+    'CreationTimeUtc.Ticks','FileShare]::Delete','Log recreated or truncated','Start-Sleep -Milliseconds $PollMilliseconds',
+    'Read-AppendedLines','Test-ReadCheckpoint','[switch]$SelfTest','partial line was not completed','truncate/regrow checkpoint path failed',
+    '[double]$ShutdownGraceSeconds = 20','watcher exited before game was ever detected','game start was not recorded',
+    'watcher stopped before grace elapsed','injected grace elapsed','Get-RunningGameProcess','AnomalyDX11AVX','VerifiedDX11',
+    'game_closed_after_grace','finally {','Saved session:','latest.log','test-artifacts\live-logs','saved watcher output missing',
+    'TreatControlCAsInput','Test-ControlCKey','Ctrl+C key recognition failed','terminationReason = ''ctrl_c'''
+)) {
     if (-not $watcher.Contains($needle)) { $failures.Add("live log reopen support missing: $needle") }
 }
 if ($watcher.Contains('Get-Content -LiteralPath $LogPath -Wait')) { $failures.Add('live log watcher must not retain the old file handle with Get-Content -Wait') }
 if ($watcher.Contains('New-Object IO.StreamReader')) { $failures.Add('live log watcher must read appended bytes directly, not buffer behind StreamReader') }
+$gitIgnore = Get-Content -LiteralPath (Join-Path $ModRoot '.gitignore') -Raw
+if (-not $gitIgnore.Contains('/test-artifacts/live-logs/')) { $failures.Add('generated live watcher archives must be gitignored') }
 $configReference = Get-Content -LiteralPath (Join-Path $ModRoot 'docs\CONFIG.md') -Raw -Encoding UTF8
 foreach ($needle in @('Необязательный казуальный режим точных меток','show_exact_artifact_markers','show_exact_loot_markers','show_exact_enemy_markers','enemy_spawn_distance_min/max','90..150','120..170','80..120','система аномалий Arrival')) {
     if (-not $configReference.Contains($needle)) { $failures.Add("config reference missing: $needle") }

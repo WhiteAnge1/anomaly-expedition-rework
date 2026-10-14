@@ -29,6 +29,6 @@
 - Squad cohesion: 3 squad T2 и 2 squad T3.
 - Forced-loot counts: T1 `1×5`, T2 `4/2/2`, T3 `3/2/3`.
 - Save/load контейнера до/после открытия и закрытие loot-зоны.
-- Live watcher при обязательном порядке «watcher → X-Ray».
+- Live watcher при обязательном порядке «watcher → X-Ray»; автоматическое завершение с 20-секундным хвостом и сохранение session/latest ещё требуют короткой полевой проверки.
 
 Финальные normal-player рейды с debug off и пользовательскими `show_exact_*` остаются отложены до отдельной реализации artifact rescue и балансировки `4/8/6`.
