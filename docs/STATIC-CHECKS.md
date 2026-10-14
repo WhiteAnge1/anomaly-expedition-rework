@@ -1,6 +1,6 @@
 # Результат статических проверок
 
-Последнее обновление: 2026-10-14.
+Последнее обновление: 2026-10-15.
 
 - Все три `.script` разобраны `luaparser 4.2.0`: синтаксических ошибок нет.
 - `fomod/info.xml` и русская string table разобраны XML-парсером; для string table отдельно проверены Windows-1251, декларация кодировки и контрольная русская строка.
@@ -15,6 +15,7 @@
 - `watch_live_log.ps1 -SelfTest` реально дописывает полную и частичную строки, проверяет truncate с быстрым повторным ростом файла через byte-checkpoint, delete/recreate, сохранение только отфильтрованных строк и `latest.log`. Детерминированная lifecycle-модель доказывает отсутствие выхода до первого обнаружения игры, фиксацию старта и завершение лишь после инъецированного короткого grace; runtime default остаётся 20 секунд. Runtime-reader читает новые байты напрямую через `FileStream`, не полагаясь на буферизацию `StreamReader`.
 - `test_geometry_policy.ps1` проверяет неизменные размеры кругов `32/60/48`, loot T1/T2/T3 `radius/3`, `radius/5`, `radius/10`, artifact-профили `0.35..0.80`, `0.10..0.20`, `0.06..0.12`, фактический post-snap limit, разрешённое перекрытие только истинных artifact-зон при сохранённом separation ложных зон, подробные rate-limited artifact-center причины, порядок пяти proximity-фаз и расширенный low-discrepancy hidden search.
 - `test_artifact_rescue_policy.ps1` проверяет строгий origin-мismatch против законного near-origin, underground debounce `12 м / 4 м / 3 samples / 2 с`, rolling `radius+5 / 15 с` со сбросом, ownership/target guards, fail-closed и идемпотентную legacy-миграцию, rate limit, обязательные поля provenance/config и отсутствие `teleport_object`/physics actions.
+- Дополнение rescue-policy проверяет unique/ambiguous NPC replacement lineage, сохранение terminal `owned`, replacement ID и lookup после save/load; ambiguous section-кандидаты обязаны оставаться fail-closed.
 - Проверены исходные PAW/GRA-текстуры в фактических XML сборки, собственные exact wrappers с `location_level=20`, размеры `14/14/15`, icon-only пользовательский exact-hint, сохранённый обычный hint круга и перенос единственной enemy-метки через `squad:commander_id()`; quest-pointer `crlc_squad_red` запрещён.
 - Регрессия same-level cleanup закрыта статическим запретом прямого `cleanup()` из `on_before_level_changing`; очистка разрешена только после определения фактического уровня на `actor_on_first_update`.
 - Каждый вызванный helper семейства `balanced*` обязан иметь локальное определение; отдельно проверяется строковая ветка forced tier → global default → `C.get_balanced_string`. Это закрывает runtime-регрессию `attempt to call global 'balanced_string'` до запуска игры.
@@ -28,10 +29,34 @@
   - только пустышки: 85.78 / 14.22%;
   - все ложные типы выключены: 100% настоящих областей.
 
-Команда повторной проверки:
+## Уровни проверки
+
+Проверки запускаются пропорционально изменению, а не все после каждой локальной правки:
+
+- Lua/runtime rescue: core static + rescue-policy + `luaparser`, профиль `fast`;
+- watcher/PowerShell: PS parser и watcher self-test, профиль `watcher`;
+- геометрия кругов/размещения: профиль `geometry`;
+- loot RNG/cascade/config: профиль `loot`, который выполняет 600000 детерминированных генераций;
+- интеграционная контрольная точка или release: профиль `full` плюс фактический `BuildModsRoot`.
+
+Текущая rescue-only команда, не запускающая watcher, geometry и loot simulation:
 
 ```powershell
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\static_check.ps1 -BuildModsRoot 'E:\GRA2.5\MO2\mods'
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\static_check.ps1 -ModRoot . -Profile fast -PythonDeps '..\..\work\pydeps'
 ```
 
-Параметр `-PythonDeps` включает полноценный синтаксический разбор Lua, если локально доступен пакет `luaparser`.
+Таргетированные профили:
+
+```powershell
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\static_check.ps1 -Profile watcher
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\static_check.ps1 -Profile geometry
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\static_check.ps1 -Profile loot
+```
+
+Полная интеграционная проверка:
+
+```powershell
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\static_check.ps1 -Profile full -BuildModsRoot 'E:\GRA2.5\MO2\mods'
+```
+
+Default профиля остаётся `full` для обратной совместимости. Параметр `-PythonDeps` включает полноценный синтаксический разбор Lua, если локально доступен пакет `luaparser`. `600000` loot-симуляций запускаются только после изменения loot RNG/cascade/config, на интеграционной контрольной точке или перед релизом.

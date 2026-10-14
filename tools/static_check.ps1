@@ -1,7 +1,9 @@
 ﻿param(
     [string]$ModRoot = (Split-Path -Parent $PSScriptRoot),
     [string]$PythonDeps = "",
-    [string]$BuildModsRoot = ""
+    [string]$BuildModsRoot = "",
+    [ValidateSet('fast','full','watcher','geometry','loot')]
+    [string]$Profile = 'full'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -319,10 +321,18 @@ if ($BuildModsRoot) {
     }
 }
 
-& (Join-Path $ModRoot 'tools\watch_live_log.ps1') -SelfTest
-& (Join-Path $ModRoot 'tools\test_geometry_policy.ps1') -ModRoot $ModRoot
-& (Join-Path $ModRoot 'tools\test_artifact_rescue_policy.ps1') -ModRoot $ModRoot
-& (Join-Path $ModRoot 'tools\test_loot_policy.ps1') -Samples 200000
+if ($Profile -eq 'full' -or $Profile -eq 'watcher') {
+    & (Join-Path $ModRoot 'tools\watch_live_log.ps1') -SelfTest
+}
+if ($Profile -eq 'full' -or $Profile -eq 'geometry') {
+    & (Join-Path $ModRoot 'tools\test_geometry_policy.ps1') -ModRoot $ModRoot
+}
+if ($Profile -eq 'full' -or $Profile -eq 'fast') {
+    & (Join-Path $ModRoot 'tools\test_artifact_rescue_policy.ps1') -ModRoot $ModRoot
+}
+if ($Profile -eq 'full' -or $Profile -eq 'loot') {
+    & (Join-Path $ModRoot 'tools\test_loot_policy.ps1') -Samples 200000
+}
 
 if ($PythonDeps) {
     $env:PYTHONPATH = $PythonDeps

@@ -87,6 +87,34 @@ foreach ($now in @(0,1000,59999,60000)) {
 }
 Assert-True (($emitted -join ',') -eq '0,60000') 'diagnostic rate-limit model failed'
 
+function Find-RecreatedZone {
+    param([string]$Section, [object[]]$Zones)
+    $matches = @($Zones | Where-Object { -not $_.closed -and $_.kind -eq 'artifact' -and $_.section -eq $Section -and -not $_.old_exists })
+    $zone = $null
+    if ($matches.Count -eq 1) { $zone = $matches[0] }
+    return @{ zone = $zone; count = $matches.Count }
+}
+
+$uniqueLineage = Find-RecreatedZone 'af_dummy_battery' @(
+    @{ anchor = 11; kind = 'artifact'; section = 'af_dummy_battery'; old_exists = $false; closed = $false },
+    @{ anchor = 12; kind = 'artifact'; section = 'af_ring'; old_exists = $false; closed = $false }
+)
+Assert-True ($uniqueLineage.count -eq 1 -and $uniqueLineage.zone.anchor -eq 11) 'unique NPC replacement lineage was not resolved'
+$ambiguousLineage = Find-RecreatedZone 'af_dummy_battery' @(
+    @{ anchor = 11; kind = 'artifact'; section = 'af_dummy_battery'; old_exists = $false; closed = $false },
+    @{ anchor = 13; kind = 'artifact'; section = 'af_dummy_battery'; old_exists = $false; closed = $false }
+)
+Assert-True ($ambiguousLineage.count -eq 2 -and $null -eq $ambiguousLineage.zone) 'ambiguous NPC replacement lineage did not fail closed'
+
+# The replacement ID and owned terminal must survive a save/load round-trip.
+$lineageState = @{
+    artifact_zone = @{ '7012' = '30859'; '38145' = '30859' }
+    record = @{ state = 'owned'; ownership = @{ parent_id = 1404; current_id = 38145; source = 'npc_pickup_recreated_id'; lineage_ids = @{ '7012' = $true; '38145' = $true } } }
+}
+$lineageRestored = $lineageState | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+Assert-True ($lineageRestored.record.state -eq 'owned' -and $lineageRestored.record.ownership.current_id -eq 38145) 'owned replacement did not survive save/load'
+Assert-True ($lineageRestored.artifact_zone.'38145' -eq '30859' -and $lineageRestored.record.ownership.lineage_ids.'38145') 'replacement lookup/lineage did not survive save/load'
+
 foreach ($needle in @(
     'schema = 4', 'artifact_provenance = {}', 'provenance_schema = ARTIFACT_PROVENANCE_SCHEMA',
     'spawn_input_pos', 'first_server', 'last_good_server', 'last_good_online',
@@ -94,7 +122,13 @@ foreach ($needle in @(
     'state = "captured"', '"observing_server"', '"observing_online"', '"suspect"',
     '"rescue_pending"', '"owned"', '"closed"', '"released"', '"disabled"',
     'legacy_save_missing_spawn_provenance', 'record.underground.last_sample_at = nil',
-    'record.rolling.last_sample_at = nil', 'observe_only=true; action=none'
+    'record.rolling.last_sample_at = nil', 'observe_only=true; action=none',
+    'local function remember_artifact_lineage(zone, item, owner, source)',
+    'state.artifact_zone[key] = tostring(zone.anchor_id)',
+    'record.ownership.current_id = item_id', 'terminal_provenance(record, "owned", source, owned_snapshot)',
+    'if zone then match = "recreated_id" end', '"npc_pickup_" .. tostring(match)',
+    'artifact lineage ambiguous callback=npc',
+    'zone.artifact_lineage_ids = zone.artifact_lineage_ids or'
 )) {
     Assert-True ($main.Contains($needle)) "runtime provenance invariant missing: $needle"
 }
@@ -112,6 +146,7 @@ foreach ($needle in @(
 foreach ($forbidden in @('teleport_object', 'physics_element:fix', 'physics_element:release_fixed')) {
     Assert-True (-not $main.Contains($forbidden)) "active artifact rescue action is forbidden in phase 1: $forbidden"
 }
+Assert-True (-not $main.Contains('if not (item and C.get_bool("global", "remove_on_npc_pickup", false)) then return end')) 'NPC ownership tracking is incorrectly gated by remove_on_npc_pickup'
 
 if ($failures.Count -gt 0) {
     $failures | ForEach-Object { Write-Error $_ }

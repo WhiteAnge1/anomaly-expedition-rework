@@ -1417,6 +1417,7 @@ local function create_artifact_zone(artifact_id)
             local section = object_section(art)
             local zone = add_zone("artifact", anchor_id, center, radius, {
                 artifact_id = artifact_id,
+                artifact_lineage_ids = { [tostring(artifact_id)] = true },
                 artifact_section = section,
                 artifact_name = section_name(section),
                 artifact_offset = snapped_offset,
@@ -2582,7 +2583,7 @@ end
 -- and exactly one open zone qualifies; ambiguity deliberately keeps zones open.
 local function recreated_artifact_zone(item)
     local section = object_section(item)
-    if not section then return nil end
+    if not section then return nil, 0 end
     local candidate = nil
     local count = 0
     for _, zone in pairs(state.zones or {}) do
@@ -2594,7 +2595,43 @@ local function recreated_artifact_zone(item)
             end
         end
     end
-    return count == 1 and candidate or nil
+    return count == 1 and candidate or nil, count
+end
+
+local function remember_artifact_lineage(zone, item, owner, source)
+    if not (zone and item) then return false end
+    local item_id = safe_object_id_any(item)
+    if not item_id then return false end
+    local owner_id = safe_object_id_any(owner)
+    local key = tostring(item_id)
+    zone.artifact_lineage_ids = zone.artifact_lineage_ids or { [tostring(zone.artifact_id)] = true }
+    zone.artifact_lineage_ids[key] = true
+    state.artifact_zone[key] = tostring(zone.anchor_id)
+
+    local record = state.artifact_provenance and state.artifact_provenance[tostring(zone.artifact_id)]
+    if record then
+        record.ownership = record.ownership or { parent_id = nil, source = "none", lineage_ids = {} }
+        record.ownership.lineage_ids = record.ownership.lineage_ids or {}
+        record.ownership.lineage_ids[key] = true
+        record.ownership.parent_id = owner_id
+        record.ownership.current_id = item_id
+        record.ownership.source = source
+        record.timestamps = record.timestamps or {}
+        record.timestamps.lineage_at = time_global()
+        record.counters = record.counters or {}
+        record.counters.lineage = (record.counters.lineage or 0) + 1
+        local owned_snapshot = {
+            server_exists = true,
+            online_exists = true,
+            online_pos = safe_object_position(item),
+            online_parent_id = owner_id,
+        }
+        terminal_provenance(record, "owned", source, owned_snapshot)
+    end
+    log("artifact lineage ownership anchor=%s original=%s current=%s section=%s owner=%s source=%s terminal=owned",
+        tostring(zone.anchor_id), tostring(zone.artifact_id), tostring(item_id), tostring(zone.artifact_section),
+        tostring(owner_id), tostring(source))
+    return true
 end
 
 local function actor_on_item_take(item)
@@ -2607,19 +2644,37 @@ local function actor_on_item_take(item)
         close_zone(zone, "actor_pickup")
         return
     end
-    zone = recreated_artifact_zone(item)
+    local candidate_count = 0
+    zone, candidate_count = recreated_artifact_zone(item)
     if zone then
+        remember_artifact_lineage(zone, item, db.actor, "actor_pickup_recreated_id")
         log("artifact lineage recovered anchor=%s old=%s replacement=%s section=%s",
             tostring(zone.anchor_id), tostring(zone.artifact_id), tostring(item_id), tostring(zone.artifact_section))
         close_zone(zone, "actor_pickup_recreated_id")
+    elseif candidate_count > 1 then
+        log("artifact lineage ambiguous callback=actor item=%s section=%s candidates=%s; zones kept open",
+            tostring(item_id), tostring(object_section(item)), tostring(candidate_count))
     end
 end
 
 local function npc_on_item_take(npc, item)
-    if not (item and C.get_bool("global", "remove_on_npc_pickup", false)) then return end
-    local anchor_key = state.artifact_zone[tostring(item:id())]
+    if not item then return end
+    local item_id = safe_object_id_any(item)
+    local anchor_key = item_id and state.artifact_zone[tostring(item_id)] or nil
     local zone = anchor_key and state.zones[anchor_key]
-    if zone then close_zone(zone, "npc_pickup") end
+    local match = zone and "exact_id" or nil
+    local candidate_count = 0
+    if not zone then
+        zone, candidate_count = recreated_artifact_zone(item)
+        if zone then match = "recreated_id" end
+    end
+    if zone then
+        remember_artifact_lineage(zone, item, npc, "npc_pickup_" .. tostring(match))
+        if C.get_bool("global", "remove_on_npc_pickup", false) then close_zone(zone, "npc_pickup") end
+    elseif candidate_count > 1 then
+        log("artifact lineage ambiguous callback=npc item=%s section=%s npc=%s candidates=%s; fail_closed=true",
+            tostring(item_id), tostring(object_section(item)), tostring(safe_object_id_any(npc)), tostring(candidate_count))
+    end
 end
 
 local function physic_object_on_use_callback(box, who)
@@ -2828,6 +2883,10 @@ local function load_state(m_data)
             zone.anomaly_scan_complete = nil
         end
         if zone.kind == "artifact" and zone.artifact_id then
+            zone.artifact_lineage_ids = zone.artifact_lineage_ids or { [tostring(zone.artifact_id)] = true }
+            for lineage_id, _ in pairs(zone.artifact_lineage_ids) do
+                state.artifact_zone[tostring(lineage_id)] = tostring(zone.anchor_id)
+            end
             local record = state.artifact_provenance[tostring(zone.artifact_id)]
             if record then link_artifact_provenance(zone) end
         end

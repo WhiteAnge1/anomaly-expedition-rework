@@ -69,7 +69,7 @@
 | `artifact_rescue_rolling_confirm_ms` | `15000` | Устойчивое время снаружи до диагностического `rescue_pending` |
 | `artifact_rescue_log_repeat_ms` | `60000` | Минимальный интервал повторных save/сводных сообщений |
 
-Provenance сохраняет ID/section, шаблон и размер поля, его фактический центр, первый server position/LVID/GVID, связанную область, last-good позиции, ownership/lineage, bad-sample counters, timestamps, состояние, причину, вычисленную static-ray цель и нулевые action/cooldown counters. Старые сохранения без этих исходных данных мигрируют fail-closed в `disabled`: мод не пытается угадывать поле задним числом.
+Provenance сохраняет ID/section, шаблон и размер поля, его фактический центр, первый server position/LVID/GVID, связанную область, last-good позиции, ownership/lineage, bad-sample counters, timestamps, состояние, причину, вычисленную static-ray цель и нулевые action/cooldown counters. При NPC pickup RVM может заменить world ID новым inventory ID; однозначный replacement той же секции добавляется в сохраняемый lineage независимо от `remove_on_npc_pickup`, а неоднозначность остаётся fail-closed. Старые сохранения без исходных данных поля мигрируют в `disabled`: мод не пытается угадывать provenance задним числом.
 
 Строгий origin-кандидат требует одновременно near-origin, несовпадение с конкретным полем и его размером, плохой vertex/nav, отсутствие parent и валидную static-ray цель. Underground требует всех порогов из таблицы и отсутствия владельца. Rolling начинается при любом устойчивом превышении `radius + 5 м`; возврат внутрь до 15 секунд полностью сбрасывает эпизод. Даже `state=rescue_pending` в этой версии не выполняет teleport, recreate, release, фиксацию physics shell или изменение штатных количеств `4/8/6`.
 
