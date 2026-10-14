@@ -119,6 +119,32 @@ rare_artifact_chance = 70
 update_interval_ms = 1000
 
 ; --------------------------------------------------------------------------
+; Спасение рейдовых артефактов, стадия 1: только сохранение происхождения и
+; наблюдение. false полностью отключает классификаторы, но provenance всё равно
+; сохраняется для совместимости save/load. В этой альфе нет кода перемещения.
+artifact_rescue_observe_only = false
+; Зарезервированный предохранитель будущей стадии. Сейчас параметр намеренно
+; игнорируется и обязан оставаться false: teleport/physics actions не реализованы.
+artifact_rescue_actions = false
+; Строгий origin-кандидат требует одновременно близость к нулю, несовпадение с
+; реальным полем, плохой vertex, отсутствие владельца и проверенную static-цель.
+artifact_rescue_origin_radius = 2
+artifact_rescue_origin_field_margin = 2
+artifact_rescue_origin_nav_mismatch = 4
+; Underground считается подтверждённым только при падении >=12 м, vertex выше
+; минимум на 4 м (либо invalid) и трёх samples минимум за две секунды.
+artifact_rescue_underground_drop = 12
+artifact_rescue_underground_vertex_gap = 4
+artifact_rescue_underground_samples = 3
+artifact_rescue_underground_duration_ms = 2000
+; Rolling-эпизод начинается за linked radius + 5 м. Возврат внутрь до 15 секунд
+; сбрасывает его; устойчивое превышение только помечается rescue_pending.
+artifact_rescue_rolling_edge_margin = 5
+artifact_rescue_rolling_confirm_ms = 15000
+; Повторные save/сводные сообщения не чаще этого интервала.
+artifact_rescue_log_repeat_ms = 60000
+
+; --------------------------------------------------------------------------
 ; Необязательный казуальный режим точных меток. По умолчанию всё выключено:
 ; обычный баланс реворка — приблизительные области и самостоятельный поиск.
 ; true включает только выбранную метку, без debug-подписей, ID, координат,

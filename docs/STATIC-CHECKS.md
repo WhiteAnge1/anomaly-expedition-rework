@@ -1,6 +1,6 @@
 # Результат статических проверок
 
-Последнее обновление: 2026-10-12.
+Последнее обновление: 2026-10-14.
 
 - Все три `.script` разобраны `luaparser 4.2.0`: синтаксических ошибок нет.
 - `fomod/info.xml` и русская string table разобраны XML-парсером; для string table отдельно проверены Windows-1251, декларация кодировки и контрольная русская строка.
@@ -14,6 +14,7 @@
 - `test_loot_policy.ps1` отдельно моделирует 200000 контейнеров каждого тира: medicine 0/1/2, valuable 0/1/2/3, число ordinary, rare, частоту и количество осколков, T3 `af_aam` и `adrenalin`, повторы и максимумы `cap+rare`; static check запрещает возврат старого 45/55 fill и tools в valuable/rare.
 - `watch_live_log.ps1 -SelfTest` реально дописывает полную и частичную строки, проверяет truncate с быстрым повторным ростом файла через byte-checkpoint, delete/recreate, сохранение только отфильтрованных строк и `latest.log`. Детерминированная lifecycle-модель доказывает отсутствие выхода до первого обнаружения игры, фиксацию старта и завершение лишь после инъецированного короткого grace; runtime default остаётся 20 секунд. Runtime-reader читает новые байты напрямую через `FileStream`, не полагаясь на буферизацию `StreamReader`.
 - `test_geometry_policy.ps1` проверяет неизменные размеры кругов `32/60/48`, loot T1/T2/T3 `radius/3`, `radius/5`, `radius/10`, artifact-профили `0.35..0.80`, `0.10..0.20`, `0.06..0.12`, фактический post-snap limit, разрешённое перекрытие только истинных artifact-зон при сохранённом separation ложных зон, подробные rate-limited artifact-center причины, порядок пяти proximity-фаз и расширенный low-discrepancy hidden search.
+- `test_artifact_rescue_policy.ps1` проверяет строгий origin-мismatch против законного near-origin, underground debounce `12 м / 4 м / 3 samples / 2 с`, rolling `radius+5 / 15 с` со сбросом, ownership/target guards, fail-closed и идемпотентную legacy-миграцию, rate limit, обязательные поля provenance/config и отсутствие `teleport_object`/physics actions.
 - Проверены исходные PAW/GRA-текстуры в фактических XML сборки, собственные exact wrappers с `location_level=20`, размеры `14/14/15`, icon-only пользовательский exact-hint, сохранённый обычный hint круга и перенос единственной enemy-метки через `squad:commander_id()`; quest-pointer `crlc_squad_red` запрещён.
 - Регрессия same-level cleanup закрыта статическим запретом прямого `cleanup()` из `on_before_level_changing`; очистка разрешена только после определения фактического уровня на `actor_on_first_update`.
 - Каждый вызванный helper семейства `balanced*` обязан иметь локальное определение; отдельно проверяется строковая ветка forced tier → global default → `C.get_balanced_string`. Это закрывает runtime-регрессию `attempt to call global 'balanced_string'` до запуска игры.

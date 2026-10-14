@@ -20,6 +20,8 @@ local census_error_reported = false
 local next_artifact_diagnostic = 0
 local reported_artifact_overlaps = {}
 local safe_alive = nil
+local ARTIFACT_PROVENANCE_SCHEMA = 1
+local INVALID_VERTEX_ID = 4294967295
 
 -- Category selection is a separate weighted roll. Every entry points to an
 -- exact online_offline_group section; the section's fixed npc list is the
@@ -84,7 +86,7 @@ local ENEMY_SQUAD_PRESETS = {
 
 local function fresh_state()
     return {
-        schema = 3,
+        schema = 4,
         level_name = nil,
         sortie_type = nil,
         pending_transition = false,
@@ -93,6 +95,7 @@ local function fresh_state()
         zones = {},
         artifact_zone = {},
         pending_artifacts = {},
+        artifact_provenance = {},
         stash_ids = {},
         suppress_stash_calls = 0,
         decoys_created = false,
@@ -442,6 +445,213 @@ local function fmt_position(pos)
     return fmt_number(pos.x) .. "," .. fmt_number(pos.y) .. "," .. fmt_number(pos.z)
 end
 
+-- Artifact rescue phase 1 is deliberately observe-only.  The provenance
+-- record is persisted now so later same-ID experiments can be made without
+-- guessing where an item came from or repeating an action after save/load.
+local function artifact_rescue_observe_enabled()
+    return C.get_bool("global", "artifact_rescue_observe_only", false)
+end
+
+local function artifact_zone_size(anom_zone)
+    local family, index = string.match(tostring(anom_zone or ""), "^([%a]+)_(%d)")
+    local known = { chem = true, electr = true, therm = true, gravi = true, mosquito = true, fuzz = true, psy = true }
+    local sizes = { [1] = 10, [2] = 16, [3] = 22 }
+    return known[family] and sizes[tonumber(index)] or nil
+end
+
+local function safe_server_vertex(obj, field)
+    if not obj then return nil end
+    local ok, value = pcall(function() return obj[field] end)
+    return ok and type(value) == "number" and value or nil
+end
+
+local function valid_vertex_id(value)
+    return type(value) == "number" and value >= 0 and value < INVALID_VERTEX_ID
+end
+
+local function server_provenance_snapshot(obj)
+    if not obj then return nil end
+    return {
+        pos = safe_object_position(obj),
+        lvid = safe_server_vertex(obj, "m_level_vertex_id"),
+        gvid = safe_server_vertex(obj, "m_game_vertex_id"),
+    }
+end
+
+local function artifact_static_target(pos)
+    if not pos then return nil, "missing_position" end
+    local ok, result, reason = pcall(function()
+        local source = pos_vector(pos)
+        local lvid = valid_vertex(source)
+        if not lvid then return nil, "invalid_vertex" end
+        local nav = level.vertex_position(lvid)
+        if not nav then return nil, "missing_vertex_position" end
+        if type(ray_pick) ~= "userdata" and type(ray_pick) ~= "function" then
+            return nil, "ray_pick_unavailable"
+        end
+        local ray = ray_pick()
+        local start = vector():set(nav.x, nav.y + 2, nav.z)
+        ray:set_position(start)
+        ray:set_direction(vector():set(0, -1, 0))
+        ray:set_flags(2)
+        ray:set_range(4)
+        if not ray:query() then return nil, "static_support_missing" end
+        local supported = vector():set(start.x, start.y - ray:get_distance() + 0.1, start.z)
+        return {
+            pos = pos_table(supported),
+            lvid = lvid,
+            gvid = db.actor and db.actor:game_vertex_id() or nil,
+            support = "static_ray",
+        }, nil
+    end)
+    if not ok then return nil, "target_error:" .. tostring(result) end
+    return result, reason
+end
+
+local function compute_observe_target(record)
+    if record.target and record.target.valid then return record.target end
+    if not (record.spawn_input_pos and record.zone_size) then return nil end
+    local maximum = math.sqrt(2) * record.zone_size + C.get_number("global", "artifact_rescue_origin_field_margin", 2)
+    local candidates = { { x = 0, z = 0 } }
+    local radii = { 0.35, 0.60, 0.85 }
+    for _, factor in ipairs(radii) do
+        for step = 0, 7 do
+            local angle = (step * math.pi / 4) + (record.artifact_id % 7) * 0.13
+            candidates[#candidates + 1] = {
+                x = math.cos(angle) * record.zone_size * factor,
+                z = math.sin(angle) * record.zone_size * factor,
+            }
+        end
+    end
+    for _, offset in ipairs(candidates) do
+        local candidate = {
+            x = record.spawn_input_pos.x + offset.x,
+            y = record.spawn_input_pos.y,
+            z = record.spawn_input_pos.z + offset.z,
+        }
+        local target, reason = artifact_static_target(candidate)
+        if target and distance_xz(target.pos, record.spawn_input_pos) <= maximum then
+            target.valid = true
+            target.source = "field_candidate"
+            target.checked_at = time_global()
+            record.target = target
+            return target
+        end
+        record.target_last_error = reason
+    end
+    return nil
+end
+
+local function provenance_log(event, record, snapshot, reason, extra)
+    if not artifact_rescue_observe_enabled() then return end
+    local pos = snapshot and (snapshot.online_pos or snapshot.server_pos) or nil
+    local parent = snapshot and (snapshot.online_parent_id or snapshot.parent_id) or nil
+    local distance = record.linked_center and pos and distance_xz(pos, record.linked_center) or nil
+    local excess = distance and record.linked_radius and (distance - record.linked_radius) or nil
+    log("artifact rescue observe event=%s id=%s state=%s reason=%s section=%s level=%s zone=%s pos=(%s) first=(%s) lvid=%s gvid=%s current_vertex=%s vertex_dy=%s parent=%s owner=%s dist=%s radius=%s excess=%s samples=%s duration_ms=%s source=%s target=(%s) extra=%s",
+        tostring(event), tostring(record.artifact_id), tostring(record.state), tostring(reason or record.reason),
+        tostring(record.section), tostring(record.level), tostring(record.anom_zone), fmt_position(pos),
+        fmt_position(record.first_server and record.first_server.pos),
+        tostring(record.first_server and record.first_server.lvid), tostring(record.first_server and record.first_server.gvid),
+        tostring(snapshot and snapshot.nearest_vertex), fmt_number(snapshot and snapshot.vertex_delta_y or -9999),
+        tostring(parent), tostring(record.ownership and record.ownership.source), fmt_number(distance or -1),
+        fmt_number(record.linked_radius or -1), fmt_number(excess or -9999),
+        tostring(record.active_samples or 0), tostring(record.active_duration_ms or 0),
+        tostring(record.position_source or "none"), fmt_position(record.target and record.target.pos), tostring(extra or "none"))
+end
+
+local function terminal_provenance(record, terminal, reason, snapshot)
+    if not record or record.state == terminal then return end
+    record.state = terminal
+    record.reason = reason
+    record.timestamps = record.timestamps or {}
+    record.timestamps[terminal .. "_at"] = time_global()
+    provenance_log(terminal, record, snapshot, reason)
+end
+
+local function disable_provenance(record, context, err)
+    if not record then return end
+    record.disabled = true
+    record.state = "disabled"
+    record.reason = context
+    record.error_once = record.error_once or {}
+    if not record.error_once[context] then
+        record.error_once[context] = true
+        printf(PREFIX .. " ERROR artifact rescue observer disabled id=%s context=%s error=%s; no action attempted",
+            tostring(record.artifact_id), tostring(context), tostring(err))
+    end
+end
+
+local function capture_artifact_provenance(artifact_id, anom_zone, pos, level_tier)
+    state.artifact_provenance = state.artifact_provenance or {}
+    local key = tostring(artifact_id)
+    local existing = state.artifact_provenance[key]
+    if existing then
+        existing.counters = existing.counters or {}
+        existing.counters.callbacks = (existing.counters.callbacks or 1) + 1
+        return existing
+    end
+    local server_ok, server = pcall(alife_object, artifact_id)
+    server = server_ok and server or nil
+    local first = server_provenance_snapshot(server)
+    local record = {
+        provenance_schema = ARTIFACT_PROVENANCE_SCHEMA,
+        artifact_id = artifact_id,
+        section = object_section(server),
+        anom_zone = tostring(anom_zone or ""),
+        zone_size = artifact_zone_size(anom_zone),
+        level = state.level_name or (level and level.name()),
+        tier = tonumber(level_tier) or current_tier(),
+        field_center = pos_table(pos),
+        spawn_input_pos = pos_table(pos),
+        first_server = first,
+        last_good_server = first and valid_vertex_id(first.lvid) and first or nil,
+        last_good_online = nil,
+        linked_anchor_id = nil,
+        linked_center = nil,
+        linked_radius = nil,
+        ownership = { parent_id = nil, source = "none", lineage_ids = { [key] = true } },
+        counters = { callbacks = 1, samples = 0, origin = 0, underground = 0, rolling = 0, confirmed = 0 },
+        timestamps = { captured_at = time_global(), updated_at = time_global() },
+        state = "captured",
+        reason = "wrapper_callback_captured",
+        target = nil,
+        rescue_count = 0,
+        rolling_rescue_count = 0,
+        cooldown_until = 0,
+        actions = {},
+        disabled = false,
+        error_once = {},
+        origin = { checked = false },
+        underground = { samples = 0, duration_ms = 0, last_sample_at = nil, confirmed = false },
+        rolling = { samples = 0, duration_ms = 0, last_sample_at = nil, max_excess = 0, confirmed = false },
+    }
+    if not record.zone_size or not record.spawn_input_pos then
+        disable_provenance(record, "capture_missing_field_provenance", "zone_size_or_spawn_input_missing")
+    end
+    state.artifact_provenance[key] = record
+    if artifact_rescue_observe_enabled() then compute_observe_target(record) end
+    provenance_log("captured", record, nil, record.reason,
+        "field=" .. fmt_position(record.spawn_input_pos) .. ",zone_size=" .. tostring(record.zone_size))
+    if first and not record.disabled then
+        record.state = "observing_server"
+        record.reason = "first_server_captured"
+        record.timestamps.first_server_at = time_global()
+        provenance_log("observing_server", record, nil, record.reason)
+    end
+    return record
+end
+
+local function link_artifact_provenance(zone)
+    if not (zone and zone.artifact_id) then return end
+    local record = state.artifact_provenance and state.artifact_provenance[tostring(zone.artifact_id)]
+    if not record then return end
+    record.linked_anchor_id = zone.anchor_id
+    record.linked_center = pos_table(zone.center)
+    record.linked_radius = zone.radius
+    record.timestamps.linked_at = record.timestamps.linked_at or time_global()
+end
+
 -- The item-take callback is not guaranteed for corpse loot/trade. The exact
 -- server ID is therefore also checked against actor inventory and its parent
 -- chain. Every engine-facing access is protected: an uncertain result keeps
@@ -465,6 +675,9 @@ local function artifact_snapshot(zone)
     if server_ok and server_obj then
         snapshot.server_exists = true
         snapshot.server_pos = safe_object_position(server_obj)
+        snapshot.server_lvid = safe_server_vertex(server_obj, "m_level_vertex_id")
+        snapshot.server_gvid = safe_server_vertex(server_obj, "m_game_vertex_id")
+        snapshot.server_section = object_section(server_obj)
         snapshot.parent_id = safe_parent_id(server_obj)
     end
     local online_ok, online_obj = pcall(function() return level and level.object_by_id(id) end)
@@ -520,6 +733,213 @@ local function artifact_snapshot(zone)
         end
     end
     return snapshot
+end
+
+local function begin_artifact_suspect(record, reason, snapshot, extra)
+    if record.state ~= "rescue_pending" then record.state = "suspect" end
+    record.reason = reason
+    record.timestamps.first_suspect_at = record.timestamps.first_suspect_at or time_global()
+    record.counters[reason] = (record.counters[reason] or 0) + 1
+    provenance_log("first_suspect", record, snapshot, reason, extra)
+end
+
+local function confirm_artifact_candidate(record, reason, snapshot, extra)
+    record.state = "rescue_pending"
+    record.reason = reason
+    record.timestamps.confirmed_at = time_global()
+    record.counters.confirmed = (record.counters.confirmed or 0) + 1
+    provenance_log("confirmed", record, snapshot, reason, extra .. "; observe_only=true; action=none")
+end
+
+local function reset_bad_episode(record, episode_name, snapshot, reason)
+    local episode = record[episode_name]
+    if not episode or (episode.samples or 0) == 0 then return end
+    record.active_samples = episode.samples
+    record.active_duration_ms = episode.duration_ms
+    provenance_log("recovery_reset", record, snapshot, reason,
+        "episode=" .. tostring(episode_name) .. ",max_excess=" .. fmt_number(episode.max_excess or 0))
+    episode.samples = 0
+    episode.duration_ms = 0
+    episode.last_sample_at = nil
+    episode.started_at = nil
+    episode.max_excess = 0
+    episode.trend = nil
+    episode.last_distance = nil
+    episode.confirmed = false
+    if record.reason == episode_name or string.find(tostring(record.reason), episode_name, 1, true) then
+        record.state = snapshot.online_exists and "observing_online" or "observing_server"
+        record.reason = reason
+    end
+end
+
+local function advance_bad_episode(episode, now)
+    local delta = 0
+    if episode.last_sample_at and now >= episode.last_sample_at then
+        local interval = math.max(250, C.get_number("global", "update_interval_ms", 1000))
+        delta = math.min(now - episode.last_sample_at, interval * 2)
+    end
+    episode.samples = (episode.samples or 0) + 1
+    episode.duration_ms = (episode.duration_ms or 0) + delta
+    episode.last_sample_at = now
+    episode.started_at = episode.started_at or now
+end
+
+local function observe_origin_candidate(record, snapshot)
+    if record.origin.checked or not snapshot.server_exists or not snapshot.server_pos then return end
+    local target = compute_observe_target(record)
+    if not target then return end
+    local pos = snapshot.server_pos
+    local origin_radius = math.max(0, C.get_number("global", "artifact_rescue_origin_radius", 2))
+    local origin_distance = math.sqrt(pos.x * pos.x + pos.y * pos.y + pos.z * pos.z)
+    local field_limit = math.sqrt(2) * record.zone_size
+        + C.get_number("global", "artifact_rescue_origin_field_margin", 2)
+    local field_distance = distance_xz(pos, record.spawn_input_pos)
+    local first_lvid = record.first_server and record.first_server.lvid
+    local nav_limit = math.max(0, C.get_number("global", "artifact_rescue_origin_nav_mismatch", 4))
+    local nav_bad = not valid_vertex_id(first_lvid)
+        or snapshot.nearest_vertex == nil
+        or (snapshot.vertex_distance and snapshot.vertex_distance > nav_limit)
+        or (snapshot.vertex_delta_y and math.abs(snapshot.vertex_delta_y) > nav_limit)
+    record.origin.checked = true
+    record.origin.near_origin = origin_distance <= origin_radius
+    record.origin.field_distance = field_distance
+    record.origin.field_limit = field_limit
+    record.origin.nav_bad = nav_bad
+    record.origin.target_valid = target.valid == true
+    if record.origin.near_origin and field_distance > field_limit and nav_bad and target.valid then
+        local extra = "origin_distance=" .. fmt_number(origin_distance)
+            .. ",field_distance=" .. fmt_number(field_distance)
+            .. ",field_limit=" .. fmt_number(field_limit)
+            .. ",nav_bad=" .. tostring(nav_bad)
+        begin_artifact_suspect(record, "origin_mismatch", snapshot, extra)
+        record.active_samples = 1
+        record.active_duration_ms = 0
+        confirm_artifact_candidate(record, "origin_mismatch", snapshot, extra)
+    end
+end
+
+local function observe_underground_candidate(record, snapshot, now)
+    local episode = record.underground
+    if not (snapshot.online_exists and snapshot.online_pos) then
+        episode.last_sample_at = nil
+        return
+    end
+    local baseline = record.last_good_online and record.last_good_online.pos
+        or record.last_good_server and record.last_good_server.pos
+    if not baseline then return end
+    local drop = baseline.y - snapshot.online_pos.y
+    local drop_limit = math.max(0, C.get_number("global", "artifact_rescue_underground_drop", 12))
+    local vertex_gap = math.max(0, C.get_number("global", "artifact_rescue_underground_vertex_gap", 4))
+    local nav_bad = snapshot.nearest_vertex == nil
+        or (snapshot.vertex_delta_y and snapshot.vertex_delta_y <= -vertex_gap)
+    local target = compute_observe_target(record)
+    local bad = drop >= drop_limit and nav_bad and target and target.valid
+    if not bad then
+        reset_bad_episode(record, "underground", snapshot, "underground_recovered")
+        if snapshot.nearest_vertex and snapshot.vertex_delta_y and math.abs(snapshot.vertex_delta_y) < vertex_gap then
+            record.last_good_online = { pos = pos_table(snapshot.online_pos), lvid = snapshot.nearest_vertex, captured_at = now }
+        end
+        return
+    end
+    if (episode.samples or 0) == 0 then
+        begin_artifact_suspect(record, "underground", snapshot,
+            "drop=" .. fmt_number(drop) .. ",vertex_dy=" .. fmt_number(snapshot.vertex_delta_y or -9999))
+    end
+    advance_bad_episode(episode, now)
+    record.active_samples = episode.samples
+    record.active_duration_ms = episode.duration_ms
+    record.counters.underground = (record.counters.underground or 0) + 1
+    local samples_required = math.max(1, math.floor(C.get_number("global", "artifact_rescue_underground_samples", 3)))
+    local duration_required = math.max(0, C.get_number("global", "artifact_rescue_underground_duration_ms", 2000))
+    if not episode.confirmed and episode.samples >= samples_required and episode.duration_ms >= duration_required then
+        episode.confirmed = true
+        confirm_artifact_candidate(record, "underground", snapshot,
+            "drop=" .. fmt_number(drop) .. ",vertex_dy=" .. fmt_number(snapshot.vertex_delta_y or -9999))
+    end
+end
+
+local function observe_rolling_candidate(record, snapshot, now)
+    if not (record.linked_center and record.linked_radius) then return end
+    local pos = snapshot.online_pos or snapshot.server_pos
+    if not pos then return end
+    local episode = record.rolling
+    local distance = distance_xz(pos, record.linked_center)
+    local margin = math.max(0, C.get_number("global", "artifact_rescue_rolling_edge_margin", 5))
+    local excess = distance - record.linked_radius
+    if excess <= margin then
+        reset_bad_episode(record, "rolling", snapshot, "rolling_returned_inside_tether")
+        return
+    end
+    local previous_distance = episode.last_distance
+    if previous_distance then
+        episode.trend = distance > previous_distance + 0.25 and "outward"
+            or distance < previous_distance - 0.25 and "returning" or "steady"
+    else
+        episode.trend = "initial"
+    end
+    episode.last_distance = distance
+    episode.max_excess = math.max(episode.max_excess or 0, excess)
+    if (episode.samples or 0) == 0 then
+        begin_artifact_suspect(record, "rolling", snapshot,
+            "threshold=radius+" .. fmt_number(margin) .. ",trend=" .. tostring(episode.trend))
+    end
+    advance_bad_episode(episode, now)
+    record.active_samples = episode.samples
+    record.active_duration_ms = episode.duration_ms
+    record.counters.rolling = (record.counters.rolling or 0) + 1
+    local duration_required = math.max(0, C.get_number("global", "artifact_rescue_rolling_confirm_ms", 15000))
+    if not episode.confirmed and episode.duration_ms >= duration_required then
+        episode.confirmed = true
+        confirm_artifact_candidate(record, "rolling", snapshot,
+            "max_excess=" .. fmt_number(episode.max_excess) .. ",trend=" .. tostring(episode.trend))
+    end
+end
+
+local function observe_artifact_provenance_impl(record, zone, snapshot, now)
+    if record.disabled or record.state == "closed" or record.state == "released" or record.state == "owned" then return end
+    record.timestamps.updated_at = now
+    record.counters.samples = (record.counters.samples or 0) + 1
+    record.position_source = snapshot.online_pos and "online" or snapshot.server_pos and "server" or "none"
+    if zone.closed then terminal_provenance(record, "closed", "zone_closed", snapshot); return end
+
+    if snapshot.server_exists and not record.first_server then
+        record.first_server = {
+            pos = pos_table(snapshot.server_pos),
+            lvid = snapshot.server_lvid,
+            gvid = snapshot.server_gvid,
+        }
+        record.section = record.section or snapshot.server_section
+        record.timestamps.first_server_at = now
+        if valid_vertex_id(snapshot.server_lvid) then record.last_good_server = record.first_server end
+    end
+
+    local parent_id = snapshot.online_parent_id or snapshot.parent_id
+    if parent_id ~= nil and parent_id ~= 65535 then
+        record.ownership.parent_id = parent_id
+        record.ownership.source = snapshot.actor_owned and snapshot.ownership_source or "non_actor_parent"
+        record.ownership.lineage_ids[tostring(parent_id)] = true
+        terminal_provenance(record, "owned", record.ownership.source, snapshot)
+        return
+    end
+    if snapshot.online_exists and record.state == "observing_server" then
+        record.state = "observing_online"
+        record.reason = "first_online_observed"
+    elseif snapshot.server_exists and record.state == "captured" then
+        record.state = "observing_server"
+        record.reason = "server_observed"
+    end
+
+    observe_origin_candidate(record, snapshot)
+    if record.state == "rescue_pending" and record.reason == "origin_mismatch" then return end
+    observe_underground_candidate(record, snapshot, now)
+    if record.state == "rescue_pending" and record.reason == "underground" then return end
+    observe_rolling_candidate(record, snapshot, now)
+end
+
+local function observe_artifact_provenance(record, zone, snapshot, now)
+    if not artifact_rescue_observe_enabled() then return end
+    local ok, err = pcall(observe_artifact_provenance_impl, record, zone, snapshot, now)
+    if not ok then disable_provenance(record, "observe_update", err) end
 end
 
 local function artifact_diagnostic_text(snapshot)
@@ -792,6 +1212,10 @@ end
 
 local function close_zone(zone, reason)
     if not zone or zone.closed then return end
+    if zone.kind == "artifact" and zone.artifact_id then
+        local record = state.artifact_provenance and state.artifact_provenance[tostring(zone.artifact_id)]
+        if record then terminal_provenance(record, "closed", reason, nil) end
+    end
     remove_spot(zone)
     -- Releasing an inventory box inside its use callback can invalidate the
     -- inventory window. Keep an opened box until sortie cleanup.
@@ -824,6 +1248,11 @@ function cleanup(reason)
         tostring(state.counters.artifact or 0), tostring(state.counters.enemy or 0),
         tostring(state.counters.loot or 0), tostring(state.counters.empty or 0))
     log("cleanup reason=%s level=%s zones=%s", tostring(reason), tostring(state.level_name), tostring(size_table(state.zones or {})))
+    for _, record in pairs(state.artifact_provenance or {}) do
+        if record.state ~= "owned" and record.state ~= "closed" and record.state ~= "disabled" then
+            terminal_provenance(record, "released", reason, nil)
+        end
+    end
     for _, zone in pairs(state.zones or {}) do
         remove_spot(zone)
         if zone.squad_id then
@@ -996,6 +1425,7 @@ local function create_artifact_zone(artifact_id)
             })
             if zone then
                 state.artifact_zone[tostring(artifact_id)] = tostring(anchor_id)
+                link_artifact_provenance(zone)
                 artifact_center_failures[tostring(artifact_id)] = nil
                 release_log("artifact placement tier=%s level=%s offset=%s fraction=%s limit=%s range=%s..%s",
                     tostring(current_tier()), tostring(level.name()), fmt_number(snapped_offset),
@@ -1950,6 +2380,26 @@ local function refresh_zone_squad_members(zone)
 end
 
 local function update_artifact_zones(now)
+    if artifact_rescue_observe_enabled() then
+        for _, record in pairs(state.artifact_provenance or {}) do
+            if record.level == state.level_name and record.state ~= "closed" and record.state ~= "released" then
+                local zone = record.linked_anchor_id and state.zones[tostring(record.linked_anchor_id)] or nil
+                zone = zone or {
+                    kind = "artifact",
+                    artifact_id = record.artifact_id,
+                    center = record.linked_center or record.spawn_input_pos,
+                    radius = record.linked_radius or record.zone_size,
+                    closed = false,
+                }
+                local snapshot_ok, snapshot = pcall(artifact_snapshot, zone)
+                if snapshot_ok then
+                    observe_artifact_provenance(record, zone, snapshot, now)
+                else
+                    disable_provenance(record, "snapshot", snapshot)
+                end
+            end
+        end
+    end
     local emit_diagnostic = debug_enabled() and now >= next_artifact_diagnostic
     if emit_diagnostic then next_artifact_diagnostic = now + 15000 end
     local exact_candidates = {}
@@ -2071,10 +2521,16 @@ local function install_hooks()
         raid_anomalys.spawn_artefact_in_zone = function(anom_zone, pos, level_tier)
             local artifact_id = base_spawn_artifact(anom_zone, pos, level_tier)
             if enabled() and artifact_id and state.sortie_type == "infected" and state.level_name == level.name() then
+                local capture_ok, capture_error = pcall(capture_artifact_provenance, artifact_id, anom_zone, pos, level_tier)
+                if not capture_ok then
+                    printf(PREFIX .. " ERROR artifact provenance capture failed id=%s zone=%s error=%s; observer skipped, base artifact preserved",
+                        tostring(artifact_id), tostring(anom_zone), tostring(capture_error))
+                end
                 state.pending_artifacts[tostring(artifact_id)] = artifact_id
                 artifact_center_failures[tostring(artifact_id)] = nil
                 state.last_artifact_time = time_global()
-                log("captured raid artifact id=%s zone=%s", tostring(artifact_id), tostring(anom_zone))
+                log("captured raid artifact id=%s zone=%s field=(%s) tier=%s provenance=%s",
+                    tostring(artifact_id), tostring(anom_zone), fmt_position(pos), tostring(level_tier), tostring(capture_ok))
             end
             return artifact_id
         end
@@ -2242,20 +2698,120 @@ local function on_before_level_changing()
 end
 
 local function save_state(m_data)
+    if artifact_rescue_observe_enabled() and debug_enabled() then
+        local now = time_global()
+        local interval = math.max(1000, C.get_number("global", "artifact_rescue_log_repeat_ms", 60000))
+        if now >= (state.provenance_next_save_log_at or 0) then
+            log("artifact rescue observe event=save records=%s schema=%s actions=none",
+                tostring(size_table(state.artifact_provenance or {})), tostring(ARTIFACT_PROVENANCE_SCHEMA))
+            state.provenance_next_save_log_at = now + interval
+        end
+    end
     m_data.rvm_sorties_rework = state
+end
+
+local function legacy_disabled_provenance(artifact_id, zone, reason)
+    return {
+        provenance_schema = ARTIFACT_PROVENANCE_SCHEMA,
+        artifact_id = artifact_id,
+        section = zone and zone.artifact_section or nil,
+        anom_zone = nil,
+        zone_size = nil,
+        level = state.level_name,
+        tier = nil,
+        field_center = nil,
+        spawn_input_pos = nil,
+        first_server = nil,
+        last_good_server = nil,
+        last_good_online = nil,
+        linked_anchor_id = zone and zone.anchor_id or nil,
+        linked_center = zone and pos_table(zone.center) or nil,
+        linked_radius = zone and zone.radius or nil,
+        ownership = { parent_id = nil, source = "none", lineage_ids = { [tostring(artifact_id)] = true } },
+        counters = { callbacks = 0, samples = 0, origin = 0, underground = 0, rolling = 0, confirmed = 0 },
+        timestamps = {},
+        state = "disabled",
+        reason = reason,
+        target = nil,
+        rescue_count = 0,
+        rolling_rescue_count = 0,
+        cooldown_until = 0,
+        actions = {},
+        disabled = true,
+        error_once = { migration = true },
+        origin = { checked = false },
+        underground = { samples = 0, duration_ms = 0, last_sample_at = nil, confirmed = false },
+        rolling = { samples = 0, duration_ms = 0, last_sample_at = nil, max_excess = 0, confirmed = false },
+    }
+end
+
+local function migrate_artifact_provenance(previous_schema)
+    state.artifact_provenance = state.artifact_provenance or {}
+    for _, zone in pairs(state.zones or {}) do
+        if zone.kind == "artifact" and zone.artifact_id
+        and not state.artifact_provenance[tostring(zone.artifact_id)] then
+            local reason = previous_schema < 4 and "legacy_save_missing_spawn_provenance"
+                or "saved_record_missing_spawn_provenance"
+            state.artifact_provenance[tostring(zone.artifact_id)] = legacy_disabled_provenance(
+                zone.artifact_id, zone, reason)
+        end
+    end
+    for key, artifact_id in pairs(state.pending_artifacts or {}) do
+        if not state.artifact_provenance[tostring(artifact_id)] then
+            local reason = previous_schema < 4 and "legacy_pending_missing_spawn_provenance"
+                or "saved_pending_missing_spawn_provenance"
+            state.artifact_provenance[tostring(artifact_id)] = legacy_disabled_provenance(
+                artifact_id, nil, reason)
+        end
+    end
+    for key, record in pairs(state.artifact_provenance) do
+        if type(record) ~= "table" then
+            state.artifact_provenance[key] = legacy_disabled_provenance(tonumber(key), nil, "invalid_saved_record")
+        else
+            record.artifact_id = record.artifact_id or tonumber(key)
+            record.counters = record.counters or {}
+            record.timestamps = record.timestamps or {}
+            record.ownership = record.ownership or { parent_id = nil, source = "none", lineage_ids = {} }
+            record.ownership.lineage_ids = record.ownership.lineage_ids or {}
+            record.ownership.lineage_ids[tostring(record.artifact_id)] = true
+            record.actions = record.actions or {}
+            record.error_once = record.error_once or {}
+            record.origin = record.origin or { checked = false }
+            record.underground = record.underground or { samples = 0, duration_ms = 0, confirmed = false }
+            record.rolling = record.rolling or { samples = 0, duration_ms = 0, max_excess = 0, confirmed = false }
+            -- time_global is process-local; accumulated durations survive, raw
+            -- sample clocks do not.
+            record.underground.last_sample_at = nil
+            record.rolling.last_sample_at = nil
+            record.rescue_count = tonumber(record.rescue_count) or 0
+            record.rolling_rescue_count = tonumber(record.rolling_rescue_count) or 0
+            record.cooldown_until = tonumber(record.cooldown_until) or 0
+            if record.provenance_schema ~= ARTIFACT_PROVENANCE_SCHEMA
+            or not record.spawn_input_pos or not record.zone_size or not record.level then
+                record.disabled = true
+                record.state = "disabled"
+                record.reason = "incompatible_or_incomplete_provenance"
+            end
+            provenance_log("load_restore", record, nil, record.reason,
+                "saved_state=" .. tostring(record.state) .. ",actions=" .. tostring(#record.actions))
+        end
+    end
 end
 
 local function load_state(m_data)
     state = m_data.rvm_sorties_rework or fresh_state()
+    local previous_schema = tonumber(state.schema) or 0
     artifact_center_failures = {}
     reported_artifact_overlaps = {}
     state.zones = state.zones or {}
     state.artifact_zone = state.artifact_zone or {}
     state.pending_artifacts = state.pending_artifacts or {}
+    state.artifact_provenance = state.artifact_provenance or {}
     state.stash_ids = state.stash_ids or {}
     state.counters = state.counters or fresh_state().counters
     state.census_squads = state.census_squads or {}
     state.census_initialized = state.census_initialized or false
+    state.provenance_next_save_log_at = 0
     state.pending_transition = state.pending_transition == true
     state.transition_from_level = state.transition_from_level or nil
     for _, zone in pairs(state.zones) do
@@ -2271,8 +2827,13 @@ local function load_state(m_data)
             zone.anomaly_positions = nil
             zone.anomaly_scan_complete = nil
         end
+        if zone.kind == "artifact" and zone.artifact_id then
+            local record = state.artifact_provenance[tostring(zone.artifact_id)]
+            if record then link_artifact_provenance(zone) end
+        end
     end
-    state.schema = 3
+    migrate_artifact_provenance(previous_schema)
+    state.schema = 4
 end
 
 local function find_debug_ui(...)

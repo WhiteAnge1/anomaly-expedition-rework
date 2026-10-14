@@ -52,6 +52,27 @@
 
 Центр artifact-области настраивается ключами `artifact_offset_fraction_min/max` через обычную иерархию `[global] → [tier_N] → [level_*]`. Принятые профили: T1 `0.35..0.80` без изменений, T2 `0.10..0.20`, T3 `0.06..0.12`. После привязки к level-vertex проверяется уже фактическое смещение центра; превышение max отклоняется. Release-log сообщает `tier/level/offset/fraction/limit/range`. Настоящие artifact-области могут перекрываться друг с другом, потому что штатный RVM способен создать несколько артефактов в одной anomaly-zone; `zone_separation_min` по-прежнему действует для ложных областей и не превращён в общий запрет кластеров. Это исправляет только отображаемую геометрию и не перемещает сам артефакт; случаи `(0,0,0)` и underground остаются отдельной задачей rescue. При невозможности построить центр rate-limited лог показывает позицию, `near_origin` (не далее 2 м от мирового нуля) и накопленные причины отказов `invalid_vertex/post_snap_limit/separation/anchor_failure`.
 
+## Artifact rescue: стадия наблюдения
+
+| Параметр | Default | Назначение |
+|---|---:|---|
+| `artifact_rescue_observe_only` | `false` | Включает сохраняемые классификаторы и debug-события; никаких действий над предметом |
+| `artifact_rescue_actions` | `false` | Зарезервированный предохранитель; в текущем runtime игнорируется и должен оставаться `false` |
+| `artifact_rescue_origin_radius` | `2` | Радиус признака near-origin; сам по себе никогда не подтверждает ошибку |
+| `artifact_rescue_origin_field_margin` | `2` | Запас сверх `sqrt(2) * size` при проверке несовпадения с исходным полем |
+| `artifact_rescue_origin_nav_mismatch` | `4` | Порог несогласованности позиции с nav vertex |
+| `artifact_rescue_underground_drop` | `12` | Минимальное падение Y от последней достоверной позиции |
+| `artifact_rescue_underground_vertex_gap` | `4` | Vertex должен быть выше объекта минимум на это расстояние либо быть invalid |
+| `artifact_rescue_underground_samples` | `3` | Число последовательных плохих samples |
+| `artifact_rescue_underground_duration_ms` | `2000` | Минимальная длительность underground-эпизода |
+| `artifact_rescue_rolling_edge_margin` | `5` | Эпизод начинается дальше `linked radius + margin` |
+| `artifact_rescue_rolling_confirm_ms` | `15000` | Устойчивое время снаружи до диагностического `rescue_pending` |
+| `artifact_rescue_log_repeat_ms` | `60000` | Минимальный интервал повторных save/сводных сообщений |
+
+Provenance сохраняет ID/section, шаблон и размер поля, его фактический центр, первый server position/LVID/GVID, связанную область, last-good позиции, ownership/lineage, bad-sample counters, timestamps, состояние, причину, вычисленную static-ray цель и нулевые action/cooldown counters. Старые сохранения без этих исходных данных мигрируют fail-closed в `disabled`: мод не пытается угадывать поле задним числом.
+
+Строгий origin-кандидат требует одновременно near-origin, несовпадение с конкретным полем и его размером, плохой vertex/nav, отсутствие parent и валидную static-ray цель. Underground требует всех порогов из таблицы и отсутствия владельца. Rolling начинается при любом устойчивом превышении `radius + 5 м`; возврат внутрь до 15 секунд полностью сбрасывает эпизод. Даже `state=rescue_pending` в этой версии не выполняет teleport, recreate, release, фиксацию physics shell или изменение штатных количеств `4/8/6`.
+
 ## Диагностика и тестовые параметры
 
 - `debug_mode = auto|on|off` — полный технический режим. `auto` следует `DEV_DEBUG`/`DEV_DEBUG_DEV`.

@@ -24,8 +24,10 @@ $required = @(
     'tools\watch_live_log.cmd',
     'tools\test_loot_policy.ps1',
     'tools\test_geometry_policy.ps1',
+    'tools\test_artifact_rescue_policy.ps1',
     'docs\ARTIFACT-RESCUE-DESIGN.md',
-    'docs\ARTIFACT-RESCUE-RESEARCH.md'
+    'docs\ARTIFACT-RESCUE-RESEARCH.md',
+    'docs\ARTIFACT-RESCUE-OBSERVE.md'
 )
 foreach ($relative in $required) {
     if (-not (Test-Path -LiteralPath (Join-Path $ModRoot $relative))) { $failures.Add("missing: $relative") }
@@ -319,6 +321,7 @@ if ($BuildModsRoot) {
 
 & (Join-Path $ModRoot 'tools\watch_live_log.ps1') -SelfTest
 & (Join-Path $ModRoot 'tools\test_geometry_policy.ps1') -ModRoot $ModRoot
+& (Join-Path $ModRoot 'tools\test_artifact_rescue_policy.ps1') -ModRoot $ModRoot
 & (Join-Path $ModRoot 'tools\test_loot_policy.ps1') -Samples 200000
 
 if ($PythonDeps) {

@@ -1,0 +1,66 @@
+# Artifact rescue: provenance и observe-only, стадия 1
+
+Статус: тестируемая альфа наблюдателя. Активного спасения в этой стадии нет: предметы не перемещаются, не пересоздаются, не фиксируются физикой и не освобождаются. Штатные количества RVM `4/8/6` не изменены.
+
+## Что сохраняется
+
+На каждый ID, возвращённый штатным `raid_anomalys.spawn_artefact_in_zone`, создаётся идемпотентная provenance-запись schema 1 внутри общего save schema 4:
+
+- section, `anom_zone`, размер шаблона `10/16/22`, level и tier;
+- переданный центр конкретного поля и первый server `pos/lvid/gvid`;
+- ID/центр/радиус связанного круга после его создания;
+- last-good server/online позиции, parent, источник ownership и lineage IDs;
+- отдельные samples/duration/max excess/trend для origin, underground и rolling;
+- state/reason/target, timestamps, нулевые rescue counters/cooldown и пустой список actions;
+- `disabled/error_once` для fail-closed поведения.
+
+Повторный wrapper callback увеличивает только счётчик и не создаёт вторую запись. При загрузке raw sample clocks сбрасываются, а накопленная длительность сохраняется. Старое сохранение без центра исходного поля мигрирует в терминальное `disabled`: такой объект продолжает жить по штатным правилам, но классификатор не угадывает provenance.
+
+## State machine этой стадии
+
+Рабочая цепочка: `captured -> observing_server -> observing_online -> suspect -> rescue_pending`.
+
+Терминалы: `owned`, `closed`, `released`, `disabled`. Будущие `verifying/stable` относятся к активной стадии и сейчас недостижимы. `rescue_pending` — только запись подтверждённой диагностики; в логе она помечается `observe_only=true; action=none`.
+
+## Классификаторы
+
+Origin подтверждается только сочетанием всех guardrails: расстояние до мирового нуля не больше 2 м, позиция дальше `sqrt(2) * zone_size + 2 м` от переданного центра именно этого поля, invalid/несогласованный vertex, отсутствие parent и наличие static-ray цели возле поля. Законное поле возле `(0,0,0)` не срабатывает.
+
+Underground требует падения минимум на 12 м от last-good Y, vertex минимум на 4 м выше предмета либо invalid vertex, три последовательных sample минимум за 2 секунды, отсутствие ownership и static-ray цель.
+
+Rolling начинается, когда свободный предмет дальше центра связанного круга, чем `radius + 5 м`. Записываются max excess, duration и trend. Возврат внутрь до 15 секунд сбрасывает эпизод; нахождение снаружи не менее 15 секунд создаёт диагностический кандидат.
+
+## Debug-журнал
+
+Для полевого теста выставить:
+
+```ini
+artifact_rescue_observe_only = true
+artifact_rescue_actions = false
+debug_mode = on
+```
+
+События имеют общий префикс `artifact rescue observe event=`:
+
+- `captured`, `observing_server`;
+- `first_suspect`, затем `confirmed`;
+- `recovery_reset` при исчезновении плохого состояния;
+- `owned`, `closed`, `released`;
+- `save` и `load_restore`.
+
+Строки включают ID/section/level/template, current и first position, vertex, parent/owner, distance/radius/excess, samples/duration/source и вычисленную target. Рутинные строки видны только в debug. Ошибка engine-facing observer выключает только запись этого ID и один раз пишет `ERROR ... no action attempted`.
+
+## Короткий полевой тест
+
+1. Сохранить исходные значения forced/debug. В тестовой MO2-копии включить только `artifact_rescue_observe_only=true` и `debug_mode=on`; `artifact_rescue_actions=false` не менять.
+2. Полностью закрыть X-Ray. Запустить `tools\watch_live_log.cmd`, затем игру и новую аномальную вылазку.
+3. На T1/T2/T3 проверить `captured` для каждого штатного ID и отсутствие любой строки о teleport/physics/action.
+4. На нормальном артефакте возле origin убедиться, что одного `near_origin` недостаточно. Для доказанного несовпадения ожидать `first_suspect` и `confirmed reason=origin_mismatch`.
+5. Для провалившегося online-объекта ожидать не меньше трёх samples и `duration_ms>=2000` до `confirmed reason=underground`.
+6. Для выкатившегося предмета ожидать `first_suspect reason=rolling` после `radius+5`. Возврат внутрь раньше 15 секунд должен дать `recovery_reset`; устойчивый выход — `confirmed` не раньше 15 секунд.
+7. Сделать save/load во время обычного наблюдения и незавершённого rolling-эпизода. Ожидать один `load_restore`, отсутствие дубля record и продолжение накопленной длительности без мгновенного ложного подтверждения.
+8. Передать предмет NPC/подобрать актёром. После parent/ownership запись обязана стать `owned/closed`, а новые suspect-события для неё запрещены.
+9. Выйти с локации обычным переходом: ожидать `released` для оставшихся записей и штатный cleanup.
+10. Сохранить `latest.log` и полный `xray_*.log`. После теста вернуть debug/forced-настройки к прежним значениям; отдельно сообщить их до и после теста.
+
+Границы карт, клики по PDA, teleport, offline/online эксперимент и любые physics actions относятся к следующим отдельным этапам и этим тестом не разрешаются.
