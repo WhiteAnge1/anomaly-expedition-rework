@@ -24,7 +24,8 @@ $required = @(
     'tools\watch_live_log.cmd',
     'tools\test_loot_policy.ps1',
     'tools\test_geometry_policy.ps1',
-    'docs\ARTIFACT-RESCUE-DESIGN.md'
+    'docs\ARTIFACT-RESCUE-DESIGN.md',
+    'docs\ARTIFACT-RESCUE-RESEARCH.md'
 )
 foreach ($relative in $required) {
     if (-not (Test-Path -LiteralPath (Join-Path $ModRoot $relative))) { $failures.Add("missing: $relative") }

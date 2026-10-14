@@ -13,12 +13,15 @@ enabled = true
 stash_mode = scouting
 
 ; Независимые дополнительные типы ложных областей.
+; Связано с: weight_enemy/weight_loot/weight_empty и debug_force_decoy_type.
+; При изменении также проверь: что хотя бы один включённый тип имеет вес больше нуля.
 enable_enemy_decoys = true
 enable_loot_decoys = true
 enable_empty_decoys = true
 
 ; Относительные веса ложных областей: 50% опасная, 25% добыча, 25% пустая.
 ; После отключения типов оставшиеся веса автоматически нормализуются.
+; Связано с: enable_*_decoys; это веса выбора, а не количество областей.
 weight_enemy = 50
 weight_loot = 25
 weight_empty = 25
@@ -28,34 +31,45 @@ loot_container_visuals = raid_small_stash_1, raid_small_stash_2, raid_small_stas
 
 ; При true метка исчезает, если callback сообщил о подборе артефакта NPC.
 ; По умолчанию false, чтобы не раскрывать игроку кражу артефакта.
+; Связано с: show_exact_artifact_markers и жизненным циклом настоящей области.
 remove_on_npc_pickup = false
 
 ; Fallback смещения центра настоящей области: доля её радиуса (0.0-1.0).
 ; Точные принятые значения задаются ниже по тирам и могут быть переопределены
 ; в секции конкретного уровня благодаря иерархии global -> tier -> level.
+; Связано с: zone_radius_min/max и placement_attempts.
+; При изменении также проверь: что точный артефакт остаётся внутри круга после nav-привязки.
 artifact_offset_fraction_min = 0.35
 artifact_offset_fraction_max = 0.80
 ; Максимальное смещение центра loot-области от контейнера: radius / divisor.
+; Связано с: zone_radius_min/max; больше divisor — контейнер ближе к центру круга.
 loot_offset_divisor = 3
 
 ; Минимальное расстояние между центрами областей и число попыток размещения.
+; Связано с: всеми ложными областями; настоящие artifact-области могут перекрываться.
+; При изменении также проверь: частоту exhausted/error на всех трёх локациях.
 zone_separation_min = 45
 placement_attempts = 60
 ; Скрытые proximity-ступени используют расширенный low-discrepancy nav-поиск.
+; Связано с: placement_attempts и ambush_spawn_timing=proximity.
 ambush_hidden_attempt_multiplier = 3
 
 ; Радиус запрета опасной области вокруг фактической стартовой позиции игрока.
+; Связано с: ambush_trigger_padding и ambush_start_trigger_margin.
 ambush_start_exclusion_radius = 180
 ; Для start-засад центр области сначала ищется не ближе этого расстояния.
 ; Если геометрия уровня не позволяет, поиск ослабляется до enemy_spawn_distance_min.
+; При изменении также проверь: level_y04_pole, level_l09_deadcity и стартовую позицию.
 ambush_start_center_exclusion_radius = 120
 ; Запас между стартовой позицией и фактическим порогом активации опасной области.
 ambush_start_trigger_margin = 20
 ; Засада активируется заранее; фактический порог = радиус области + это значение.
+; Связано с: zone_radius_min/max, ambush_start_trigger_margin и spawn timing.
 ambush_trigger_padding = 130
 ; Запас сверх штатного радиуса доспавна РВМ.
 ambush_extra_padding = 20
 ; proximity: при приближении с проверкой камеры; start: при создании зоны без camera-check.
+; При изменении также проверь: локальные ambush_spawn_timing и каскад safe/hidden ступеней.
 ambush_spawn_timing = proximity
 ; Отступ от известных аномалий на строгой первой ступени каскада.
 ambush_anomaly_clearance = 15
@@ -66,14 +80,18 @@ ambush_outside_zone_padding = 25
 ; Если размер формы аномалии безопасно прочитать нельзя, используется этот радиус.
 ambush_unknown_anomaly_radius = 20
 ; Не удалять область при временном отсутствии безопасной точки: повторить поиск позже.
+; Связано с: update_interval_ms; фактическая задержка не может быть короче update tick.
 ambush_retry_delay_ms = 10000
 ; Резерв, если таблица РВМ недоступна.
+; Связано с: enemy_spawn_distance_min/max и штатным радиусом доспавна РВМ.
 ambush_spawn_safe_fallback = 85
 ; Расстояние точки появления от центра области.
+; При изменении также проверь: локальные overrides, ambush_start_zone_margin и ambush_outside_zone_padding.
 enemy_spawn_distance_min = 35
 enemy_spawn_distance_max = 90
 ; Сначала выбирается категория по относительным весам, затем один из её
 ; точных squad-пресетов равновероятно. Ноль отключает категорию.
+; Связано с: gamedata/configs/mod_system_rvm_sorties_squads.ltx.
 enemy_category_weight_frequent = 4
 enemy_category_weight_rare = 2
 enemy_category_weight_superrare = 1
@@ -81,10 +99,12 @@ enemy_category_weight_superrare = 1
 enemy_missing_resolves = true
 
 ; Обычный этап всегда делает хотя бы один бросок. Повторы разрешены.
+; Связано с: loot_fragments, tier loot_*_weight, quantity_min/max и loot_cap.
 loot_ordinary = flashlight_broken, itm_sleepbag, gloves, ecolog_patch, csky_patch, headlamp, walkie, broken_detector, compression_bag, bolt, bolts_pack, hand_watch, item_raid_art_fragment_gravi, item_raid_art_fragment_electro, item_raid_art_fragment_chem, item_raid_art_fragment_thermo
 loot_fragments = item_raid_art_fragment_gravi, item_raid_art_fragment_electro, item_raid_art_fragment_chem, item_raid_art_fragment_thermo
 ; Цепочка квоты дорогих предметов: 35% хотя бы один, затем 10% второй,
 ; затем 1.5% третий. Повторы запрещены, кроме lead_box на тире 3.
+; Связано с: tier loot_valuable и loot_cap; rare_slot считается отдельно сверх cap.
 valuable_first_chance = 35
 valuable_second_chance = 10
 valuable_third_chance = 1.5
@@ -92,6 +112,7 @@ rare_slot_chance = 4
 ; Если редкий слот сработал, шанс выбрать артефакт вместо прочей редкой награды.
 ; Пул берётся из фактической таблицы raid_artefacts_tiers_by_dop текущей сборки:
 ; T1 Поляна = весь мусор + T1; T2 Лощина = T1 + T2; T3 Мёртвый город = T2 + T3.
+; При изменении также проверь: loot_rare_non_artifact каждого тира и очередь raid_artefacts.
 rare_artifact_chance = 70
 
 ; Период обновления логики, мс. Допустимо 250-5000; по умолчанию 1000.
@@ -102,6 +123,7 @@ update_interval_ms = 1000
 ; обычный баланс реворка — приблизительные области и самостоятельный поиск.
 ; true включает только выбранную метку, без debug-подписей, ID, координат,
 ; журнала и census. После изменения полностью перезапустите игру.
+; Связано с: debug_mode; полный debug принудительно показывает все exact-метки.
 ; Зелёная точная метка связанного рейдового артефакта.
 show_exact_artifact_markers = false
 ; Красная точная stash-метка контейнера ложной области.
@@ -115,24 +137,29 @@ debug_mode = auto
 ; Совместимость со старыми конфигами: используется только если debug_mode отсутствует.
 debug_log = false
 ; off, artifact, enemy, loot, empty — принудительный тип ложных областей для теста.
+; Связано с: enable_*_decoys и weight_* только при off; forced-режим их обходит.
 debug_force_decoy_type = off
 ; 0 — фактический тир; 1/2/3 — принудительная таблица для теста.
+; При изменении также проверь: tier map_spot, радиусы, loot и enemy-профили.
 debug_force_tier = 0
 ; true очищает состояние при следующем обновлении. Затем верните false вручную.
 debug_cleanup_current_sortie = false
 
 [tier_1]
+; Связано с: zone_radius_min/max и artifact_offset_fraction_min/max этого тира.
 map_spot = rvm_search_small
 zone_radius_min = 60
 zone_radius_max = 100
 artifact_offset_fraction_min = 0.35
 artifact_offset_fraction_max = 0.80
 loot_offset_divisor = 3
+; Связано с: loot_medicine, loot_medicine_half_weight и loot_cap.
 medicine_chance = 70
 loot_cap = 6
 loot_medicine = medkit_army, medkit, antirad, stimpack, caffeine
 loot_medicine_half_weight = medkit_army
 loot_valuable = af_iam, lead_box, detector_simple, detector_advanced, af_cooler, af_freon, af_camelbak, af_frames, af_grid, af_surge, device_torch
+; Связано с: global loot_ordinary/loot_fragments и fragment quantity.
 loot_ordinary_nonfragment_weight = 1
 loot_hand_watch_weight = 0.5
 loot_fragment_quantity_min = 1
@@ -140,6 +167,7 @@ loot_fragment_quantity_max = 3
 loot_rare_non_artifact = raid_intelligence_note
 
 [tier_2]
+; Связано с: zone_radius_min/max и artifact_offset_fraction_min/max этого тира.
 map_spot = rvm_search_medium
 zone_radius_min = 110
 zone_radius_max = 180
@@ -147,11 +175,13 @@ zone_radius_max = 180
 artifact_offset_fraction_min = 0.10
 artifact_offset_fraction_max = 0.20
 loot_offset_divisor = 5
+; Связано с: loot_medicine, loot_medicine_half_weight и loot_cap.
 medicine_chance = 78
 loot_cap = 7
 loot_medicine = medkit_army, medkit_scientic, antirad, stimpack_army, drug_booster
 loot_medicine_half_weight = medkit_scientic
 loot_valuable = detector_advanced, detector_elite, af_iam, af_aac, lead_box, af_grid_up, af_freon_up, af_cooler_up, af_camelbak_up, af_frames_up, device_torch_nv_1, device_torch_nv_2
+; Связано с: global loot_ordinary/loot_fragments и fragment quantity.
 loot_ordinary_nonfragment_weight = 0.75
 loot_hand_watch_weight = 0.375
 loot_fragment_quantity_min = 2
@@ -159,6 +189,7 @@ loot_fragment_quantity_max = 5
 loot_rare_non_artifact = raid_intelligence_note
 
 [tier_3]
+; Связано с: zone_radius_min/max и artifact_offset_fraction_min/max этого тира.
 map_spot = rvm_search_large
 zone_radius_min = 140
 zone_radius_max = 230
@@ -166,11 +197,13 @@ zone_radius_max = 230
 artifact_offset_fraction_min = 0.06
 artifact_offset_fraction_max = 0.12
 loot_offset_divisor = 10
+; Связано с: loot_medicine, loot_medicine_half_weight и loot_cap.
 medicine_chance = 85
 loot_cap = 8
 loot_medicine = medkit_scientic, medkit_army, antirad, stimpack_scientic, stimpack_army, adrenalin
 loot_medicine_half_weight = adrenalin
 loot_valuable = detector_elite, detector_scientific, lead_box, af_aac, af_aam, device_torch_nv_3
+; Связано с: global loot_ordinary/loot_fragments и fragment quantity.
 loot_ordinary_nonfragment_weight = 0.5
 loot_hand_watch_weight = 0.25
 loot_fragment_quantity_min = 3
@@ -179,6 +212,8 @@ loot_rare_non_artifact = raid_intelligence_note
 
 ; Поляна — фактический идентификатор y04_pole, тир 1.
 [level_y04_pole]
+; Локальные значения перекрывают tier_1 и global.
+; При изменении также проверь: start-каскад, стартовую дистанцию и южный склон.
 tier = 1
 ambush_spawn_timing = start
 zone_radius_min = 55
@@ -189,6 +224,8 @@ enemy_spawn_distance_max = 150
 
 ; Тёмная лощина — фактический идентификатор k01_darkscape, тир 2.
 [level_k01_darkscape]
+; Локальные значения перекрывают tier_2 и global.
+; При изменении также проверь: proximity camera-check и hidden-ступени.
 tier = 2
 ambush_spawn_timing = proximity
 zone_radius_min = 150
@@ -199,6 +236,8 @@ enemy_spawn_distance_max = 170
 
 ; Мёртвый город — фактический идентификатор l09_deadcity, тир 3.
 [level_l09_deadcity]
+; Локальные значения перекрывают tier_3 и global.
+; При изменении также проверь: start-каскад и проходимость городской геометрии.
 tier = 3
 ambush_spawn_timing = start
 zone_radius_min = 140
