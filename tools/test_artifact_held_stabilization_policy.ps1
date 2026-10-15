@@ -40,6 +40,16 @@ function Resolve-PostTeleportHeld([string]$RecordReason, [string]$PersistedActio
 Assert-True ((Resolve-PostTeleportHeld 'post_rescue_monitor' 'rolling' $true) -eq 'held') 'held_pending was rejected after position_verified changed record.reason'
 Assert-True ((Resolve-PostTeleportHeld 'post_rescue_monitor' 'rolling' $false) -eq 'record_disabled_fix') 'real post-teleport reacquire/fix failure did not fail closed'
 
+function Resolve-StabilizationRequest([int]$ActionCount, [int]$VerifiedOrdinary, [string]$Mode, [int]$HeldAfterVerified) {
+    $threshold = if ($Mode -eq 'held') { [Math]::Min(2, [Math]::Max(0, $HeldAfterVerified)) } else { 2 }
+    return $ActionCount -eq $threshold -and $VerifiedOrdinary -ge $threshold -and @('held','same_frame').Contains($Mode)
+}
+
+Assert-True (Resolve-StabilizationRequest 0 0 'held' 0) 'test-only held threshold 0 did not request real stabilization on first rolling'
+Assert-True (-not (Resolve-StabilizationRequest 0 0 'held' 2)) 'production held default no longer requires two verified ordinary rescues'
+Assert-True (Resolve-StabilizationRequest 2 2 'held' 2) 'production two-rescue held policy was lost'
+Assert-True (-not (Resolve-StabilizationRequest 0 0 'same_frame' 0)) 'held test override leaked into same-frame mode'
+
 # Journal ownership: only elements observed unfixed and successfully fixed by
 # this action enter the persistent release list.
 $elements = @(
@@ -78,8 +88,12 @@ foreach ($needle in @(
     'release_zone_held_on_pickup',
     'action.stabilization.release_required = true',
     'held.release_required = true',
-    'stabilization_mode == "held"', 'physics_mode = stabilization_mode == "held" and "held_pending"',
-    'stabilization_requested or action_count >= 3'
+    'stabilization_mode == "held"', 'local physics_mode = "none"',
+    'physics_mode = stabilization_mode == "held" and "held_pending" or "same_frame_fix_release"',
+    'artifact_rescue_debug_held_after_verified_actions',
+    'local stabilization_after_verified = stabilization_mode == "held" and held_after_verified or 2',
+    'local effective_max_dispatches = stabilization_already_dispatched and action_count',
+    'or stabilization_requested and (action_count + 1) or ordinary_max_dispatches'
 )) {
     Assert-True ($main.Contains($needle)) "held stabilization invariant missing: $needle"
 }
@@ -104,6 +118,7 @@ Assert-True ($main.Contains('if timeout > 0 and held.duration_ms >= timeout then
 
 foreach ($needle in @(
     'artifact_rescue_debug_same_frame_stabilization = false',
+    'artifact_rescue_debug_held_after_verified_actions = 2',
     'artifact_rescue_debug_held_stabilization = false',
     'artifact_rescue_debug_held_timeout_ms = 120000'
 )) {

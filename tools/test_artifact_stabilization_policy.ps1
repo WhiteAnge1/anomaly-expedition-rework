@@ -83,8 +83,10 @@ foreach ($needle in @(
     'pcall(candidate.release_method, candidate.element)',
     'action_stabilization_attempt', 'action_stabilization_released',
     'stabilization_unavailable', 'stabilization_failed',
-    'action_count == 2', 'verified_ordinary >= 2', 'stabilization_mode == "same_frame"',
-    'stabilization_requested or action_count >= 3',
+    'local stabilization_after_verified = stabilization_mode == "held" and held_after_verified or 2',
+    'local stabilization_requested = action_count == stabilization_after_verified',
+    'and verified_ordinary >= stabilization_after_verified', 'stabilization_mode == "same_frame"',
+    'local effective_max_dispatches = stabilization_already_dispatched and action_count',
     'attempt_same_frame_stabilization(record, action, snapshot)',
     'action.status = "verifying"', 'action.status = "position_verified"',
     'artifact_rescue_debug_same_frame_stabilization = false'

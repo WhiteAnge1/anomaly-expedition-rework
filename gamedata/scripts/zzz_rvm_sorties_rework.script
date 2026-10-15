@@ -1696,18 +1696,29 @@ local function update_debug_same_id_rescue(record, snapshot, now)
         C.get_number("global", "artifact_rescue_debug_max_dispatches", 2))))
     local verified_ordinary = artifact_verified_ordinary_action_count(record)
     local stabilization_mode = artifact_rescue_stabilization_mode(record)
-    local stabilization_requested = action_count == 2
-        and verified_ordinary >= 2
+    local held_after_verified = math.min(2, math.max(0, math.floor(
+        C.get_number("global", "artifact_rescue_debug_held_after_verified_actions", 2))))
+    local stabilization_after_verified = stabilization_mode == "held" and held_after_verified or 2
+    local stabilization_requested = action_count == stabilization_after_verified
+        and verified_ordinary >= stabilization_after_verified
         and (stabilization_mode == "same_frame" or stabilization_mode == "held")
-    local effective_max_dispatches = (stabilization_requested or action_count >= 3)
-        and 3 or ordinary_max_dispatches
+    local stabilization_already_dispatched = false
+    for _, previous_action in ipairs(record.actions or {}) do
+        if previous_action.stabilization_requested then
+            stabilization_already_dispatched = true
+            break
+        end
+    end
+    local effective_max_dispatches = stabilization_already_dispatched and action_count
+        or stabilization_requested and (action_count + 1) or ordinary_max_dispatches
     if action_count >= effective_max_dispatches then
         if record.action_limit_reported_for ~= action_count then
             record.action_limit_reported_for = action_count
             provenance_log("action_limit_reached", record, snapshot, record.primary_reason,
                 "dispatches=" .. tostring(action_count) .. ",maximum=" .. tostring(effective_max_dispatches)
                 .. ",verified_ordinary=" .. tostring(verified_ordinary)
-                .. ",stabilization_mode=" .. tostring(stabilization_mode))
+                .. ",stabilization_mode=" .. tostring(stabilization_mode)
+                .. ",stabilization_after_verified=" .. tostring(stabilization_after_verified))
         end
         return
     end
@@ -1778,12 +1789,15 @@ local function update_debug_same_id_rescue(record, snapshot, now)
     record.rolling_rescue_count = (record.rolling_rescue_count or 0) + 1
     record.state = "verifying"
     record.timestamps.verifying_at = now
-    local physics_mode = stabilization_mode == "held" and "held_pending"
-        or stabilization_requested and "same_frame_fix_release" or "none"
+    local physics_mode = "none"
+    if stabilization_requested then
+        physics_mode = stabilization_mode == "held" and "held_pending" or "same_frame_fix_release"
+    end
     provenance_log("action_dispatched", record, snapshot, record.primary_reason,
         "kind=debug_same_id_teleport,same_id=true,physics=" .. physics_mode
         .. ",dispatch=" .. tostring(action.dispatch_index)
         .. ",maximum=" .. tostring(effective_max_dispatches)
+        .. ",stabilization_after_verified=" .. tostring(stabilization_after_verified)
         .. ",stabilization_requested=" .. tostring(stabilization_requested)
         .. ",stabilization_status=" .. tostring(action.stabilization and action.stabilization.status or "none")
         .. ",target=" .. fmt_position(target.pos))

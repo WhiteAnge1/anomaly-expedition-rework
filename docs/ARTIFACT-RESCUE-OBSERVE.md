@@ -105,13 +105,14 @@ artifact_rescue_debug_monitor_log_ms = 5000
 artifact_rescue_debug_cooldown_ms = 20000
 artifact_rescue_debug_max_dispatches = 2
 artifact_rescue_debug_same_frame_stabilization = false
+artifact_rescue_debug_held_after_verified_actions = 0
 artifact_rescue_debug_held_stabilization = true
 artifact_rescue_debug_held_timeout_ms = 0
 debug_mode = on
 debug_force_decoy_type = empty
 ```
 
-Ожидается `action_dispatched ... dispatch=3,physics=held_pending` → `position_verified` → `action_stabilization_held_attempt` → `action_stabilization_held ... held=1,pre_fixed=0` и затем 30–60 секунд без движения. Фиксируется уже повторно полученный post-teleport physics element, а не старый shell до rebinding. Затем подойти и подобрать Фонарь. Callback должен сначала записать `action_stabilization_held_released`, затем `owned/closed`; проверить exact ID/section, наличие предмета в инвентаре, класс и мутацию. При `held_timeout_ms=0` автоматического time/proximity release нет: если подбор не срабатывает, не сохраняться и не покидать уровень до фиксации результата, после чего завершить тест штатным lifecycle-release. После выхода вернуть held/actions/same-ID gates в `false`, `debug_mode=auto`.
+При test-only пороге `0` исходный сейв с `actions=0` должен на первом подтверждённом rolling дать `action_dispatched ... dispatch=1,physics=held_pending,stabilization_after_verified=0` → `position_verified` → `action_stabilization_held_attempt` → `action_stabilization_held ... held=1,pre_fixed=0` и затем 30–60 секунд без движения. Teleport, три post-teleport snapshots и reacquire/fix не пропускаются. Production-default порога остаётся `2`, то есть обычная схема «два verified rescue, третий held» не меняется. Затем подойти и подобрать Фонарь. Callback должен сначала записать `action_stabilization_held_released`, затем `owned/closed`; проверить exact ID/section, наличие предмета в инвентаре, класс и мутацию. При `held_timeout_ms=0` автоматического time/proximity release нет: если подбор не срабатывает, не сохраняться и не покидать уровень до фиксации результата, после чего завершить тест штатным lifecycle-release. После выхода вернуть held/actions/same-ID gates в `false`, `debug_mode=auto`.
 
 ## Debug-журнал
 

@@ -66,6 +66,7 @@
 | `artifact_rescue_debug_cooldown_ms` | `20000` | Пауза после повторного rolling-confirmation до второго dispatch |
 | `artifact_rescue_debug_max_dispatches` | `2` | Предел обычных same-ID отправок на original ID |
 | `artifact_rescue_debug_same_frame_stabilization` | `false` | Отдельный gate третьего experimental dispatch после двух verified обычных; требует все предыдущие rescue-gate |
+| `artifact_rescue_debug_held_after_verified_actions` | `2` | Test-only порог verified обычных rescue перед held; `0` отправляет первый подтверждённый rolling сразу через настоящий teleport → verification → held |
 | `artifact_rescue_debug_held_stabilization` | `false` | Альтернативный third-stage gate: удерживает только зафиксированные модом элементы до pickup/release trigger; несовместим с same-frame gate |
 | `artifact_rescue_debug_held_timeout_ms` | `120000` | Аварийное освобождение held-элементов; `0` отключает time release, положительное значение ограничивается снизу 30 секундами |
 | `artifact_rescue_origin_radius` | `2` | Радиус признака near-origin; сам по себе никогда не подтверждает ошибку |
