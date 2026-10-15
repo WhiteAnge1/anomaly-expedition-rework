@@ -47,22 +47,26 @@ Rolling начинается, когда свободный предмет да�
 
 ## Лабораторный same-ID prototype
 
-Prototype по умолчанию полностью выключен. Он поддерживает только один exact original ID с `primary_reason=rolling`, одну попытку same-ID `alife():teleport_object`, без recreate/offline-cycle/physics. Schema-1 сейв принятого теста мигрирует в schema 2 и восстанавливает первичную rolling-причину даже после старой ложной переклассификации.
+Prototype по умолчанию полностью выключен. Закрытый allowlist содержит только exact original IDs `1407` и `6362` с причиной rolling; section-only fallback отсутствует. Каждый ID имеет независимый предел в два same-ID `alife():teleport_object`, без recreate/offline-cycle/physics. Schema-1 сейв принятого теста мигрирует в schema 2 и восстанавливает первичную rolling-причину даже после старой ложной переклассификации.
 
-После `load_restore` запись получает `fresh_snapshot_required=true`. Первый реальный update сначала запускает классификатор: если X-Ray уже восстановил предмет внутрь tether, rolling сбрасывается и действие запрещается. Даже если предмет остался снаружи, этот snapshot только пишет `post_load_snapshot ... action_deferred=true`; dispatch возможен не раньше следующего update. Успех требует сохранения server ID/section/game vertex и трёх последовательных snapshots не далее 4 м по XZ/Y от проверенной static-ray target.
+После `load_restore` запись получает `fresh_snapshot_required=true`. Первый реальный update сначала запускает классификатор: если X-Ray уже восстановил предмет внутрь tether, rolling сбрасывается и действие запрещается. Даже если предмет остался снаружи, этот snapshot только пишет `post_load_snapshot ... action_deferred=true`; dispatch возможен не раньше следующего update. Сохранение server ID/section/game vertex и три snapshots не далее 4 м по XZ/Y дают только `position_verified`. Затем предмет наблюдается минимум 30 секунд с журналом displacement, расстояния до target/anchor и запаса tether. Новый непрерывный выход за `radius+5` должен длиться 15 секунд; возврат внутрь сбрасывает эпизод. После подтверждения действует cooldown 20 секунд, затем разрешён второй и последний dispatch этого ID.
 
-Тестировать только на отдельном сохранённом сейве, не создавая поверх него новых сохранений. Сначала выбрать один ID, например `1407`:
+Тестировать только на отдельном сохранённом сейве, не создавая поверх него новых сохранений. Оба ID разрешены одновременно и отслеживаются независимо:
 
 ```ini
 artifact_rescue_observe_only = true
 artifact_rescue_actions = true
 artifact_rescue_debug_same_id_teleport = true
-artifact_rescue_debug_artifact_id = 1407
+artifact_rescue_debug_artifact_ids = 1407,6362
 artifact_rescue_debug_reason = rolling
+artifact_rescue_debug_monitor_ms = 30000
+artifact_rescue_debug_monitor_log_ms = 5000
+artifact_rescue_debug_cooldown_ms = 20000
+artifact_rescue_debug_max_dispatches = 2
 debug_mode = on
 ```
 
-Запустить watcher до загрузки сейва. Нормальный успешный путь: `load_restore ... primary_reason=rolling,fresh_snapshot_required=true` → `post_load_snapshot ... action_deferred=true` → на следующем update `action_dispatched ... same_id=true,physics=none` → после трёх проверок `action_stable`. Если X-Ray сам восстановил предмет внутрь tether, ожидается `recovery_reset`/observing state и отсутствие `action_dispatched`; это тоже успешный результат guard. После завершения полностью закрыть игру, вернуть `artifact_rescue_actions=false`, `artifact_rescue_debug_same_id_teleport=false`, `artifact_rescue_debug_artifact_id=0` и только затем продолжать обычную игру. Второй ID проверять отдельным запуском того же неизменённого сейва.
+Запустить watcher до загрузки сейва. Нормальный путь каждого ID: `load_restore ... fresh_snapshot_required=true` → `post_load_snapshot ... action_deferred=true` → `action_dispatched ... dispatch=1` → `position_verified` → не менее 30 секунд `action_monitor`. Если предмет снова непрерывно находится за tether 15 секунд, ожидаются `rolling_reconfirmed`, cooldown 20 секунд и `action_dispatched ... dispatch=2`; третьей отправки быть не должно, вместо неё один `action_limit_reached`. Возврат внутрь до 15 секунд обязан дать `recovery_reset` и начать следующий эпизод с нуля. После завершения полностью закрыть игру, вернуть `artifact_rescue_actions=false` и `artifact_rescue_debug_same_id_teleport=false`; allowlist можно оставить, поскольку два action-gate выключены.
 
 ## Debug-журнал
 

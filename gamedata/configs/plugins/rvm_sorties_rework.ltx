@@ -125,11 +125,19 @@ artifact_rescue_observe_only = false
 ; Общий предохранитель активных действий. Публичный default false.
 artifact_rescue_actions = false
 ; Узкий лабораторный прототип: same-ID teleport без recreate/physics только для
-; одного точного original ID и одной причины. Все три gate должны быть включены.
+; exact original IDs 1407 и 6362 и причины rolling. Section fallback запрещён.
+; После position_verified каждый ID независимо наблюдается минимум 30 секунд;
+; повторный непрерывный выход radius+5 на 15 секунд допускает второй dispatch
+; только после cooldown 20 секунд. Максимум две отправки на каждый ID.
+; Все три gate должны быть включены.
 ; Никогда не оставлять включённым после полевого эксперимента.
 artifact_rescue_debug_same_id_teleport = false
-artifact_rescue_debug_artifact_id = 0
+artifact_rescue_debug_artifact_ids = 1407,6362
 artifact_rescue_debug_reason = rolling
+artifact_rescue_debug_monitor_ms = 30000
+artifact_rescue_debug_monitor_log_ms = 5000
+artifact_rescue_debug_cooldown_ms = 20000
+artifact_rescue_debug_max_dispatches = 2
 ; Строгий origin-кандидат требует одновременно близость к нулю, несовпадение с
 ; реальным полем, плохой vertex, отсутствие владельца и проверенную static-цель.
 artifact_rescue_origin_radius = 2

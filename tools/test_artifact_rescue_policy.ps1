@@ -149,10 +149,40 @@ $loadedRecovered = @{ state = 'observing_online'; primary_reason = $null; awaiti
 if ($loadedRecovered.awaiting_fresh_snapshot) { $loadedRecovered.awaiting_fresh_snapshot = $false }
 Assert-True (-not $loadedRecovered.dispatched -and $null -eq $loadedRecovered.primary_reason) 'inside-tether load incorrectly dispatched rescue'
 
+# The active laboratory allowlist is exact and ID-based.  A matching section
+# alone can never authorize an action, and both IDs keep independent budgets.
+$allowedIds = @{ 1407 = $true; 6362 = $true }
+Assert-True ($allowedIds.ContainsKey(1407) -and $allowedIds.ContainsKey(6362) -and $allowedIds.Count -eq 2) 'exact two-ID allowlist model failed'
+Assert-True (-not $allowedIds.ContainsKey(7000)) 'section-only or unknown-ID fallback entered the allowlist'
+$dispatches = @{ 1407 = 0; 6362 = 0 }
+$dispatches[1407]++
+$dispatches[1407]++
+$dispatches[6362]++
+Assert-True ($dispatches[1407] -eq 2 -and $dispatches[6362] -eq 1) 'per-ID dispatch budgets are not independent'
+Assert-True ($dispatches[1407] -ge 2 -and $dispatches[6362] -lt 2) 'per-ID maximum model failed'
+
+# Three close samples prove only that the same object reached the target.
+# Stability requires a separate >=30 second monitor.  A continuous 15-second
+# exit is then followed by a 20-second cooldown before a second dispatch.
+$verification = @{ samples = 3; state = 'verifying'; monitor_ms = 0; rolling_ms = 0; cooldown_ms = 0; dispatches = 1 }
+if ($verification.samples -ge 3) { $verification.state = 'position_verified' }
+Assert-True ($verification.state -eq 'position_verified') 'three samples did not produce position_verified'
+$verification.state = 'monitoring'
+foreach ($delta in @(0,5000,5000,5000,5000,5000,5000)) { $verification.monitor_ms += $delta }
+Assert-True ($verification.monitor_ms -ge 30000 -and $verification.state -eq 'monitoring') '30-second monitor model failed'
+$outsideEpisode = Confirm-Rolling 100 @(106,107,108,109) @(0,5000,10000,15000)
+if ($outsideEpisode) { $verification.cooldown_ms = 20000 }
+Assert-True ($outsideEpisode -and $verification.cooldown_ms -eq 20000) 'repeat rolling confirmation did not arm cooldown'
+$verification.cooldown_ms = [Math]::Max(0, $verification.cooldown_ms - 20000)
+if ($verification.cooldown_ms -eq 0 -and $verification.dispatches -lt 2) { $verification.dispatches++ }
+Assert-True ($verification.dispatches -eq 2) 'second dispatch was not admitted after cooldown'
+Assert-True (-not (Confirm-Rolling 100 @(106,107,104,106,107) @(0,5000,10000,15000,20000))) 'return inside did not reset repeat rolling episode'
+
 foreach ($needle in @(
     'schema = 4', 'artifact_provenance = {}', 'local ARTIFACT_PROVENANCE_SCHEMA = 2',
+    'local ARTIFACT_RESCUE_DEBUG_IDS = { [1407] = true, [6362] = true }',
     'spawn_input_pos', 'first_server', 'last_good_server', 'last_good_online',
-    'linked_anchor_id', 'linked_radius', 'ownership', 'lineage_ids', 'cooldown_until',
+    'linked_anchor_id', 'linked_radius', 'ownership', 'lineage_ids', 'cooldown_remaining_ms',
     'state = "captured"', '"observing_server"', '"observing_online"', '"suspect"',
     '"rescue_pending"', '"owned"', '"closed"', '"released"', '"disabled"',
     'legacy_save_missing_spawn_provenance', 'record.underground.last_sample_at = nil',
@@ -161,7 +191,10 @@ foreach ($needle in @(
     'local function update_debug_same_id_rescue(record, snapshot, now)',
     'record.state == "rescue_pending" and record.primary_reason == "rolling"',
     'alife():teleport_object(record.artifact_id, target.gvid, target.lvid, pos_vector(target.pos))',
-    'record.state = "verifying"', 'record.state = "stable"', 'same_id=true,physics=none',
+    'record.state = "verifying"', 'record.state = "monitoring"', 'action.status = "position_verified"',
+    'action_monitor', 'rolling_reconfirmed', 'action_monitor_complete', 'action_limit_reached',
+    'legacy_three_frame_stable_migrated',
+    'same_id=true,physics=none', 'artifact_rescue_debug_max_dispatches',
     'local function remember_artifact_lineage(zone, item, owner, source)',
     'state.artifact_zone[key] = tostring(zone.anchor_id)',
     'record.ownership.current_id = item_id', 'terminal_provenance(record, "owned", source, owned_snapshot)',
@@ -174,8 +207,10 @@ foreach ($needle in @(
 
 foreach ($needle in @(
     'artifact_rescue_observe_only = false', 'artifact_rescue_actions = false',
-    'artifact_rescue_debug_same_id_teleport = false', 'artifact_rescue_debug_artifact_id = 0',
+    'artifact_rescue_debug_same_id_teleport = false', 'artifact_rescue_debug_artifact_ids = 1407,6362',
     'artifact_rescue_debug_reason = rolling',
+    'artifact_rescue_debug_monitor_ms = 30000', 'artifact_rescue_debug_monitor_log_ms = 5000',
+    'artifact_rescue_debug_cooldown_ms = 20000', 'artifact_rescue_debug_max_dispatches = 2',
     'artifact_rescue_origin_radius = 2', 'artifact_rescue_underground_drop = 12',
     'artifact_rescue_underground_vertex_gap = 4', 'artifact_rescue_underground_samples = 3',
     'artifact_rescue_underground_duration_ms = 2000', 'artifact_rescue_rolling_edge_margin = 5',
@@ -187,8 +222,9 @@ foreach ($needle in @(
 foreach ($forbidden in @('physics_element:fix', 'physics_element:release_fixed')) {
     Assert-True (-not $main.Contains($forbidden)) "active artifact rescue action is forbidden in phase 1: $forbidden"
 }
+Assert-True (-not $main.Contains('action_stable')) 'three-frame action_stable criterion must not return'
 Assert-True (([regex]::Matches($main, [regex]::Escape('alife():teleport_object('))).Count -eq 1) 'same-ID teleport must have exactly one narrow call site'
-foreach ($gate in @('artifact_rescue_actions', 'artifact_rescue_debug_same_id_teleport', 'artifact_rescue_debug_artifact_id', 'artifact_rescue_debug_reason')) {
+foreach ($gate in @('artifact_rescue_actions', 'artifact_rescue_debug_same_id_teleport', 'artifact_rescue_debug_artifact_ids', 'artifact_rescue_debug_reason')) {
     Assert-True ($main.Contains($gate)) "same-ID teleport gate missing: $gate"
 }
 Assert-True (-not $main.Contains('if not (item and C.get_bool("global", "remove_on_npc_pickup", false)) then return end')) 'NPC ownership tracking is incorrectly gated by remove_on_npc_pickup'
@@ -197,4 +233,4 @@ if ($failures.Count -gt 0) {
     $failures | ForEach-Object { Write-Error $_ }
     exit 1
 }
-Write-Output 'Artifact rescue causal priority and debug same-ID policy test: OK'
+Write-Output 'Artifact rescue repeated same-ID monitor policy test: OK'

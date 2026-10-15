@@ -22,6 +22,7 @@ local reported_artifact_overlaps = {}
 local safe_alive = nil
 local ARTIFACT_PROVENANCE_SCHEMA = 2
 local INVALID_VERTEX_ID = 4294967295
+local ARTIFACT_RESCUE_DEBUG_IDS = { [1407] = true, [6362] = true }
 
 -- Category selection is a separate weighted roll. Every entry points to an
 -- exact online_offline_group section; the section's fixed npc list is the
@@ -458,10 +459,15 @@ local function artifact_rescue_debug_action_enabled(record)
     or not C.get_bool("global", "artifact_rescue_debug_same_id_teleport", false) then
         return false
     end
-    local configured_id = math.floor(C.get_number("global", "artifact_rescue_debug_artifact_id", 0))
+    local configured_ids = {}
+    for _, value in ipairs(split_csv(C.get_string("global", "artifact_rescue_debug_artifact_ids", ""))) do
+        local id = tonumber(value)
+        if id then configured_ids[math.floor(id)] = true end
+    end
+    local record_id = record and math.floor(tonumber(record.artifact_id) or 0) or 0
     local configured_reason = string.lower(C.get_string("global", "artifact_rescue_debug_reason", "rolling"))
-    return configured_id > 0
-        and record and tonumber(record.artifact_id) == configured_id
+    return ARTIFACT_RESCUE_DEBUG_IDS[record_id] == true
+        and configured_ids[record_id] == true
         and tostring(record.primary_reason or record.reason) == configured_reason
 end
 
@@ -629,10 +635,13 @@ local function capture_artifact_provenance(artifact_id, anom_zone, pos, level_ti
         state = "captured",
         reason = "wrapper_callback_captured",
         primary_reason = nil,
+        causal_origin = nil,
         target = nil,
         rescue_count = 0,
         rolling_rescue_count = 0,
         cooldown_until = 0,
+        cooldown_remaining_ms = 0,
+        cooldown_last_sample_at = nil,
         actions = {},
         disabled = false,
         error_once = {},
@@ -765,6 +774,7 @@ local function confirm_artifact_candidate(record, reason, snapshot, extra)
         return false
     end
     record.primary_reason = record.primary_reason or reason
+    record.causal_origin = record.causal_origin or reason
     record.state = "rescue_pending"
     record.reason = record.primary_reason
     record.timestamps.confirmed_at = time_global()
@@ -959,7 +969,12 @@ local function observe_artifact_provenance_impl(record, zone, snapshot, now)
     -- A confirmed rolling incident remains rolling while the same object keeps
     -- travelling outside its tether.  Low world Y or missing nav far beyond the
     -- playable slope is not independent proof that it crossed below geometry.
-    if record.state == "rescue_pending" and record.primary_reason == "rolling" then
+    local current_pos = snapshot.online_pos or snapshot.server_pos
+    local rolling_margin = math.max(0, C.get_number("global", "artifact_rescue_rolling_edge_margin", 5))
+    local outside_rolling_tether = record.causal_origin == "rolling" and current_pos
+        and record.linked_center and record.linked_radius
+        and distance_xz(current_pos, record.linked_center) > record.linked_radius + rolling_margin
+    if (record.state == "rescue_pending" and record.primary_reason == "rolling") or outside_rolling_tether then
         observe_rolling_candidate(record, snapshot, now)
         return
     end
@@ -974,11 +989,89 @@ local function observe_artifact_provenance(record, zone, snapshot, now)
     if not ok then disable_provenance(record, "observe_update", err) end
 end
 
-local function artifact_action_already_attempted(record)
+local function artifact_action_count(record)
+    local count = 0
     for _, action in ipairs(record.actions or {}) do
-        if action.kind == "debug_same_id_teleport" then return true end
+        if action.kind == "debug_same_id_teleport" then count = count + 1 end
     end
-    return false
+    return count
+end
+
+local function latest_artifact_action(record)
+    local action = record.actions and record.actions[#record.actions]
+    return action and action.kind == "debug_same_id_teleport" and action or nil
+end
+
+local function advance_persisted_duration(owner, value_key, clock_key, now)
+    local delta = 0
+    if owner[clock_key] and now >= owner[clock_key] then
+        local interval = math.max(250, C.get_number("global", "update_interval_ms", 1000))
+        delta = math.min(now - owner[clock_key], interval * 2)
+    end
+    owner[value_key] = math.max(0, tonumber(owner[value_key]) or 0) + delta
+    owner[clock_key] = now
+    return delta
+end
+
+local function advance_rescue_cooldown(record, now)
+    local before = math.max(0, tonumber(record.cooldown_remaining_ms) or 0)
+    local delta = 0
+    if record.cooldown_last_sample_at and now >= record.cooldown_last_sample_at then
+        local interval = math.max(250, C.get_number("global", "update_interval_ms", 1000))
+        delta = math.min(now - record.cooldown_last_sample_at, interval * 2)
+    end
+    record.cooldown_remaining_ms = math.max(0, before - delta)
+    record.cooldown_last_sample_at = now
+end
+
+local function reset_rolling_for_monitor(record)
+    record.rolling = record.rolling or {}
+    record.rolling.samples = 0
+    record.rolling.duration_ms = 0
+    record.rolling.last_sample_at = nil
+    record.rolling.started_at = nil
+    record.rolling.max_excess = 0
+    record.rolling.trend = nil
+    record.rolling.last_distance = nil
+    record.rolling.confirmed = false
+end
+
+local function validate_same_id_action_context(record, snapshot, action, context)
+    local parent_id = snapshot.online_parent_id or snapshot.parent_id
+    if parent_id ~= nil and parent_id ~= 65535 then
+        if action then action.status = "owned" end
+        record.ownership.parent_id = parent_id
+        record.ownership.source = snapshot.actor_owned and snapshot.ownership_source or "non_actor_parent"
+        terminal_provenance(record, "owned", record.ownership.source, snapshot)
+        return false
+    end
+    local level_ok, current_level = pcall(function() return level and level.name() end)
+    if not level_ok or not current_level or record.level ~= current_level then
+        disable_provenance(record, context .. "_level", "current_level_mismatch")
+        return false
+    end
+    if not snapshot.server_exists then
+        disable_provenance(record, context .. "_identity", "server_object_missing")
+        return false
+    end
+    local server_ok, server = pcall(alife_object, record.artifact_id)
+    server = server_ok and server or nil
+    if not server or object_section(server) ~= record.section then
+        disable_provenance(record, context .. "_identity", "server_or_section_mismatch")
+        return false
+    end
+    if action then
+        local target = action.target
+        if not (target and target.pos and valid_vertex_id(target.lvid) and valid_vertex_id(target.gvid)) then
+            disable_provenance(record, context .. "_target", "saved_target_invalid")
+            return false
+        end
+        if action.artifact_id ~= record.artifact_id or action.section ~= record.section then
+            disable_provenance(record, context .. "_identity", "saved_action_identity_mismatch")
+            return false
+        end
+    end
+    return true
 end
 
 local function clear_artifact_position_caches(id)
@@ -992,6 +1085,8 @@ local function update_debug_same_id_rescue(record, snapshot, now)
     if not record or record.disabled or record.state == "owned" or record.state == "closed"
     or record.state == "released" or record.state == "stable" then return end
 
+    advance_rescue_cooldown(record, now)
+
     if record.awaiting_fresh_snapshot then
         record.awaiting_fresh_snapshot = false
         provenance_log("post_load_snapshot", record, snapshot, record.reason,
@@ -1001,11 +1096,12 @@ local function update_debug_same_id_rescue(record, snapshot, now)
     end
 
     if record.state == "verifying" then
-        local action = record.actions and record.actions[#record.actions]
-        if not action or action.kind ~= "debug_same_id_teleport" then
+        local action = latest_artifact_action(record)
+        if not action then
             disable_provenance(record, "verify_missing_action", "same_id_action_record_missing")
             return
         end
+        if not validate_same_id_action_context(record, snapshot, action, "same_id_teleport_verify") then return end
         local pos = snapshot.online_pos or snapshot.server_pos
         local target = action.target and action.target.pos
         action.verification_checks = (action.verification_checks or 0) + 1
@@ -1015,13 +1111,21 @@ local function update_debug_same_id_rescue(record, snapshot, now)
         if good then
             action.verification_samples = (action.verification_samples or 0) + 1
             if action.verification_samples >= 3 then
-                action.status = "stable"
+                action.status = "position_verified"
                 action.verified_at = now
-                record.state = "stable"
-                record.reason = record.primary_reason or record.reason
-                record.timestamps.stable_at = now
-                provenance_log("action_stable", record, snapshot, record.reason,
-                    "kind=debug_same_id_teleport,same_id=true,checks=" .. tostring(action.verification_checks))
+                action.monitoring_duration_ms = tonumber(action.monitoring_duration_ms) or 0
+                action.monitoring_last_sample_at = nil
+                action.monitoring_next_log_ms = 0
+                action.last_monitor_pos = pos_table(pos)
+                action.reconfirmed = false
+                record.state = "monitoring"
+                record.reason = "post_rescue_monitor"
+                record.primary_reason = nil
+                reset_rolling_for_monitor(record)
+                record.timestamps.position_verified_at = now
+                provenance_log("position_verified", record, snapshot, record.reason,
+                    "kind=debug_same_id_teleport,same_id=true,checks=" .. tostring(action.verification_checks)
+                    .. ",monitor_ms=" .. tostring(math.max(30000, C.get_number("global", "artifact_rescue_debug_monitor_ms", 30000))))
             end
         else
             action.verification_samples = 0
@@ -1033,16 +1137,120 @@ local function update_debug_same_id_rescue(record, snapshot, now)
         return
     end
 
+    local monitored_action = latest_artifact_action(record)
+    if monitored_action and monitored_action.status == "position_verified" then
+        if not validate_same_id_action_context(record, snapshot, monitored_action, "same_id_teleport_monitor") then return end
+        local linked_radius = tonumber(record.linked_radius)
+        if not (record.linked_center and linked_radius and linked_radius > 0) then
+            disable_provenance(record, "same_id_teleport_monitor_target", "linked_tether_invalid")
+            return
+        end
+        local pos = snapshot.online_pos or snapshot.server_pos
+        if not pos then
+            disable_provenance(record, "same_id_teleport_monitor_position", "online_and_server_position_missing")
+            return
+        end
+        advance_persisted_duration(monitored_action, "monitoring_duration_ms", "monitoring_last_sample_at", now)
+        local target_distance = distance_xz(pos, monitored_action.target.pos)
+        local step_distance = monitored_action.last_monitor_pos and distance_xz(pos, monitored_action.last_monitor_pos) or 0
+        local anchor_distance = record.linked_center and distance_xz(pos, record.linked_center) or nil
+        local rolling_margin = math.max(0, C.get_number("global", "artifact_rescue_rolling_edge_margin", 5))
+        local tether_margin = anchor_distance and linked_radius
+            and (linked_radius + rolling_margin - anchor_distance) or nil
+        monitored_action.last_monitor_pos = pos_table(pos)
+        local log_interval = math.max(1000, C.get_number("global", "artifact_rescue_debug_monitor_log_ms", 5000))
+        if monitored_action.monitoring_duration_ms >= (monitored_action.monitoring_next_log_ms or 0) then
+            monitored_action.monitoring_next_log_ms = monitored_action.monitoring_duration_ms + log_interval
+            provenance_log("action_monitor", record, snapshot, record.reason,
+                "elapsed_ms=" .. tostring(monitored_action.monitoring_duration_ms)
+                .. ",target_dxz=" .. fmt_number(target_distance)
+                .. ",step_dxz=" .. fmt_number(step_distance)
+                .. ",anchor_dxz=" .. fmt_number(anchor_distance or -1)
+                .. ",tether_margin=" .. fmt_number(tether_margin or -9999)
+                .. ",cooldown_ms=" .. tostring(math.floor(record.cooldown_remaining_ms or 0)))
+        end
+
+        if tether_margin and tether_margin < 0 then
+            observe_rolling_candidate(record, snapshot, now)
+            record.state = "monitoring"
+            record.reason = "post_rescue_monitor"
+            if record.rolling.confirmed and not monitored_action.reconfirmed then
+                monitored_action.reconfirmed = true
+                monitored_action.reconfirmed_at = now
+                record.causal_origin = "rolling"
+                record.primary_reason = "rolling"
+                record.cooldown_remaining_ms = math.max(20000,
+                    C.get_number("global", "artifact_rescue_debug_cooldown_ms", 20000))
+                record.cooldown_last_sample_at = now
+                record.cooldown_confirmation_marker = record.timestamps.confirmed_at
+                provenance_log("rolling_reconfirmed", record, snapshot, "rolling",
+                    "continuous_ms=" .. tostring(record.rolling.duration_ms)
+                    .. ",cooldown_ms=" .. tostring(math.floor(record.cooldown_remaining_ms)))
+            end
+        else
+            if (record.rolling.samples or 0) > 0 then
+                reset_bad_episode(record, "rolling", snapshot, "rolling_returned_inside_tether")
+                monitored_action.reconfirmed = false
+                monitored_action.reconfirmed_at = nil
+                record.cooldown_remaining_ms = 0
+                record.cooldown_confirmation_marker = nil
+                record.state = "monitoring"
+                record.reason = "post_rescue_monitor"
+            end
+        end
+
+        local monitor_required = math.max(30000,
+            C.get_number("global", "artifact_rescue_debug_monitor_ms", 30000))
+        if monitored_action.monitoring_duration_ms >= monitor_required then
+            if monitored_action.reconfirmed then
+                monitored_action.status = "rolling_reconfirmed"
+                record.state = "rescue_pending"
+                record.reason = "rolling"
+                record.primary_reason = "rolling"
+                provenance_log("action_monitor_complete", record, snapshot, "rolling",
+                    "elapsed_ms=" .. tostring(monitored_action.monitoring_duration_ms)
+                    .. ",result=rolling_reconfirmed,cooldown_ms=" .. tostring(math.floor(record.cooldown_remaining_ms or 0)))
+            else
+                monitored_action.status = "monitor_complete"
+                monitored_action.completed_at = now
+                record.state = snapshot.online_exists and "observing_online" or "observing_server"
+                record.reason = "post_rescue_monitor_complete"
+                record.primary_reason = nil
+                provenance_log("action_monitor_complete", record, snapshot, record.reason,
+                    "elapsed_ms=" .. tostring(monitored_action.monitoring_duration_ms) .. ",result=inside_tether")
+            end
+        end
+        return
+    end
+
     if not artifact_rescue_debug_action_enabled(record)
     or record.state ~= "rescue_pending"
     or record.primary_reason ~= "rolling"
-    or not (record.rolling and record.rolling.confirmed)
-    or artifact_action_already_attempted(record) then return end
+    or not (record.rolling and record.rolling.confirmed) then return end
 
-    local parent_id = snapshot.online_parent_id or snapshot.parent_id
-    if parent_id ~= nil and parent_id ~= 65535 then return end
-    if record.level ~= (level and level.name()) then return end
-    if not snapshot.server_exists then return end
+    local action_count = artifact_action_count(record)
+    local max_dispatches = math.min(2, math.max(1, math.floor(
+        C.get_number("global", "artifact_rescue_debug_max_dispatches", 2))))
+    if action_count >= max_dispatches then
+        if not record.action_limit_reported then
+            record.action_limit_reported = true
+            provenance_log("action_limit_reached", record, snapshot, record.primary_reason,
+                "dispatches=" .. tostring(action_count) .. ",maximum=" .. tostring(max_dispatches))
+        end
+        return
+    end
+    if action_count > 0 and record.cooldown_confirmation_marker ~= record.timestamps.confirmed_at then
+        record.cooldown_confirmation_marker = record.timestamps.confirmed_at
+        record.cooldown_remaining_ms = math.max(20000,
+            C.get_number("global", "artifact_rescue_debug_cooldown_ms", 20000))
+        record.cooldown_last_sample_at = now
+        provenance_log("repeat_rescue_cooldown", record, snapshot, record.primary_reason,
+            "cooldown_ms=" .. tostring(math.floor(record.cooldown_remaining_ms)))
+        return
+    end
+    if (record.cooldown_remaining_ms or 0) > 0 then return end
+
+    if not validate_same_id_action_context(record, snapshot, nil, "same_id_teleport_dispatch") then return end
     local target = compute_observe_target(record)
     if not (target and target.valid and valid_vertex_id(target.lvid) and valid_vertex_id(target.gvid)) then
         disable_provenance(record, "same_id_teleport_target", "valid_target_unavailable")
@@ -1065,6 +1273,7 @@ local function update_debug_same_id_rescue(record, snapshot, now)
         requested_at = now,
         verification_checks = 0,
         verification_samples = 0,
+        dispatch_index = action_count + 1,
     }
     record.actions[#record.actions + 1] = action
     clear_artifact_position_caches(record.artifact_id)
@@ -1084,7 +1293,8 @@ local function update_debug_same_id_rescue(record, snapshot, now)
     record.state = "verifying"
     record.timestamps.verifying_at = now
     provenance_log("action_dispatched", record, snapshot, record.primary_reason,
-        "kind=debug_same_id_teleport,same_id=true,physics=none,target=" .. fmt_position(target.pos))
+        "kind=debug_same_id_teleport,same_id=true,physics=none,dispatch=" .. tostring(action.dispatch_index)
+        .. ",maximum=" .. tostring(max_dispatches) .. ",target=" .. fmt_position(target.pos))
 end
 
 local function artifact_diagnostic_text(snapshot)
@@ -2539,7 +2749,8 @@ local function update_artifact_zones(now)
                 }
                 local snapshot_ok, snapshot = pcall(artifact_snapshot, zone)
                 if snapshot_ok then
-                    if record.state == "verifying" then
+                    local latest_action = latest_artifact_action(record)
+                    if record.state == "verifying" or (latest_action and latest_action.status == "position_verified") then
                         local action_ok, action_error = pcall(update_debug_same_id_rescue, record, snapshot, now)
                         if not action_ok then disable_provenance(record, "same_id_action_update", action_error) end
                     elseif record.state ~= "stable" then
@@ -3000,6 +3211,7 @@ local function migrate_artifact_provenance(previous_schema)
                     -- Schema 1 could falsely overwrite a confirmed rolling
                     -- cause with underground after the object left playable nav.
                     record.primary_reason = "rolling"
+                    record.causal_origin = "rolling"
                 elseif record.underground.confirmed then
                     record.primary_reason = "underground"
                 end
@@ -3015,6 +3227,29 @@ local function migrate_artifact_provenance(previous_schema)
             record.rescue_count = tonumber(record.rescue_count) or 0
             record.rolling_rescue_count = tonumber(record.rolling_rescue_count) or 0
             record.cooldown_until = tonumber(record.cooldown_until) or 0
+            record.cooldown_remaining_ms = math.max(0, tonumber(record.cooldown_remaining_ms) or 0)
+            record.cooldown_last_sample_at = nil
+            if not record.causal_origin and (record.primary_reason == "rolling" or record.rolling.confirmed) then
+                record.causal_origin = "rolling"
+            end
+            for _, action in ipairs(record.actions) do
+                action.monitoring_last_sample_at = nil
+            end
+            local saved_action = record.actions[#record.actions]
+            if record.state == "stable" and saved_action
+            and saved_action.kind == "debug_same_id_teleport" and saved_action.status == "stable" then
+                saved_action.status = "position_verified"
+                saved_action.monitoring_duration_ms = 0
+                saved_action.monitoring_last_sample_at = nil
+                saved_action.monitoring_next_log_ms = 0
+                saved_action.last_monitor_pos = nil
+                saved_action.reconfirmed = false
+                record.state = "monitoring"
+                record.reason = "legacy_three_frame_stable_migrated"
+                record.primary_reason = nil
+                record.causal_origin = record.causal_origin or saved_action.reason
+                reset_rolling_for_monitor(record)
+            end
             if record.provenance_schema ~= ARTIFACT_PROVENANCE_SCHEMA
             or not record.spawn_input_pos or not record.zone_size or not record.level then
                 record.disabled = true

@@ -164,7 +164,7 @@
 ## Поэтапная проверка перед включением
 
 1. Provenance/observe-only принят полем на T1/T2/T3: origin, чистый underground, rolling, save/load и NPC lineage подтверждены. Полевой T1 также выявил и закрыл ложную переклассификацию rolling→underground на реальном склоне.
-2. Default-off prototype проверяет одну online same-ID teleport-попытку для exact ID из сохранённого rolling-сейва: обязательный свежий snapshot после load, сохранение ID/section/класса/мутаций и позиции через несколько кадров. Physics shell не трогается.
+2. Первый default-off прогон exact ID `1407` подтвердил свежий post-load snapshot, один same-ID teleport, сохранение ID/section и достижение target; контрольный `6362` не перемещался. Однако online-предмет продолжил движение (`anchor dxz 25.4 → 22.1 → 36.1`), поэтому три близких sample не доказывают стабильность. Текущий следующий прогон проверяет оба ID независимо: `position_verified`, мониторинг не менее 30 секунд, новый rolling 15 секунд, cooldown 20 секунд и максимум второй dispatch. Physics shell по-прежнему не трогается.
 3. Проверить три искусственных случая: origin mismatch, underground, уход за tether. Доступный склон не должен срабатывать.
 4. Включить только initial-origin correction; затем отдельными этапами underground и rolling.
 5. Проверить NPC pickup, смерть NPC, `actor_pickup_recreated_id`, exact marker, Rojok queue ровно один раз и штатный cleanup.
