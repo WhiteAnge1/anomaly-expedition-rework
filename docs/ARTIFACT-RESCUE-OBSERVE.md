@@ -43,6 +43,27 @@ Rolling начинается, когда свободный предмет да�
 - Попытка rolling на `af_ball#6910` не является rolling-тестом: предмет уже был `rescue_pending reason=origin_mismatch`, поэтому первичная причина закономерно сохранилась.
 - Два NPC-подбора показали реальную смену ID: `af_dummy_battery#7012 -> #38145` и `af_electra_sparkler#8318 -> #38144`. Предыдущая версия видела только исчезновение старых IDs и ошибочно восстанавливала их как `observing_online`; это стало основанием для lineage-исправления выше.
 
+Поляна завершила phase 1 отдельным rolling-тестом. `af_night_star#1407` и `af_fonar#6362` независимо подтвердили выход за `radius+5` через `15160/15157 ms`. Они затем продолжили катиться по реальному склону за игровую часть карты: последующий низкий Y/invalid nav являлся продолжением rolling, а не новым underground. Provenance schema 2 хранит `primary_reason`; подтверждённый rolling больше не передаётся underground-классификатору, пока объект не вернётся внутрь tether. Чистый underground на Поляне отдельно подтвердил `af_signet#6740`, вертикально упавший внутри своего круга.
+
+## Лабораторный same-ID prototype
+
+Prototype по умолчанию полностью выключен. Он поддерживает только один exact original ID с `primary_reason=rolling`, одну попытку same-ID `alife():teleport_object`, без recreate/offline-cycle/physics. Schema-1 сейв принятого теста мигрирует в schema 2 и восстанавливает первичную rolling-причину даже после старой ложной переклассификации.
+
+После `load_restore` запись получает `fresh_snapshot_required=true`. Первый реальный update сначала запускает классификатор: если X-Ray уже восстановил предмет внутрь tether, rolling сбрасывается и действие запрещается. Даже если предмет остался снаружи, этот snapshot только пишет `post_load_snapshot ... action_deferred=true`; dispatch возможен не раньше следующего update. Успех требует сохранения server ID/section/game vertex и трёх последовательных snapshots не далее 4 м по XZ/Y от проверенной static-ray target.
+
+Тестировать только на отдельном сохранённом сейве, не создавая поверх него новых сохранений. Сначала выбрать один ID, например `1407`:
+
+```ini
+artifact_rescue_observe_only = true
+artifact_rescue_actions = true
+artifact_rescue_debug_same_id_teleport = true
+artifact_rescue_debug_artifact_id = 1407
+artifact_rescue_debug_reason = rolling
+debug_mode = on
+```
+
+Запустить watcher до загрузки сейва. Нормальный успешный путь: `load_restore ... primary_reason=rolling,fresh_snapshot_required=true` → `post_load_snapshot ... action_deferred=true` → на следующем update `action_dispatched ... same_id=true,physics=none` → после трёх проверок `action_stable`. Если X-Ray сам восстановил предмет внутрь tether, ожидается `recovery_reset`/observing state и отсутствие `action_dispatched`; это тоже успешный результат guard. После завершения полностью закрыть игру, вернуть `artifact_rescue_actions=false`, `artifact_rescue_debug_same_id_teleport=false`, `artifact_rescue_debug_artifact_id=0` и только затем продолжать обычную игру. Второй ID проверять отдельным запуском того же неизменённого сейва.
+
 ## Debug-журнал
 
 Для полевого теста выставить:
@@ -61,7 +82,7 @@ debug_mode = on
 - `owned`, `closed`, `released`;
 - `save` и `load_restore`.
 
-Строки включают ID/section/level/template, current и first position, vertex, parent/owner, distance/radius/excess, samples/duration/source и вычисленную target. Рутинные строки видны только в debug. Ошибка engine-facing observer выключает только запись этого ID и один раз пишет `ERROR ... no action attempted`.
+Строки включают ID/section/level/template, current и first position, vertex, parent/owner, distance/radius/excess, samples/duration/source и вычисленную target. Рутинные строки видны только в debug. Ошибка engine-facing observer/action выключает только запись этого ID, запрещает дальнейшие действия и один раз пишет `ERROR artifact rescue record disabled ... further actions blocked`.
 
 ## Короткий полевой тест
 
@@ -76,4 +97,4 @@ debug_mode = on
 9. Выйти с локации обычным переходом: ожидать `released` для оставшихся записей и штатный cleanup.
 10. Сохранить `latest.log` и полный `xray_*.log`. После теста вернуть debug/forced-настройки к прежним значениям; отдельно сообщить их до и после теста.
 
-Границы карт, клики по PDA, teleport, offline/online эксперимент и любые physics actions относятся к следующим отдельным этапам и этим тестом не разрешаются.
+Границы карт, клики по PDA, offline-cycle и любые physics actions относятся к следующим отдельным этапам. Единственное исключение — явно разрешённый exact-ID same-ID prototype по отдельному сценарию; обычный observe-only тест всегда держит все action gates выключенными.

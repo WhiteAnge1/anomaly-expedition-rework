@@ -52,12 +52,15 @@
 
 Центр artifact-области настраивается ключами `artifact_offset_fraction_min/max` через обычную иерархию `[global] → [tier_N] → [level_*]`. Принятые профили: T1 `0.35..0.80` без изменений, T2 `0.10..0.20`, T3 `0.06..0.12`. После привязки к level-vertex проверяется уже фактическое смещение центра; превышение max отклоняется. Release-log сообщает `tier/level/offset/fraction/limit/range`. Настоящие artifact-области могут перекрываться друг с другом, потому что штатный RVM способен создать несколько артефактов в одной anomaly-zone; `zone_separation_min` по-прежнему действует для ложных областей и не превращён в общий запрет кластеров. Это исправляет только отображаемую геометрию и не перемещает сам артефакт; случаи `(0,0,0)` и underground остаются отдельной задачей rescue. При невозможности построить центр rate-limited лог показывает позицию, `near_origin` (не далее 2 м от мирового нуля) и накопленные причины отказов `invalid_vertex/post_snap_limit/separation/anchor_failure`.
 
-## Artifact rescue: стадия наблюдения
+## Artifact rescue: наблюдение и лабораторный prototype
 
 | Параметр | Default | Назначение |
 |---|---:|---|
 | `artifact_rescue_observe_only` | `false` | Включает сохраняемые классификаторы и debug-события; никаких действий над предметом |
-| `artifact_rescue_actions` | `false` | Зарезервированный предохранитель; в текущем runtime игнорируется и должен оставаться `false` |
+| `artifact_rescue_actions` | `false` | Общий master gate любых активных действий; публично всегда `false` |
+| `artifact_rescue_debug_same_id_teleport` | `false` | Второй gate единственного лабораторного same-ID teleport |
+| `artifact_rescue_debug_artifact_id` | `0` | Единственный exact original ID, которому разрешён prototype; `0` запрещает действие |
+| `artifact_rescue_debug_reason` | `rolling` | Единственная разрешённая причина prototype; сейчас поддерживается только `rolling` |
 | `artifact_rescue_origin_radius` | `2` | Радиус признака near-origin; сам по себе никогда не подтверждает ошибку |
 | `artifact_rescue_origin_field_margin` | `2` | Запас сверх `sqrt(2) * size` при проверке несовпадения с исходным полем |
 | `artifact_rescue_origin_nav_mismatch` | `4` | Порог несогласованности позиции с nav vertex |
@@ -69,9 +72,11 @@
 | `artifact_rescue_rolling_confirm_ms` | `15000` | Устойчивое время снаружи до диагностического `rescue_pending` |
 | `artifact_rescue_log_repeat_ms` | `60000` | Минимальный интервал повторных save/сводных сообщений |
 
-Provenance сохраняет ID/section, шаблон и размер поля, его фактический центр, первый server position/LVID/GVID, связанную область, last-good позиции, ownership/lineage, bad-sample counters, timestamps, состояние, причину, вычисленную static-ray цель и нулевые action/cooldown counters. При NPC pickup RVM может заменить world ID новым inventory ID; однозначный replacement той же секции добавляется в сохраняемый lineage независимо от `remove_on_npc_pickup`, а неоднозначность остаётся fail-closed. Старые сохранения без исходных данных поля мигрируют в `disabled`: мод не пытается угадывать provenance задним числом.
+Provenance schema 2 сохраняет ID/section, шаблон и размер поля, его фактический центр, первый server position/LVID/GVID, связанную область, last-good позиции, ownership/lineage, bad-sample counters, timestamps, состояние, первичную причину, вычисленную static-ray цель и action journal. Schema 1 мигрирует без потери принятого полевого сейва; если старый классификатор успел заменить подтверждённый rolling на вторичный underground, первичная причина восстанавливается как rolling. При NPC pickup RVM может заменить world ID новым inventory ID; однозначный replacement той же секции добавляется в сохраняемый lineage независимо от `remove_on_npc_pickup`, а неоднозначность остаётся fail-closed. Старые сохранения без исходных данных поля мигрируют в `disabled`: мод не пытается угадывать provenance задним числом.
 
-Строгий origin-кандидат требует одновременно near-origin, несовпадение с конкретным полем и его размером, плохой vertex/nav, отсутствие parent и валидную static-ray цель. Underground требует всех порогов из таблицы и отсутствия владельца. Rolling начинается при любом устойчивом превышении `radius + 5 м`; возврат внутрь до 15 секунд полностью сбрасывает эпизод. Даже `state=rescue_pending` в этой версии не выполняет teleport, recreate, release, фиксацию physics shell или изменение штатных количеств `4/8/6`.
+Строгий origin-кандидат требует одновременно near-origin, несовпадение с конкретным полем и его размером, плохой vertex/nav, отсутствие parent и валидную static-ray цель. Underground требует всех порогов из таблицы и отсутствия владельца. Rolling начинается при любом устойчивом превышении `radius + 5 м`; возврат внутрь полностью сбрасывает эпизод. Первая подтверждённая причина сохраняет причинный приоритет: rolling за пределами игровой nav-сетки не становится underground только из-за низкого world Y/invalid vertex.
+
+Prototype не является пользовательской функцией. Он работает только при одновременных `artifact_rescue_observe_only=true`, `artifact_rescue_actions=true`, `artifact_rescue_debug_same_id_teleport=true` и точном ненулевом `artifact_rescue_debug_artifact_id`. Поддержан только confirmed rolling, одна попытка на ID, тот же ID/section, без recreate и physics. После load первый свежий snapshot всегда лишь разрешает recovery/reset и откладывает действие; teleport возможен не раньше следующего update. После отправки нужны три последовательные проверки позиции в радиусе 4 м от static-ray target, иначе запись fail-closed отключается. Штатные количества `4/8/6` не меняются.
 
 ## Диагностика и тестовые параметры
 

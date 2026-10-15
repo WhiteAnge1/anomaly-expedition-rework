@@ -115,14 +115,53 @@ $lineageRestored = $lineageState | ConvertTo-Json -Depth 8 | ConvertFrom-Json
 Assert-True ($lineageRestored.record.state -eq 'owned' -and $lineageRestored.record.ownership.current_id -eq 38145) 'owned replacement did not survive save/load'
 Assert-True ($lineageRestored.artifact_zone.'38145' -eq '30859' -and $lineageRestored.record.ownership.lineage_ids.'38145') 'replacement lookup/lineage did not survive save/load'
 
+# A confirmed first cause owns the incident until it recovers.  In particular,
+# rolling outside playable nav must not become a second underground incident.
+$cause = @{ state = 'rescue_pending'; reason = 'rolling'; primary_reason = 'rolling'; rolling_confirmed = $true }
+$secondaryUndergroundAllowed = -not ($cause.state -eq 'rescue_pending' -and $cause.primary_reason -eq 'rolling')
+Assert-True (-not $secondaryUndergroundAllowed) 'confirmed rolling was reclassified as underground'
+$cause.primary_reason = $null
+$cause.state = 'observing_online'
+$cause.reason = 'rolling_returned_inside_tether'
+Assert-True ($null -eq $cause.primary_reason -and $cause.state -eq 'observing_online') 'rolling recovery did not clear primary cause'
+
+# Schema-1 saves from the accepted field run must migrate the earlier false
+# underground overwrite back to the already-confirmed rolling cause.
+$schema1 = @{ provenance_schema = 1; state = 'rescue_pending'; reason = 'underground'; rolling = @{ confirmed = $true }; underground = @{ confirmed = $true } }
+if ($schema1.provenance_schema -eq 1 -and $schema1.rolling.confirmed) {
+    $schema1.primary_reason = 'rolling'
+    $schema1.reason = 'rolling'
+    $schema1.provenance_schema = 2
+}
+Assert-True ($schema1.provenance_schema -eq 2 -and $schema1.primary_reason -eq 'rolling' -and $schema1.reason -eq 'rolling') 'schema-1 causal migration failed'
+
+# Load never dispatches an action.  The first fresh snapshot is consumed only
+# as a classifier/recovery gate; the following update may dispatch if the item
+# is still outside with the same confirmed primary cause.
+$loadedPending = @{ state = 'rescue_pending'; primary_reason = 'rolling'; awaiting_fresh_snapshot = $true; dispatched = $false }
+if ($loadedPending.awaiting_fresh_snapshot) { $loadedPending.awaiting_fresh_snapshot = $false }
+Assert-True (-not $loadedPending.dispatched) 'action dispatched directly from load_restore/first snapshot'
+if (-not $loadedPending.awaiting_fresh_snapshot -and $loadedPending.state -eq 'rescue_pending' -and $loadedPending.primary_reason -eq 'rolling') {
+    $loadedPending.dispatched = $true
+}
+Assert-True ($loadedPending.dispatched) 'persisted rolling pending was not eligible after a fresh snapshot'
+$loadedRecovered = @{ state = 'observing_online'; primary_reason = $null; awaiting_fresh_snapshot = $true; dispatched = $false }
+if ($loadedRecovered.awaiting_fresh_snapshot) { $loadedRecovered.awaiting_fresh_snapshot = $false }
+Assert-True (-not $loadedRecovered.dispatched -and $null -eq $loadedRecovered.primary_reason) 'inside-tether load incorrectly dispatched rescue'
+
 foreach ($needle in @(
-    'schema = 4', 'artifact_provenance = {}', 'provenance_schema = ARTIFACT_PROVENANCE_SCHEMA',
+    'schema = 4', 'artifact_provenance = {}', 'local ARTIFACT_PROVENANCE_SCHEMA = 2',
     'spawn_input_pos', 'first_server', 'last_good_server', 'last_good_online',
     'linked_anchor_id', 'linked_radius', 'ownership', 'lineage_ids', 'cooldown_until',
     'state = "captured"', '"observing_server"', '"observing_online"', '"suspect"',
     '"rescue_pending"', '"owned"', '"closed"', '"released"', '"disabled"',
     'legacy_save_missing_spawn_provenance', 'record.underground.last_sample_at = nil',
-    'record.rolling.last_sample_at = nil', 'observe_only=true; action=none',
+    'record.rolling.last_sample_at = nil', 'record.primary_reason = "rolling"',
+    'record.awaiting_fresh_snapshot = true', 'post_load_snapshot', 'action_deferred=true',
+    'local function update_debug_same_id_rescue(record, snapshot, now)',
+    'record.state == "rescue_pending" and record.primary_reason == "rolling"',
+    'alife():teleport_object(record.artifact_id, target.gvid, target.lvid, pos_vector(target.pos))',
+    'record.state = "verifying"', 'record.state = "stable"', 'same_id=true,physics=none',
     'local function remember_artifact_lineage(zone, item, owner, source)',
     'state.artifact_zone[key] = tostring(zone.anchor_id)',
     'record.ownership.current_id = item_id', 'terminal_provenance(record, "owned", source, owned_snapshot)',
@@ -135,6 +174,8 @@ foreach ($needle in @(
 
 foreach ($needle in @(
     'artifact_rescue_observe_only = false', 'artifact_rescue_actions = false',
+    'artifact_rescue_debug_same_id_teleport = false', 'artifact_rescue_debug_artifact_id = 0',
+    'artifact_rescue_debug_reason = rolling',
     'artifact_rescue_origin_radius = 2', 'artifact_rescue_underground_drop = 12',
     'artifact_rescue_underground_vertex_gap = 4', 'artifact_rescue_underground_samples = 3',
     'artifact_rescue_underground_duration_ms = 2000', 'artifact_rescue_rolling_edge_margin = 5',
@@ -143,8 +184,12 @@ foreach ($needle in @(
     Assert-True ($config.Contains($needle)) "observe-only config invariant missing: $needle"
 }
 
-foreach ($forbidden in @('teleport_object', 'physics_element:fix', 'physics_element:release_fixed')) {
+foreach ($forbidden in @('physics_element:fix', 'physics_element:release_fixed')) {
     Assert-True (-not $main.Contains($forbidden)) "active artifact rescue action is forbidden in phase 1: $forbidden"
+}
+Assert-True (([regex]::Matches($main, [regex]::Escape('alife():teleport_object('))).Count -eq 1) 'same-ID teleport must have exactly one narrow call site'
+foreach ($gate in @('artifact_rescue_actions', 'artifact_rescue_debug_same_id_teleport', 'artifact_rescue_debug_artifact_id', 'artifact_rescue_debug_reason')) {
+    Assert-True ($main.Contains($gate)) "same-ID teleport gate missing: $gate"
 }
 Assert-True (-not $main.Contains('if not (item and C.get_bool("global", "remove_on_npc_pickup", false)) then return end')) 'NPC ownership tracking is incorrectly gated by remove_on_npc_pickup'
 
@@ -152,4 +197,4 @@ if ($failures.Count -gt 0) {
     $failures | ForEach-Object { Write-Error $_ }
     exit 1
 }
-Write-Output 'Artifact rescue observe-only policy test: OK'
+Write-Output 'Artifact rescue causal priority and debug same-ID policy test: OK'

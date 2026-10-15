@@ -20,7 +20,7 @@ local census_error_reported = false
 local next_artifact_diagnostic = 0
 local reported_artifact_overlaps = {}
 local safe_alive = nil
-local ARTIFACT_PROVENANCE_SCHEMA = 1
+local ARTIFACT_PROVENANCE_SCHEMA = 2
 local INVALID_VERTEX_ID = 4294967295
 
 -- Category selection is a separate weighted roll. Every entry points to an
@@ -452,6 +452,19 @@ local function artifact_rescue_observe_enabled()
     return C.get_bool("global", "artifact_rescue_observe_only", false)
 end
 
+local function artifact_rescue_debug_action_enabled(record)
+    if not artifact_rescue_observe_enabled()
+    or not C.get_bool("global", "artifact_rescue_actions", false)
+    or not C.get_bool("global", "artifact_rescue_debug_same_id_teleport", false) then
+        return false
+    end
+    local configured_id = math.floor(C.get_number("global", "artifact_rescue_debug_artifact_id", 0))
+    local configured_reason = string.lower(C.get_string("global", "artifact_rescue_debug_reason", "rolling"))
+    return configured_id > 0
+        and record and tonumber(record.artifact_id) == configured_id
+        and tostring(record.primary_reason or record.reason) == configured_reason
+end
+
 local function artifact_zone_size(anom_zone)
     local family, index = string.match(tostring(anom_zone or ""), "^([%a]+)_(%d)")
     local known = { chem = true, electr = true, therm = true, gravi = true, mosquito = true, fuzz = true, psy = true }
@@ -577,7 +590,7 @@ local function disable_provenance(record, context, err)
     record.error_once = record.error_once or {}
     if not record.error_once[context] then
         record.error_once[context] = true
-        printf(PREFIX .. " ERROR artifact rescue observer disabled id=%s context=%s error=%s; no action attempted",
+        printf(PREFIX .. " ERROR artifact rescue record disabled id=%s context=%s error=%s; further actions blocked",
             tostring(record.artifact_id), tostring(context), tostring(err))
     end
 end
@@ -615,6 +628,7 @@ local function capture_artifact_provenance(artifact_id, anom_zone, pos, level_ti
         timestamps = { captured_at = time_global(), updated_at = time_global() },
         state = "captured",
         reason = "wrapper_callback_captured",
+        primary_reason = nil,
         target = nil,
         rescue_count = 0,
         rolling_rescue_count = 0,
@@ -744,11 +758,21 @@ local function begin_artifact_suspect(record, reason, snapshot, extra)
 end
 
 local function confirm_artifact_candidate(record, reason, snapshot, extra)
+    if record.primary_reason and record.primary_reason ~= reason then
+        provenance_log("secondary_suppressed", record, snapshot, reason,
+            "primary_reason=" .. tostring(record.primary_reason) .. ",candidate=" .. tostring(reason))
+        record.reason = record.primary_reason
+        return false
+    end
+    record.primary_reason = record.primary_reason or reason
     record.state = "rescue_pending"
-    record.reason = reason
+    record.reason = record.primary_reason
     record.timestamps.confirmed_at = time_global()
     record.counters.confirmed = (record.counters.confirmed or 0) + 1
-    provenance_log("confirmed", record, snapshot, reason, extra .. "; observe_only=true; action=none")
+    provenance_log("confirmed", record, snapshot, record.primary_reason,
+        extra .. "; observe_only=" .. tostring(not artifact_rescue_debug_action_enabled(record))
+        .. "; action=none")
+    return true
 end
 
 local function reset_bad_episode(record, episode_name, snapshot, reason)
@@ -766,6 +790,7 @@ local function reset_bad_episode(record, episode_name, snapshot, reason)
     episode.trend = nil
     episode.last_distance = nil
     episode.confirmed = false
+    if record.primary_reason == episode_name then record.primary_reason = nil end
     if record.reason == episode_name or string.find(tostring(record.reason), episode_name, 1, true) then
         record.state = snapshot.online_exists and "observing_online" or "observing_server"
         record.reason = reason
@@ -930,9 +955,16 @@ local function observe_artifact_provenance_impl(record, zone, snapshot, now)
     end
 
     observe_origin_candidate(record, snapshot)
-    if record.state == "rescue_pending" and record.reason == "origin_mismatch" then return end
+    if record.state == "rescue_pending" and record.primary_reason == "origin_mismatch" then return end
+    -- A confirmed rolling incident remains rolling while the same object keeps
+    -- travelling outside its tether.  Low world Y or missing nav far beyond the
+    -- playable slope is not independent proof that it crossed below geometry.
+    if record.state == "rescue_pending" and record.primary_reason == "rolling" then
+        observe_rolling_candidate(record, snapshot, now)
+        return
+    end
     observe_underground_candidate(record, snapshot, now)
-    if record.state == "rescue_pending" and record.reason == "underground" then return end
+    if record.state == "rescue_pending" and record.primary_reason == "underground" then return end
     observe_rolling_candidate(record, snapshot, now)
 end
 
@@ -940,6 +972,119 @@ local function observe_artifact_provenance(record, zone, snapshot, now)
     if not artifact_rescue_observe_enabled() then return end
     local ok, err = pcall(observe_artifact_provenance_impl, record, zone, snapshot, now)
     if not ok then disable_provenance(record, "observe_update", err) end
+end
+
+local function artifact_action_already_attempted(record)
+    for _, action in ipairs(record.actions or {}) do
+        if action.kind == "debug_same_id_teleport" then return true end
+    end
+    return false
+end
+
+local function clear_artifact_position_caches(id)
+    if db and db.offline_objects and db.offline_objects[id] then
+        db.offline_objects[id].level_vertex_id = nil
+    end
+    if db and db.spawned_vertex_by_id then db.spawned_vertex_by_id[id] = nil end
+end
+
+local function update_debug_same_id_rescue(record, snapshot, now)
+    if not record or record.disabled or record.state == "owned" or record.state == "closed"
+    or record.state == "released" or record.state == "stable" then return end
+
+    if record.awaiting_fresh_snapshot then
+        record.awaiting_fresh_snapshot = false
+        provenance_log("post_load_snapshot", record, snapshot, record.reason,
+            "action_deferred=true,current_state=" .. tostring(record.state)
+            .. ",primary_reason=" .. tostring(record.primary_reason))
+        return
+    end
+
+    if record.state == "verifying" then
+        local action = record.actions and record.actions[#record.actions]
+        if not action or action.kind ~= "debug_same_id_teleport" then
+            disable_provenance(record, "verify_missing_action", "same_id_action_record_missing")
+            return
+        end
+        local pos = snapshot.online_pos or snapshot.server_pos
+        local target = action.target and action.target.pos
+        action.verification_checks = (action.verification_checks or 0) + 1
+        local good = snapshot.server_exists and snapshot.server_section == action.section
+            and snapshot.server_gvid == action.target.gvid and pos and target
+            and distance_xz(pos, target) <= 4 and math.abs(pos.y - target.y) <= 4
+        if good then
+            action.verification_samples = (action.verification_samples or 0) + 1
+            if action.verification_samples >= 3 then
+                action.status = "stable"
+                action.verified_at = now
+                record.state = "stable"
+                record.reason = record.primary_reason or record.reason
+                record.timestamps.stable_at = now
+                provenance_log("action_stable", record, snapshot, record.reason,
+                    "kind=debug_same_id_teleport,same_id=true,checks=" .. tostring(action.verification_checks))
+            end
+        else
+            action.verification_samples = 0
+            if action.verification_checks >= 10 then
+                action.status = "verification_failed"
+                disable_provenance(record, "same_id_teleport_verify", "target_not_stable_after_10_checks")
+            end
+        end
+        return
+    end
+
+    if not artifact_rescue_debug_action_enabled(record)
+    or record.state ~= "rescue_pending"
+    or record.primary_reason ~= "rolling"
+    or not (record.rolling and record.rolling.confirmed)
+    or artifact_action_already_attempted(record) then return end
+
+    local parent_id = snapshot.online_parent_id or snapshot.parent_id
+    if parent_id ~= nil and parent_id ~= 65535 then return end
+    if record.level ~= (level and level.name()) then return end
+    if not snapshot.server_exists then return end
+    local target = compute_observe_target(record)
+    if not (target and target.valid and valid_vertex_id(target.lvid) and valid_vertex_id(target.gvid)) then
+        disable_provenance(record, "same_id_teleport_target", "valid_target_unavailable")
+        return
+    end
+    local server_ok, server = pcall(alife_object, record.artifact_id)
+    server = server_ok and server or nil
+    if not server or object_section(server) ~= record.section then
+        disable_provenance(record, "same_id_teleport_identity", "server_or_section_mismatch")
+        return
+    end
+
+    local action = {
+        kind = "debug_same_id_teleport",
+        status = "dispatching",
+        reason = record.primary_reason,
+        artifact_id = record.artifact_id,
+        section = record.section,
+        target = { pos = pos_table(target.pos), lvid = target.lvid, gvid = target.gvid },
+        requested_at = now,
+        verification_checks = 0,
+        verification_samples = 0,
+    }
+    record.actions[#record.actions + 1] = action
+    clear_artifact_position_caches(record.artifact_id)
+    local moved, move_error = pcall(function()
+        alife():teleport_object(record.artifact_id, target.gvid, target.lvid, pos_vector(target.pos))
+    end)
+    if not moved then
+        action.status = "dispatch_failed"
+        action.error = tostring(move_error)
+        disable_provenance(record, "same_id_teleport_dispatch", move_error)
+        return
+    end
+    action.status = "verifying"
+    action.dispatched_at = now
+    record.rescue_count = (record.rescue_count or 0) + 1
+    record.rolling_rescue_count = (record.rolling_rescue_count or 0) + 1
+    record.state = "verifying"
+    record.timestamps.verifying_at = now
+    provenance_log("action_dispatched", record, snapshot, record.primary_reason,
+        "kind=debug_same_id_teleport,same_id=true,physics=none,target=" .. fmt_position(target.pos))
 end
 
 local function artifact_diagnostic_text(snapshot)
@@ -2394,7 +2539,14 @@ local function update_artifact_zones(now)
                 }
                 local snapshot_ok, snapshot = pcall(artifact_snapshot, zone)
                 if snapshot_ok then
-                    observe_artifact_provenance(record, zone, snapshot, now)
+                    if record.state == "verifying" then
+                        local action_ok, action_error = pcall(update_debug_same_id_rescue, record, snapshot, now)
+                        if not action_ok then disable_provenance(record, "same_id_action_update", action_error) end
+                    elseif record.state ~= "stable" then
+                        observe_artifact_provenance(record, zone, snapshot, now)
+                        local action_ok, action_error = pcall(update_debug_same_id_rescue, record, snapshot, now)
+                        if not action_ok then disable_provenance(record, "same_id_action_update", action_error) end
+                    end
                 else
                     disable_provenance(record, "snapshot", snapshot)
                 end
@@ -2757,8 +2909,13 @@ local function save_state(m_data)
         local now = time_global()
         local interval = math.max(1000, C.get_number("global", "artifact_rescue_log_repeat_ms", 60000))
         if now >= (state.provenance_next_save_log_at or 0) then
-            log("artifact rescue observe event=save records=%s schema=%s actions=none",
-                tostring(size_table(state.artifact_provenance or {})), tostring(ARTIFACT_PROVENANCE_SCHEMA))
+            local action_count = 0
+            for _, record in pairs(state.artifact_provenance or {}) do
+                action_count = action_count + #(record.actions or {})
+            end
+            log("artifact rescue observe event=save records=%s schema=%s actions=%s",
+                tostring(size_table(state.artifact_provenance or {})), tostring(ARTIFACT_PROVENANCE_SCHEMA),
+                tostring(action_count))
             state.provenance_next_save_log_at = now + interval
         end
     end
@@ -2787,6 +2944,7 @@ local function legacy_disabled_provenance(artifact_id, zone, reason)
         timestamps = {},
         state = "disabled",
         reason = reason,
+        primary_reason = nil,
         target = nil,
         rescue_count = 0,
         rolling_rescue_count = 0,
@@ -2834,6 +2992,22 @@ local function migrate_artifact_provenance(previous_schema)
             record.origin = record.origin or { checked = false }
             record.underground = record.underground or { samples = 0, duration_ms = 0, confirmed = false }
             record.rolling = record.rolling or { samples = 0, duration_ms = 0, max_excess = 0, confirmed = false }
+            local saved_provenance_schema = tonumber(record.provenance_schema) or 0
+            if saved_provenance_schema == 1 then
+                if record.reason == "origin_mismatch" then
+                    record.primary_reason = "origin_mismatch"
+                elseif record.rolling.confirmed then
+                    -- Schema 1 could falsely overwrite a confirmed rolling
+                    -- cause with underground after the object left playable nav.
+                    record.primary_reason = "rolling"
+                elseif record.underground.confirmed then
+                    record.primary_reason = "underground"
+                end
+                if record.state == "rescue_pending" and record.primary_reason then
+                    record.reason = record.primary_reason
+                end
+                record.provenance_schema = ARTIFACT_PROVENANCE_SCHEMA
+            end
             -- time_global is process-local; accumulated durations survive, raw
             -- sample clocks do not.
             record.underground.last_sample_at = nil
@@ -2847,8 +3021,14 @@ local function migrate_artifact_provenance(previous_schema)
                 record.state = "disabled"
                 record.reason = "incompatible_or_incomplete_provenance"
             end
+            if record.state ~= "owned" and record.state ~= "closed" and record.state ~= "released"
+            and record.state ~= "disabled" and record.state ~= "stable" then
+                record.awaiting_fresh_snapshot = true
+            end
             provenance_log("load_restore", record, nil, record.reason,
-                "saved_state=" .. tostring(record.state) .. ",actions=" .. tostring(#record.actions))
+                "saved_state=" .. tostring(record.state) .. ",actions=" .. tostring(#record.actions)
+                .. ",primary_reason=" .. tostring(record.primary_reason)
+                .. ",fresh_snapshot_required=" .. tostring(record.awaiting_fresh_snapshot == true))
         end
     end
 end

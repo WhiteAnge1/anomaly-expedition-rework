@@ -127,6 +127,7 @@
 ### 3. Rolling/boundary return
 
 - Rolling использует tether относительно сохранённого linked circle и выдержку времени.
+- Подтверждённый rolling остаётся первичной причиной, пока объект не вернулся внутрь tether. Низкий world Y или invalid nav после ухода по реальному склону за игровую карту не являются независимым доказательством underground и не создают второе действие.
 - Boundary добавляет проверенный вручную полигон текущей локации; coarse terrain rectangle остаётся только дополнительным признаком.
 - Цель — сохранённая last-good точка с подтверждённой статической опорой либо новый кандидат внутри того же исходного поля.
 - Cooldown 15 секунд, общий лимит 2 rescue на ID, затем observe-only.
@@ -144,7 +145,7 @@
 
 Состояния:
 
-Полная будущая цепочка: `captured -> observing_server -> observing_online -> suspect -> rescue_pending -> verifying -> stable`. На первой observe-only стадии достижимы состояния до `rescue_pending`; `verifying/stable` появятся только вместе с отдельно разрешённым active rescue.
+Полная цепочка: `captured -> observing_server -> observing_online -> suspect -> rescue_pending -> verifying -> stable`. `verifying/stable` теперь доступны только узкому default-off debug prototype для одного exact ID; публичные defaults остаются observe-only.
 
 Отдельные терминалы: `owned`, `closed`, `released`, `disabled`. Загрузка сохранения продолжает сохранённое состояние, но никогда не повторяет уже подтверждённый teleport. Любой parent/ownership немедленно переводит запись в `owned`; cleanup настоящего выхода оставляет освобождение предмета штатному RVM.
 
@@ -162,8 +163,8 @@
 
 ## Поэтапная проверка перед включением
 
-1. Добавить только provenance и observe-only классификатор; пройти T1/T2/T3, включая save/load. Базовый прогон завершён: origin/underground/save-load подтверждены, NPC lineage исправлен после обнаруженной смены ID, rolling на нормальном initial spawn ещё требует целевого теста.
-2. На временном тестовом артефакте проверить same-ID teleport отдельно offline и online, сохранение класса/мутаций, позиции после нескольких кадров и поведение physics shell.
+1. Provenance/observe-only принят полем на T1/T2/T3: origin, чистый underground, rolling, save/load и NPC lineage подтверждены. Полевой T1 также выявил и закрыл ложную переклассификацию rolling→underground на реальном склоне.
+2. Default-off prototype проверяет одну online same-ID teleport-попытку для exact ID из сохранённого rolling-сейва: обязательный свежий snapshot после load, сохранение ID/section/класса/мутаций и позиции через несколько кадров. Physics shell не трогается.
 3. Проверить три искусственных случая: origin mismatch, underground, уход за tether. Доступный склон не должен срабатывать.
 4. Включить только initial-origin correction; затем отдельными этапами underground и rolling.
 5. Проверить NPC pickup, смерть NPC, `actor_pickup_recreated_id`, exact marker, Rojok queue ровно один раз и штатный cleanup.
