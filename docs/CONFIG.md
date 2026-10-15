@@ -66,6 +66,8 @@
 | `artifact_rescue_debug_cooldown_ms` | `20000` | Пауза после повторного rolling-confirmation до второго dispatch |
 | `artifact_rescue_debug_max_dispatches` | `2` | Предел обычных same-ID отправок на original ID |
 | `artifact_rescue_debug_same_frame_stabilization` | `false` | Отдельный gate третьего experimental dispatch после двух verified обычных; требует все предыдущие rescue-gate |
+| `artifact_rescue_debug_held_stabilization` | `false` | Альтернативный third-stage gate: удерживает только зафиксированные модом элементы до pickup/release trigger; несовместим с same-frame gate |
+| `artifact_rescue_debug_held_timeout_ms` | `120000` | Аварийное освобождение held-элементов; runtime не разрешает значение меньше 30 секунд |
 | `artifact_rescue_origin_radius` | `2` | Радиус признака near-origin; сам по себе никогда не подтверждает ошибку |
 | `artifact_rescue_origin_field_margin` | `2` | Запас сверх `sqrt(2) * size` при проверке несовпадения с исходным полем |
 | `artifact_rescue_origin_nav_mismatch` | `4` | Порог несогласованности позиции с nav vertex |
@@ -84,6 +86,8 @@ Provenance schema 2 сохраняет ID/section, шаблон и размер 
 Prototype не является пользовательской функцией. Он работает только при одновременных `artifact_rescue_observe_only=true`, `artifact_rescue_actions=true`, `artifact_rescue_debug_same_id_teleport=true`, exact ID `1407`/`6362` и причине rolling. Первый свежий snapshot после load только классифицирует состояние. Три проверки в радиусе 4 м дают лишь `position_verified`; затем идёт минимум 30 секунд наблюдения. Новый непрерывный выход за `radius+5` должен длиться 15 секунд, после чего действует 20-секундный cooldown; обычный предел — два dispatch независимо на ID.
 
 `artifact_rescue_debug_same_frame_stabilization=true` разрешает ровно третий dispatch только после двух обычных действий с `verified_at` и нового независимого rolling-confirmation. После same-ID teleport код проверяет exact online-object и все physics elements, временно фиксирует только ранее не fixed элементы и освобождает только их в том же callback. Shell/API/element failure не отменяет teleport: пишется `stabilization_unavailable/failed`, затем продолжаются position verification и мониторинг. Permanent fix, перенос fixed-состояния через кадр/save, recreate, offline-cycle, `apply_force` и section fallback запрещены. После третьего dispatch действует hard maximum `3`.
+
+`artifact_rescue_debug_held_stabilization=true` — отдельный pickup-эксперимент и не может работать одновременно с same-frame gate: конфликт оставляет обычный limit=2. На третьем dispatch журнал сохраняет только индексы ранее unfixed элементов, которые мод успешно зафиксировал и перепроверил. Release выполняется только для этого списка при pickup/owner change, выключении gate, timeout, terminal/cleanup, до level change и до сериализации save. Если pre-save release не подтверждён, journal получает `release_required`, а load обязан сначала повторить release и блокирует дальнейшие rescue-действия. Несмотря на guard, полевой held-тест запрещает ручные save/load и выход с уровня: это узкий эксперимент возможности pickup, не production-механика.
 
 ## Диагностика и тестовые параметры
 

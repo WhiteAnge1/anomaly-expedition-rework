@@ -1,0 +1,97 @@
+param(
+    [string]$ModRoot = (Split-Path -Parent $PSScriptRoot)
+)
+
+$ErrorActionPreference = 'Stop'
+$failures = New-Object System.Collections.Generic.List[string]
+$main = Get-Content -LiteralPath (Join-Path $ModRoot 'gamedata\scripts\zzz_rvm_sorties_rework.script') -Raw -Encoding UTF8
+$config = Get-Content -LiteralPath (Join-Path $ModRoot 'gamedata\configs\plugins\rvm_sorties_rework.ltx') -Raw -Encoding UTF8
+
+function Assert-True([bool]$Condition, [string]$Message) {
+    if (-not $Condition) { $script:failures.Add($Message) }
+}
+
+function Resolve-Mode([bool]$SameFrame, [bool]$Held) {
+    if ($SameFrame -and $Held) { return 'conflict' }
+    if ($Held) { return 'held' }
+    if ($SameFrame) { return 'same_frame' }
+    return 'none'
+}
+
+Assert-True ((Resolve-Mode $false $false) -eq 'none') 'stabilization unexpectedly defaults on'
+Assert-True ((Resolve-Mode $false $true) -eq 'held') 'held-only mode was not selected'
+Assert-True ((Resolve-Mode $true $true) -eq 'conflict') 'same-frame and held gates were not rejected as a conflict'
+
+# Journal ownership: only elements observed unfixed and successfully fixed by
+# this action enter the persistent release list.
+$elements = @(
+    @{ index = 0; pre_fixed = $true; fix_ok = $true; confirmed_fixed = $true },
+    @{ index = 1; pre_fixed = $false; fix_ok = $true; confirmed_fixed = $true },
+    @{ index = 2; pre_fixed = $false; fix_ok = $false; confirmed_fixed = $false }
+)
+$journal = @($elements | Where-Object { -not $_.pre_fixed -and $_.fix_ok -and $_.confirmed_fixed } | ForEach-Object { $_.index })
+Assert-True (($journal -join ',') -eq '1') 'held journal included a pre-fixed or unconfirmed element'
+
+$releaseReasons = @('held_gate_disabled','owner_parent_changed','current_level_changed','held_timeout','load_recovery','pre_save','before_level_changing','terminal_owned','terminal_closed','terminal_released')
+Assert-True ($releaseReasons.Count -eq 10) 'held release trigger model is incomplete'
+
+foreach ($needle in @(
+    'local release_held_stabilization = nil',
+    'local release_all_held_stabilizations = nil',
+    'local function active_held_action(record)',
+    'release_held_stabilization = function(record, snapshot, reason)',
+    'release_all_held_stabilizations = function(reason)',
+    'local function maintain_held_stabilization(record, snapshot, now)',
+    'local function attempt_held_stabilization(record, action, snapshot)',
+    'mode = "held"', 'status = "held_attempting"', 'active = false',
+    'held.element_indices[#held.element_indices + 1] = candidate.index',
+    'for _, element_index in ipairs(held.element_indices or {}) do',
+    'pcall(function() candidate.element:fix() end)',
+    'pcall(function() element:release_fixed() end)',
+    'action_stabilization_held_attempt', 'action_stabilization_held',
+    'action_stabilization_held_released', 'action_stabilization_held_release_pending',
+    '"held_gate_disabled"', '"owner_parent_changed"', '"current_level_changed"',
+    '"held_timeout"', '"load_recovery"', '"pre_save"', '"before_level_changing"',
+    'release_zone_held_on_pickup',
+    'action.stabilization.release_required = true',
+    'held.release_required = true',
+    'stabilization_mode == "held"', 'physics_mode = stabilization_mode == "held" and "held_fix"',
+    'stabilization_requested or action_count >= 3'
+)) {
+    Assert-True ($main.Contains($needle)) "held stabilization invariant missing: $needle"
+}
+
+foreach ($needle in @(
+    'artifact_rescue_debug_same_frame_stabilization = false',
+    'artifact_rescue_debug_held_stabilization = false',
+    'artifact_rescue_debug_held_timeout_ms = 120000'
+)) {
+    Assert-True ($config.Contains($needle)) "held config invariant missing: $needle"
+}
+
+$saveStart = $main.IndexOf('local function save_state(m_data)')
+$saveRelease = $main.IndexOf('release_all_held_stabilizations, "pre_save"', $saveStart)
+$serialize = $main.IndexOf('m_data.rvm_sorties_rework = state', $saveStart)
+Assert-True ($saveStart -ge 0 -and $saveRelease -gt $saveStart -and $saveRelease -lt $serialize) 'pre-save release does not precede serialization'
+
+$levelStart = $main.IndexOf('local function on_before_level_changing()')
+$levelRelease = $main.IndexOf('release_all_held_stabilizations, "before_level_changing"', $levelStart)
+$transition = $main.IndexOf('state.pending_transition = true', $levelStart)
+Assert-True ($levelStart -ge 0 -and $levelRelease -gt $levelStart -and $levelRelease -lt $transition) 'level-change release does not precede transition journal'
+
+$updateStart = $main.IndexOf('local function update_debug_same_id_rescue(record, snapshot, now)')
+$maintain = $main.IndexOf('maintain_held_stabilization(record, snapshot, now)', $updateStart)
+$terminalGuard = $main.IndexOf('if record.disabled or record.state == "owned"', $updateStart)
+Assert-True ($maintain -gt $updateStart -and $maintain -lt $terminalGuard) 'load/disabled held release is not processed before terminal guards'
+
+$heldBlock = [regex]::Match($main, '(?s)local function attempt_held_stabilization\(.*?\nend\n\s*local function update_debug_same_id_rescue').Value
+foreach ($forbidden in @('apply_force(', 'apply_torque(', 'set_switch_online', 'set_switch_offline', 'alife_create(')) {
+    Assert-True (-not $heldBlock.Contains($forbidden)) "forbidden held mechanism detected: $forbidden"
+}
+Assert-True (-not $heldBlock.Contains('release_fixed()')) 'successful held setup released the object in the same callback'
+
+if ($failures.Count -gt 0) {
+    $failures | ForEach-Object { Write-Error $_ }
+    exit 1
+}
+Write-Output 'Artifact rescue held stabilization lifecycle policy test: OK'

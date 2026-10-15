@@ -90,6 +90,29 @@ debug_force_decoy_type = empty
 
 Первый post-load snapshot обязан только снять fresh-snapshot gate. После cooldown ожидается `action_dispatched ... dispatch=3,physics=same_frame_fix_release`, перед ним `action_stabilization_attempt`, затем inventory всех элементов и `action_stabilization_released`; отсутствие shell/API допустимо только как `stabilization_unavailable/failed`, сам same-ID teleport всё равно должен пройти. Далее обязательны обычные `position_verified` и минимум 30 секунд `action_monitor`. Сверить pre/post linear/angular velocity, ID `6362`, section `af_fonar`, отсутствие permanent fixed-состояния и нового dispatch после hard limit=3. Финальная обязательная проверка — игрок подбирает именно этот Фонарь: должен появиться `owned`/закрытие области, предмет остаётся в инвентаре и нормально участвует в Rojok-классе/мутации. После теста полностью закрыть игру и вернуть actions/same-ID/stabilization gates в `false`, `debug_mode=auto`.
 
+## Отдельный held pickup experiment
+
+Same-frame тест доказал корректное мгновенное обнуление обеих скоростей, но не остановил повторное ускорение на постоянном склоне. Held-вариант проверяет только один вопрос: разрешает ли X-Ray подобрать артефакт, пока его единственный physics element остаётся fixed. Загружать нужно то же именное сохранение **до** третьего same-frame dispatch, где у `6362` записаны ровно два verified обычных действия. Во время опыта запрещены ручные save/load и выход с уровня; pre-save/load/transition release существуют только как аварийная защита.
+
+```ini
+artifact_rescue_observe_only = true
+artifact_rescue_actions = true
+artifact_rescue_debug_same_id_teleport = true
+artifact_rescue_debug_artifact_ids = 6362
+artifact_rescue_debug_reason = rolling
+artifact_rescue_debug_monitor_ms = 30000
+artifact_rescue_debug_monitor_log_ms = 5000
+artifact_rescue_debug_cooldown_ms = 20000
+artifact_rescue_debug_max_dispatches = 2
+artifact_rescue_debug_same_frame_stabilization = false
+artifact_rescue_debug_held_stabilization = true
+artifact_rescue_debug_held_timeout_ms = 120000
+debug_mode = on
+debug_force_decoy_type = empty
+```
+
+Ожидается `action_stabilization_held_attempt` → `action_stabilization_held ... held=1,pre_fixed=0` → `action_dispatched ... dispatch=3,physics=held_fix` → position verification и 30–60 секунд без движения. Затем подойти и подобрать Фонарь. Если pickup поддерживается, callback сначала пишет `action_stabilization_held_released`, затем `owned/closed`; проверить exact ID/section, наличие предмета в инвентаре, класс и мутацию. Если кнопка/подбор не срабатывает, не пытаться сохраняться: оставить объект до автоматического `held_timeout` 120 секунд и записать этот результат как основание для будущего proximity-release. После выхода вернуть held/actions/same-ID gates в `false`, `debug_mode=auto`.
+
 ## Debug-журнал
 
 Для полевого теста выставить:

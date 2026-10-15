@@ -72,7 +72,7 @@ Assert-True $confirmed 'independent rolling episode did not confirm after reset 
 
 foreach ($needle in @(
     'local function artifact_verified_ordinary_action_count(record)',
-    'local function artifact_rescue_stabilization_enabled(record)',
+    'local function artifact_rescue_stabilization_mode(record)',
     'artifact_rescue_debug_same_frame_stabilization',
     'local function attempt_same_frame_stabilization(record, action, snapshot)',
     'same_callback_release = true',
@@ -83,7 +83,7 @@ foreach ($needle in @(
     'pcall(candidate.release_method, candidate.element)',
     'action_stabilization_attempt', 'action_stabilization_released',
     'stabilization_unavailable', 'stabilization_failed',
-    'action_count == 2', 'verified_ordinary >= 2',
+    'action_count == 2', 'verified_ordinary >= 2', 'stabilization_mode == "same_frame"',
     'stabilization_requested or action_count >= 3',
     'attempt_same_frame_stabilization(record, action, snapshot)',
     'action.status = "verifying"', 'action.status = "position_verified"',
@@ -100,7 +100,7 @@ Assert-True ($candidateBeforeFix -ge 0 -and $candidateBeforeFix -lt $fixCall) 'r
 Assert-True ($fixCall -ge 0 -and $releaseCall -gt $fixCall) 'same-callback release sweep does not follow fix sweep'
 
 Assert-True (([regex]::Matches($main, [regex]::Escape('alife():teleport_object('))).Count -eq 1) 'third stage introduced another teleport call site'
-$blockMatch = [regex]::Match($main, '(?s)local function attempt_same_frame_stabilization\(.*?\nend\n\s*local function update_debug_same_id_rescue')
+$blockMatch = [regex]::Match($main, '(?s)local function attempt_same_frame_stabilization\(.*?\nend\n\s*local function active_held_action')
 Assert-True $blockMatch.Success 'stabilization helper block was not isolated'
 $stabilizationBlock = $blockMatch.Value
 foreach ($forbidden in @('apply_force(', 'apply_torque(', 'set_switch_online', 'set_switch_offline', 'alife_create(')) {

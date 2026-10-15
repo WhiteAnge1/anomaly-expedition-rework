@@ -23,6 +23,8 @@ local safe_alive = nil
 local ARTIFACT_PROVENANCE_SCHEMA = 2
 local INVALID_VERTEX_ID = 4294967295
 local ARTIFACT_RESCUE_DEBUG_IDS = { [1407] = true, [6362] = true }
+local release_held_stabilization = nil
+local release_all_held_stabilizations = nil
 
 -- Category selection is a separate weighted roll. Every entry points to an
 -- exact online_offline_group section; the section's fixed npc list is the
@@ -581,6 +583,14 @@ end
 
 local function terminal_provenance(record, terminal, reason, snapshot)
     if not record or record.state == terminal then return end
+    if release_held_stabilization then
+        local released_ok, released_error = pcall(release_held_stabilization,
+            record, snapshot, "terminal_" .. tostring(terminal) .. ":" .. tostring(reason))
+        if not released_ok then
+            printf(PREFIX .. " ERROR held stabilization terminal release failed id=%s terminal=%s error=%s",
+                tostring(record.artifact_id), tostring(terminal), tostring(released_error))
+        end
+    end
     record.state = terminal
     record.reason = reason
     record.timestamps = record.timestamps or {}
@@ -594,6 +604,9 @@ end
 
 local function disable_provenance(record, context, err)
     if not record then return end
+    if release_held_stabilization then
+        pcall(release_held_stabilization, record, nil, "record_disabled:" .. tostring(context))
+    end
     record.disabled = true
     record.state = "disabled"
     record.reason = context
@@ -1012,9 +1025,14 @@ local function artifact_verified_ordinary_action_count(record)
     return count
 end
 
-local function artifact_rescue_stabilization_enabled(record)
-    return artifact_rescue_debug_action_enabled(record)
-        and C.get_bool("global", "artifact_rescue_debug_same_frame_stabilization", false)
+local function artifact_rescue_stabilization_mode(record)
+    if not artifact_rescue_debug_action_enabled(record) then return nil end
+    local same_frame = C.get_bool("global", "artifact_rescue_debug_same_frame_stabilization", false)
+    local held = C.get_bool("global", "artifact_rescue_debug_held_stabilization", false)
+    if same_frame and held then return "conflict" end
+    if held then return "held" end
+    if same_frame then return "same_frame" end
+    return nil
 end
 
 local function latest_artifact_action(record)
@@ -1115,6 +1133,7 @@ end
 
 local function attempt_same_frame_stabilization(record, action, snapshot)
     action.stabilization = {
+        mode = "same_frame",
         status = "attempting",
         attempted_at = time_global(),
         same_callback_release = true,
@@ -1243,8 +1262,264 @@ local function attempt_same_frame_stabilization(record, action, snapshot)
         .. ",errors=" .. table.concat(result.errors, "|"))
 end
 
+local function active_held_action(record)
+    for index = #(record.actions or {}), 1, -1 do
+        local action = record.actions[index]
+        local stabilization = action and action.stabilization
+        if stabilization and stabilization.mode == "held" and stabilization.active then
+            return action, stabilization
+        end
+    end
+    return nil, nil
+end
+
+release_held_stabilization = function(record, snapshot, reason)
+    local action, held = active_held_action(record)
+    if not action then return true end
+    held.release_attempts = (held.release_attempts or 0) + 1
+    held.release_reason = reason
+    local parent_id = snapshot and (snapshot.online_parent_id or snapshot.parent_id) or nil
+    local online_ok, online = pcall(function() return level.object_by_id(record.artifact_id) end)
+    if not (online_ok and online) then
+        local server_ok, server = pcall(alife_object, record.artifact_id)
+        if parent_id ~= nil and parent_id ~= 65535 then
+            held.active = false
+            held.status = "held_released_by_ownership_transition"
+            held.released_at = time_global()
+            provenance_log("action_stabilization_held_released", record, snapshot, record.primary_reason,
+                "dispatch=" .. tostring(action.dispatch_index) .. ",reason=" .. tostring(reason)
+                .. ",release=ownership_transition_no_world_shell")
+            return true
+        end
+        if server_ok and not server then
+            held.active = false
+            held.status = "held_release_object_gone"
+            held.released_at = time_global()
+            provenance_log("action_stabilization_held_released", record, snapshot, record.primary_reason,
+                "dispatch=" .. tostring(action.dispatch_index) .. ",reason=" .. tostring(reason)
+                .. ",release=object_missing")
+            return true
+        end
+        held.status = "held_release_pending_online"
+        if not held.pending_online_reported then
+            held.pending_online_reported = true
+            provenance_log("action_stabilization_held_release_pending", record, snapshot, record.primary_reason,
+                "dispatch=" .. tostring(action.dispatch_index) .. ",reason=" .. tostring(reason)
+                .. ",release=online_object_unavailable")
+        end
+        return false
+    end
+    if object_section(online) ~= record.section then
+        held.status = "held_release_identity_failed"
+        provenance_log("stabilization_failed", record, snapshot, record.primary_reason,
+            "dispatch=" .. tostring(action.dispatch_index) .. ",reason=held_release_section_mismatch")
+        return false
+    end
+    local shell_ok, shell = pcall(function() return online:get_physics_shell() end)
+    if not (shell_ok and shell) then
+        if parent_id ~= nil and parent_id ~= 65535 then
+            held.active = false
+            held.status = "held_released_by_ownership_transition"
+            held.released_at = time_global()
+            provenance_log("action_stabilization_held_released", record, snapshot, record.primary_reason,
+                "dispatch=" .. tostring(action.dispatch_index) .. ",reason=" .. tostring(reason)
+                .. ",release=owned_without_world_shell")
+            return true
+        end
+        held.status = "held_release_pending_shell"
+        provenance_log("action_stabilization_held_release_pending", record, snapshot, record.primary_reason,
+            "dispatch=" .. tostring(action.dispatch_index) .. ",reason=" .. tostring(reason)
+            .. ",release=physics_shell_unavailable")
+        return false
+    end
+
+    local failures = {}
+    local released = {}
+    for _, element_index in ipairs(held.element_indices or {}) do
+        local element_ok, element = pcall(function() return shell:get_element_by_order(element_index) end)
+        if not (element_ok and element) then
+            failures[#failures + 1] = "element_" .. tostring(element_index) .. "_unavailable"
+        else
+            local release_ok, release_error = pcall(function() element:release_fixed() end)
+            local state_ok, still_fixed = pcall(function() return element:is_fixed() end)
+            if release_ok and (not state_ok or not still_fixed) then
+                released[#released + 1] = element_index
+            else
+                failures[#failures + 1] = "release_" .. tostring(element_index) .. ":"
+                    .. tostring(release_error or (state_ok and still_fixed and "still_fixed" or "state_unknown"))
+            end
+        end
+    end
+    held.released_indices = released
+    if #failures == 0 and #released == #(held.element_indices or {}) then
+        held.active = false
+        held.status = "held_released"
+        held.released_at = time_global()
+        held.release_required = false
+        provenance_log("action_stabilization_held_released", record, snapshot, record.primary_reason,
+            "dispatch=" .. tostring(action.dispatch_index) .. ",reason=" .. tostring(reason)
+            .. ",released=" .. tostring(#released))
+        return true
+    end
+    held.status = "held_release_failed"
+    held.release_errors = failures
+    provenance_log("stabilization_failed", record, snapshot, record.primary_reason,
+        "dispatch=" .. tostring(action.dispatch_index) .. ",reason=held_release_failed,errors="
+        .. table.concat(failures, "|"))
+    return false
+end
+
+release_all_held_stabilizations = function(reason)
+    local all_released = true
+    for _, record in pairs(state.artifact_provenance or {}) do
+        if not release_held_stabilization(record, nil, reason) then all_released = false end
+    end
+    return all_released
+end
+
+local function maintain_held_stabilization(record, snapshot, now)
+    local action, held = active_held_action(record)
+    if not action then return true end
+    if held.release_required then
+        return release_held_stabilization(record, snapshot, "load_recovery")
+    end
+    local record_id = math.floor(tonumber(record.artifact_id) or 0)
+    local configured_id = false
+    for _, value in ipairs(split_csv(C.get_string("global", "artifact_rescue_debug_artifact_ids", ""))) do
+        if math.floor(tonumber(value) or -1) == record_id then configured_id = true; break end
+    end
+    local same_frame_gate = C.get_bool("global", "artifact_rescue_debug_same_frame_stabilization", false)
+    local held_gate = artifact_rescue_observe_enabled()
+        and C.get_bool("global", "artifact_rescue_actions", false)
+        and C.get_bool("global", "artifact_rescue_debug_same_id_teleport", false)
+        and C.get_bool("global", "artifact_rescue_debug_held_stabilization", false)
+        and ARTIFACT_RESCUE_DEBUG_IDS[record_id] == true and configured_id
+    if not held_gate or same_frame_gate then
+        return release_held_stabilization(record, snapshot,
+            same_frame_gate and "stabilization_gate_conflict" or "held_gate_disabled")
+    end
+    local parent_id = snapshot.online_parent_id or snapshot.parent_id
+    if parent_id ~= nil and parent_id ~= 65535 then
+        return release_held_stabilization(record, snapshot, "owner_parent_changed")
+    end
+    local level_ok, current_level = pcall(function() return level and level.name() end)
+    if not level_ok or current_level ~= record.level then
+        return release_held_stabilization(record, snapshot, "current_level_changed")
+    end
+    advance_persisted_duration(held, "duration_ms", "last_sample_at", now)
+    local timeout = math.max(30000,
+        C.get_number("global", "artifact_rescue_debug_held_timeout_ms", 120000))
+    if held.duration_ms >= timeout then
+        return release_held_stabilization(record, snapshot, "held_timeout")
+    end
+    return true
+end
+
+local function attempt_held_stabilization(record, action, snapshot)
+    action.stabilization = {
+        mode = "held",
+        status = "held_attempting",
+        active = false,
+        attempted_at = time_global(),
+        element_indices = {},
+        errors = {},
+        duration_ms = 0,
+        last_sample_at = nil,
+    }
+    local held = action.stabilization
+    provenance_log("action_stabilization_held_attempt", record, snapshot, record.primary_reason,
+        "dispatch=" .. tostring(action.dispatch_index))
+    local online_ok, online = pcall(function() return level.object_by_id(record.artifact_id) end)
+    if not (online_ok and online) or object_section(online) ~= record.section then
+        held.status = "held_unavailable"
+        provenance_log("stabilization_unavailable", record, snapshot, record.primary_reason,
+            "dispatch=" .. tostring(action.dispatch_index) .. ",reason=exact_online_identity_unavailable")
+        return false
+    end
+    local shell_ok, shell = pcall(function() return online:get_physics_shell() end)
+    if not (shell_ok and shell) then
+        held.status = "held_unavailable"
+        provenance_log("stabilization_unavailable", record, snapshot, record.primary_reason,
+            "dispatch=" .. tostring(action.dispatch_index) .. ",reason=physics_shell_missing")
+        return false
+    end
+    held.linear_before, held.linear_before_error = read_physics_velocity(shell, false)
+    held.angular_before, held.angular_before_error = read_physics_velocity(shell, true)
+    local count_ok, element_count = pcall(function() return shell:get_elements_number() end)
+    element_count = count_ok and math.floor(tonumber(element_count) or 0) or 0
+    if element_count < 1 then
+        held.status = "held_unavailable"
+        provenance_log("stabilization_unavailable", record, snapshot, record.primary_reason,
+            "dispatch=" .. tostring(action.dispatch_index) .. ",reason=physics_elements_missing")
+        return false
+    end
+    held.element_count = element_count
+    local candidates = {}
+    local pre_fixed = 0
+    for index = 0, element_count - 1 do
+        local element_ok, element = pcall(function() return shell:get_element_by_order(index) end)
+        if not (element_ok and element) then
+            held.errors[#held.errors + 1] = "element_" .. tostring(index) .. "_unavailable"
+        else
+            local state_ok, was_fixed = pcall(function() return element:is_fixed() end)
+            if not state_ok then
+                held.errors[#held.errors + 1] = "element_" .. tostring(index) .. "_state_unavailable"
+            elseif was_fixed then
+                pre_fixed = pre_fixed + 1
+            else
+                candidates[#candidates + 1] = { index = index, element = element }
+            end
+        end
+    end
+    held.pre_fixed_count = pre_fixed
+    held.candidate_count = #candidates
+    if #held.errors > 0 or #candidates == 0 then
+        held.status = "held_unavailable"
+        provenance_log("stabilization_unavailable", record, snapshot, record.primary_reason,
+            "dispatch=" .. tostring(action.dispatch_index) .. ",reason=unsafe_element_inventory,errors="
+            .. table.concat(held.errors, "|"))
+        return false
+    end
+
+    for _, candidate in ipairs(candidates) do
+        local fix_ok, fix_error = pcall(function() candidate.element:fix() end)
+        local state_ok, is_fixed = pcall(function() return candidate.element:is_fixed() end)
+        if fix_ok and state_ok and is_fixed then
+            held.element_indices[#held.element_indices + 1] = candidate.index
+        else
+            held.errors[#held.errors + 1] = "fix_" .. tostring(candidate.index) .. ":"
+                .. tostring(fix_error or "fixed_state_not_confirmed")
+        end
+    end
+    if #held.errors > 0 or #held.element_indices ~= #candidates then
+        held.active = #held.element_indices > 0
+        if held.active then release_held_stabilization(record, snapshot, "held_setup_rollback") end
+        held.status = "held_failed"
+        provenance_log("stabilization_failed", record, snapshot, record.primary_reason,
+            "dispatch=" .. tostring(action.dispatch_index) .. ",reason=held_setup_failed,errors="
+            .. table.concat(held.errors, "|"))
+        return false
+    end
+    held.active = true
+    held.status = "held"
+    held.held_at = time_global()
+    held.linear_after, held.linear_after_error = read_physics_velocity(shell, false)
+    held.angular_after, held.angular_after_error = read_physics_velocity(shell, true)
+    provenance_log("action_stabilization_held", record, snapshot, record.primary_reason,
+        "dispatch=" .. tostring(action.dispatch_index)
+        .. ",elements=" .. tostring(element_count) .. ",held=" .. tostring(#held.element_indices)
+        .. ",pre_fixed=" .. tostring(pre_fixed)
+        .. ",linear_before=" .. fmt_position(held.linear_before)
+        .. ",angular_before=" .. fmt_position(held.angular_before)
+        .. ",linear_after=" .. fmt_position(held.linear_after)
+        .. ",angular_after=" .. fmt_position(held.angular_after))
+    return true
+end
+
 local function update_debug_same_id_rescue(record, snapshot, now)
-    if not record or record.disabled or record.state == "owned" or record.state == "closed"
+    if not record then return end
+    if not maintain_held_stabilization(record, snapshot, now) then return end
+    if record.disabled or record.state == "owned" or record.state == "closed"
     or record.state == "released" or record.state == "stable" then return end
 
     advance_rescue_cooldown(record, now)
@@ -1394,9 +1669,10 @@ local function update_debug_same_id_rescue(record, snapshot, now)
     local ordinary_max_dispatches = math.min(2, math.max(1, math.floor(
         C.get_number("global", "artifact_rescue_debug_max_dispatches", 2))))
     local verified_ordinary = artifact_verified_ordinary_action_count(record)
+    local stabilization_mode = artifact_rescue_stabilization_mode(record)
     local stabilization_requested = action_count == 2
         and verified_ordinary >= 2
-        and artifact_rescue_stabilization_enabled(record)
+        and (stabilization_mode == "same_frame" or stabilization_mode == "held")
     local effective_max_dispatches = (stabilization_requested or action_count >= 3)
         and 3 or ordinary_max_dispatches
     if action_count >= effective_max_dispatches then
@@ -1405,7 +1681,7 @@ local function update_debug_same_id_rescue(record, snapshot, now)
             provenance_log("action_limit_reached", record, snapshot, record.primary_reason,
                 "dispatches=" .. tostring(action_count) .. ",maximum=" .. tostring(effective_max_dispatches)
                 .. ",verified_ordinary=" .. tostring(verified_ordinary)
-                .. ",stabilization_gate=" .. tostring(artifact_rescue_stabilization_enabled(record)))
+                .. ",stabilization_mode=" .. tostring(stabilization_mode))
         end
         return
     end
@@ -1445,6 +1721,7 @@ local function update_debug_same_id_rescue(record, snapshot, now)
         verification_samples = 0,
         dispatch_index = action_count + 1,
         stabilization_requested = stabilization_requested,
+        stabilization_mode = stabilization_mode,
     }
     record.actions[#record.actions + 1] = action
     clear_artifact_position_caches(record.artifact_id)
@@ -1458,7 +1735,11 @@ local function update_debug_same_id_rescue(record, snapshot, now)
         return
     end
     if stabilization_requested then
-        attempt_same_frame_stabilization(record, action, snapshot)
+        if stabilization_mode == "held" then
+            attempt_held_stabilization(record, action, snapshot)
+        else
+            attempt_same_frame_stabilization(record, action, snapshot)
+        end
     end
     action.status = "verifying"
     action.dispatched_at = now
@@ -1466,7 +1747,8 @@ local function update_debug_same_id_rescue(record, snapshot, now)
     record.rolling_rescue_count = (record.rolling_rescue_count or 0) + 1
     record.state = "verifying"
     record.timestamps.verifying_at = now
-    local physics_mode = stabilization_requested and "same_frame_fix_release" or "none"
+    local physics_mode = stabilization_mode == "held" and "held_fix"
+        or stabilization_requested and "same_frame_fix_release" or "none"
     provenance_log("action_dispatched", record, snapshot, record.primary_reason,
         "kind=debug_same_id_teleport,same_id=true,physics=" .. physics_mode
         .. ",dispatch=" .. tostring(action.dispatch_index)
@@ -2917,7 +3199,9 @@ end
 local function update_artifact_zones(now)
     if artifact_rescue_observe_enabled() then
         for _, record in pairs(state.artifact_provenance or {}) do
-            if record.level == state.level_name and record.state ~= "closed" and record.state ~= "released" then
+            local held_action = active_held_action(record)
+            if record.level == state.level_name
+            and (held_action or (record.state ~= "closed" and record.state ~= "released")) then
                 local zone = record.linked_anchor_id and state.zones[tostring(record.linked_anchor_id)] or nil
                 zone = zone or {
                     kind = "artifact",
@@ -2929,7 +3213,11 @@ local function update_artifact_zones(now)
                 local snapshot_ok, snapshot = pcall(artifact_snapshot, zone)
                 if snapshot_ok then
                     local latest_action = latest_artifact_action(record)
-                    if record.state == "verifying" or (latest_action and latest_action.status == "position_verified") then
+                    if held_action and (record.state == "owned" or record.state == "closed"
+                    or record.state == "released" or record.state == "disabled" or record.state == "stable") then
+                        local action_ok, action_error = pcall(update_debug_same_id_rescue, record, snapshot, now)
+                        if not action_ok then disable_provenance(record, "held_action_update", action_error) end
+                    elseif record.state == "verifying" or (latest_action and latest_action.status == "position_verified") then
                         local action_ok, action_error = pcall(update_debug_same_id_rescue, record, snapshot, now)
                         if not action_ok then disable_provenance(record, "same_id_action_update", action_error) end
                     elseif record.state ~= "stable" then
@@ -3176,6 +3464,23 @@ local function remember_artifact_lineage(zone, item, owner, source)
     return true
 end
 
+local function release_zone_held_on_pickup(zone, item, owner, reason)
+    if not (zone and zone.artifact_id and release_held_stabilization) then return end
+    local record = state.artifact_provenance and state.artifact_provenance[tostring(zone.artifact_id)]
+    if not record then return end
+    local pickup_snapshot = {
+        server_exists = true,
+        online_exists = item ~= nil,
+        online_pos = safe_object_position(item),
+        online_parent_id = safe_object_id_any(owner),
+    }
+    local ok, err = pcall(release_held_stabilization, record, pickup_snapshot, reason)
+    if not ok then
+        printf(PREFIX .. " ERROR held stabilization pickup release failed id=%s error=%s",
+            tostring(record.artifact_id), tostring(err))
+    end
+end
+
 local function actor_on_item_take(item)
     if not item then return end
     local item_id = safe_object_id_any(item)
@@ -3183,6 +3488,7 @@ local function actor_on_item_take(item)
     local anchor_key = state.artifact_zone[key]
     local zone = anchor_key and state.zones[anchor_key]
     if zone then
+        release_zone_held_on_pickup(zone, item, db.actor, "actor_pickup_callback")
         close_zone(zone, "actor_pickup")
         return
     end
@@ -3211,6 +3517,7 @@ local function npc_on_item_take(npc, item)
         if zone then match = "recreated_id" end
     end
     if zone then
+        release_zone_held_on_pickup(zone, item, npc, "npc_pickup_callback")
         remember_artifact_lineage(zone, item, npc, "npc_pickup_" .. tostring(match))
         if C.get_bool("global", "remove_on_npc_pickup", false) then close_zone(zone, "npc_pickup") end
     elseif candidate_count > 1 then
@@ -3285,6 +3592,12 @@ local function actor_on_update()
 end
 
 local function on_before_level_changing()
+    if release_all_held_stabilizations then
+        local ok, released = pcall(release_all_held_stabilizations, "before_level_changing")
+        if not ok or not released then
+            printf(PREFIX .. " ERROR held stabilization release incomplete before level change; load recovery journal retained")
+        end
+    end
     if state.level_name then
         state.pending_transition = true
         state.transition_from_level = level and level.name() or state.level_name
@@ -3295,6 +3608,16 @@ local function on_before_level_changing()
 end
 
 local function save_state(m_data)
+    if release_all_held_stabilizations then
+        local ok, released = pcall(release_all_held_stabilizations, "pre_save")
+        if not ok or not released then
+            printf(PREFIX .. " ERROR held stabilization pre-save release incomplete; journal marked for load recovery")
+            for _, record in pairs(state.artifact_provenance or {}) do
+                local _, held = active_held_action(record)
+                if held then held.release_required = true end
+            end
+        end
+    end
     if artifact_rescue_observe_enabled() and debug_enabled() then
         local now = time_global()
         local interval = math.max(1000, C.get_number("global", "artifact_rescue_log_repeat_ms", 60000))
@@ -3413,6 +3736,12 @@ local function migrate_artifact_provenance(previous_schema)
             end
             for _, action in ipairs(record.actions) do
                 action.monitoring_last_sample_at = nil
+                if action.stabilization and action.stabilization.mode == "held"
+                and action.stabilization.active then
+                    action.stabilization.last_sample_at = nil
+                    action.stabilization.release_required = true
+                    action.stabilization.status = "held_load_release_required"
+                end
             end
             local saved_action = record.actions[#record.actions]
             if record.state == "stable" and saved_action
