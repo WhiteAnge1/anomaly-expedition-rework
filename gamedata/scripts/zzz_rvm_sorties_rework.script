@@ -1407,9 +1407,9 @@ local function maintain_held_stabilization(record, snapshot, now)
         return release_held_stabilization(record, snapshot, "current_level_changed")
     end
     advance_persisted_duration(held, "duration_ms", "last_sample_at", now)
-    local timeout = math.max(30000,
-        C.get_number("global", "artifact_rescue_debug_held_timeout_ms", 120000))
-    if held.duration_ms >= timeout then
+    local configured_timeout = C.get_number("global", "artifact_rescue_debug_held_timeout_ms", 120000)
+    local timeout = configured_timeout > 0 and math.max(30000, configured_timeout) or 0
+    if timeout > 0 and held.duration_ms >= timeout then
         return release_held_stabilization(record, snapshot, "held_timeout")
     end
     return true
@@ -1429,6 +1429,15 @@ local function attempt_held_stabilization(record, action, snapshot)
     local held = action.stabilization
     provenance_log("action_stabilization_held_attempt", record, snapshot, record.primary_reason,
         "dispatch=" .. tostring(action.dispatch_index))
+    if not action.held_pending or action.status ~= "position_verified"
+    or not action.verified_at or (action.verification_samples or 0) < 3 then
+        held.status = "held_failed"
+        held.errors[#held.errors + 1] = "post_teleport_position_not_verified"
+        provenance_log("stabilization_failed", record, snapshot, record.primary_reason,
+            "dispatch=" .. tostring(action.dispatch_index)
+            .. ",reason=post_teleport_position_not_verified")
+        return false
+    end
     local online_ok, online = pcall(function() return level.object_by_id(record.artifact_id) end)
     if not (online_ok and online) or object_section(online) ~= record.section then
         held.status = "held_unavailable"
@@ -1563,6 +1572,17 @@ local function update_debug_same_id_rescue(record, snapshot, now)
                 provenance_log("position_verified", record, snapshot, record.reason,
                     "kind=debug_same_id_teleport,same_id=true,checks=" .. tostring(action.verification_checks)
                     .. ",monitor_ms=" .. tostring(math.max(30000, C.get_number("global", "artifact_rescue_debug_monitor_ms", 30000))))
+                if action.held_pending then
+                    local held_ok = artifact_rescue_stabilization_mode(record) == "held"
+                        and attempt_held_stabilization(record, action, snapshot)
+                    action.held_pending = false
+                    if not held_ok then
+                        action.status = "stabilization_failed"
+                        disable_provenance(record, "post_teleport_held_stabilization",
+                            action.stabilization and action.stabilization.status or "held_gate_unavailable")
+                        return
+                    end
+                end
             end
         else
             action.verification_samples = 0
@@ -1736,7 +1756,12 @@ local function update_debug_same_id_rescue(record, snapshot, now)
     end
     if stabilization_requested then
         if stabilization_mode == "held" then
-            attempt_held_stabilization(record, action, snapshot)
+            action.held_pending = true
+            action.stabilization = {
+                mode = "held",
+                status = "held_pending",
+                active = false,
+            }
         else
             attempt_same_frame_stabilization(record, action, snapshot)
         end
@@ -1747,7 +1772,7 @@ local function update_debug_same_id_rescue(record, snapshot, now)
     record.rolling_rescue_count = (record.rolling_rescue_count or 0) + 1
     record.state = "verifying"
     record.timestamps.verifying_at = now
-    local physics_mode = stabilization_mode == "held" and "held_fix"
+    local physics_mode = stabilization_mode == "held" and "held_pending"
         or stabilization_requested and "same_frame_fix_release" or "none"
     provenance_log("action_dispatched", record, snapshot, record.primary_reason,
         "kind=debug_same_id_teleport,same_id=true,physics=" .. physics_mode

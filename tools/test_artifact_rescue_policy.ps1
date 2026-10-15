@@ -194,7 +194,7 @@ foreach ($needle in @(
     'record.state = "verifying"', 'record.state = "monitoring"', 'action.status = "position_verified"',
     'action_monitor', 'rolling_reconfirmed', 'action_monitor_complete', 'action_limit_reached',
     'legacy_three_frame_stable_migrated',
-    'local physics_mode = stabilization_mode == "held" and "held_fix"',
+    'local physics_mode = stabilization_mode == "held" and "held_pending"',
     'artifact_rescue_debug_max_dispatches',
     'local function remember_artifact_lineage(zone, item, owner, source)',
     'state.artifact_zone[key] = tostring(zone.anchor_id)',

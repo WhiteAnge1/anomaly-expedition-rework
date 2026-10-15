@@ -106,12 +106,12 @@ artifact_rescue_debug_cooldown_ms = 20000
 artifact_rescue_debug_max_dispatches = 2
 artifact_rescue_debug_same_frame_stabilization = false
 artifact_rescue_debug_held_stabilization = true
-artifact_rescue_debug_held_timeout_ms = 120000
+artifact_rescue_debug_held_timeout_ms = 0
 debug_mode = on
 debug_force_decoy_type = empty
 ```
 
-Ожидается `action_stabilization_held_attempt` → `action_stabilization_held ... held=1,pre_fixed=0` → `action_dispatched ... dispatch=3,physics=held_fix` → position verification и 30–60 секунд без движения. Затем подойти и подобрать Фонарь. Если pickup поддерживается, callback сначала пишет `action_stabilization_held_released`, затем `owned/closed`; проверить exact ID/section, наличие предмета в инвентаре, класс и мутацию. Если кнопка/подбор не срабатывает, не пытаться сохраняться: оставить объект до автоматического `held_timeout` 120 секунд и записать этот результат как основание для будущего proximity-release. После выхода вернуть held/actions/same-ID gates в `false`, `debug_mode=auto`.
+Ожидается `action_dispatched ... dispatch=3,physics=held_pending` → `position_verified` → `action_stabilization_held_attempt` → `action_stabilization_held ... held=1,pre_fixed=0` и затем 30–60 секунд без движения. Фиксируется уже повторно полученный post-teleport physics element, а не старый shell до rebinding. Затем подойти и подобрать Фонарь. Callback должен сначала записать `action_stabilization_held_released`, затем `owned/closed`; проверить exact ID/section, наличие предмета в инвентаре, класс и мутацию. При `held_timeout_ms=0` автоматического time/proximity release нет: если подбор не срабатывает, не сохраняться и не покидать уровень до фиксации результата, после чего завершить тест штатным lifecycle-release. После выхода вернуть held/actions/same-ID gates в `false`, `debug_mode=auto`.
 
 ## Debug-журнал
 

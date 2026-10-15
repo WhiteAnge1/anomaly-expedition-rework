@@ -67,7 +67,7 @@
 | `artifact_rescue_debug_max_dispatches` | `2` | Предел обычных same-ID отправок на original ID |
 | `artifact_rescue_debug_same_frame_stabilization` | `false` | Отдельный gate третьего experimental dispatch после двух verified обычных; требует все предыдущие rescue-gate |
 | `artifact_rescue_debug_held_stabilization` | `false` | Альтернативный third-stage gate: удерживает только зафиксированные модом элементы до pickup/release trigger; несовместим с same-frame gate |
-| `artifact_rescue_debug_held_timeout_ms` | `120000` | Аварийное освобождение held-элементов; runtime не разрешает значение меньше 30 секунд |
+| `artifact_rescue_debug_held_timeout_ms` | `120000` | Аварийное освобождение held-элементов; `0` отключает time release, положительное значение ограничивается снизу 30 секундами |
 | `artifact_rescue_origin_radius` | `2` | Радиус признака near-origin; сам по себе никогда не подтверждает ошибку |
 | `artifact_rescue_origin_field_margin` | `2` | Запас сверх `sqrt(2) * size` при проверке несовпадения с исходным полем |
 | `artifact_rescue_origin_nav_mismatch` | `4` | Порог несогласованности позиции с nav vertex |

@@ -22,6 +22,14 @@ Assert-True ((Resolve-Mode $false $false) -eq 'none') 'stabilization unexpectedl
 Assert-True ((Resolve-Mode $false $true) -eq 'held') 'held-only mode was not selected'
 Assert-True ((Resolve-Mode $true $true) -eq 'conflict') 'same-frame and held gates were not rejected as a conflict'
 
+function Held-TimeoutReached([int]$ConfiguredTimeout, [int]$Duration) {
+    if ($ConfiguredTimeout -le 0) { return $false }
+    return $Duration -ge [Math]::Max(30000, $ConfiguredTimeout)
+}
+
+Assert-True (-not (Held-TimeoutReached 0 999999999)) 'held timeout 0 did not disable automatic release'
+Assert-True (Held-TimeoutReached 120000 120000) 'positive held timeout no longer releases at its deadline'
+
 # Journal ownership: only elements observed unfixed and successfully fixed by
 # this action enter the persistent release list.
 $elements = @(
@@ -44,6 +52,9 @@ foreach ($needle in @(
     'local function maintain_held_stabilization(record, snapshot, now)',
     'local function attempt_held_stabilization(record, action, snapshot)',
     'mode = "held"', 'status = "held_attempting"', 'active = false',
+    'action.held_pending = true', 'status = "held_pending"',
+    'if action.held_pending then', 'action.status ~= "position_verified"',
+    'post_teleport_position_not_verified', 'post_teleport_held_stabilization',
     'held.element_indices[#held.element_indices + 1] = candidate.index',
     'for _, element_index in ipairs(held.element_indices or {}) do',
     'pcall(function() candidate.element:fix() end)',
@@ -55,11 +66,24 @@ foreach ($needle in @(
     'release_zone_held_on_pickup',
     'action.stabilization.release_required = true',
     'held.release_required = true',
-    'stabilization_mode == "held"', 'physics_mode = stabilization_mode == "held" and "held_fix"',
+    'stabilization_mode == "held"', 'physics_mode = stabilization_mode == "held" and "held_pending"',
     'stabilization_requested or action_count >= 3'
 )) {
     Assert-True ($main.Contains($needle)) "held stabilization invariant missing: $needle"
 }
+
+$updateStart = $main.IndexOf('local function update_debug_same_id_rescue(record, snapshot, now)')
+$dispatchStart = $main.IndexOf('local action = {', $updateStart)
+$teleport = $main.IndexOf('alife():teleport_object(', $dispatchStart)
+$pending = $main.IndexOf('action.held_pending = true', $teleport)
+$dispatchedLog = $main.IndexOf('provenance_log("action_dispatched"', $pending)
+$verifiedLog = $main.IndexOf('provenance_log("position_verified"', $updateStart)
+$heldAttemptCall = $main.IndexOf('attempt_held_stabilization(record, action, snapshot)', $verifiedLog)
+Assert-True ($teleport -gt $dispatchStart -and $pending -gt $teleport -and $dispatchedLog -gt $pending) 'held dispatch is not journaled as pending after teleport'
+Assert-True ($verifiedLog -gt $updateStart -and $heldAttemptCall -gt $verifiedLog -and $heldAttemptCall -lt $dispatchStart) 'held fix is not deferred until post-teleport position verification'
+Assert-True ($main.IndexOf('attempt_held_stabilization(record, action, snapshot)', $teleport) -eq -1) 'held fix is still attempted in the dispatch callback'
+Assert-True ($main.Contains('local timeout = configured_timeout > 0 and math.max(30000, configured_timeout) or 0')) 'held timeout zero-disable semantics missing'
+Assert-True ($main.Contains('if timeout > 0 and held.duration_ms >= timeout then')) 'held timeout release is not guarded by a positive timeout'
 
 foreach ($needle in @(
     'artifact_rescue_debug_same_frame_stabilization = false',
@@ -79,7 +103,6 @@ $levelRelease = $main.IndexOf('release_all_held_stabilizations, "before_level_ch
 $transition = $main.IndexOf('state.pending_transition = true', $levelStart)
 Assert-True ($levelStart -ge 0 -and $levelRelease -gt $levelStart -and $levelRelease -lt $transition) 'level-change release does not precede transition journal'
 
-$updateStart = $main.IndexOf('local function update_debug_same_id_rescue(record, snapshot, now)')
 $maintain = $main.IndexOf('maintain_held_stabilization(record, snapshot, now)', $updateStart)
 $terminalGuard = $main.IndexOf('if record.disabled or record.state == "owned"', $updateStart)
 Assert-True ($maintain -gt $updateStart -and $maintain -lt $terminalGuard) 'load/disabled held release is not processed before terminal guards'

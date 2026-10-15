@@ -143,9 +143,10 @@ artifact_rescue_debug_cooldown_ms = 20000
 artifact_rescue_debug_max_dispatches = 2
 artifact_rescue_debug_same_frame_stabilization = false
 ; Альтернативный, несовместимый с same-frame gate эксперимент: третий dispatch
-; оставляет только зафиксированные модом элементы held до pickup, выключения gate,
-; pre-save, level-change/cleanup либо timeout. Оба stabilization gate одновременно
-; дают fail-closed conflict и не разрешают третий dispatch.
+; фиксирует заново полученные элементы только после post-teleport position_verified
+; и держит их до pickup, выключения gate, pre-save, level-change/cleanup либо timeout.
+; held_timeout_ms = 0 отключает только автоматический time release. Оба stabilization
+; gate одновременно дают fail-closed conflict и не разрешают третий dispatch.
 artifact_rescue_debug_held_stabilization = false
 artifact_rescue_debug_held_timeout_ms = 120000
 ; Строгий origin-кандидат требует одновременно близость к нулю, несовпадение с
