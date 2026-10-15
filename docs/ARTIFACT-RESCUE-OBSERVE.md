@@ -63,10 +63,32 @@ artifact_rescue_debug_monitor_ms = 30000
 artifact_rescue_debug_monitor_log_ms = 5000
 artifact_rescue_debug_cooldown_ms = 20000
 artifact_rescue_debug_max_dispatches = 2
+artifact_rescue_debug_same_frame_stabilization = false
 debug_mode = on
 ```
 
 Запустить watcher до загрузки сейва. Нормальный путь каждого ID: `load_restore ... fresh_snapshot_required=true` → `post_load_snapshot ... action_deferred=true` → `action_dispatched ... dispatch=1` → `position_verified` → не менее 30 секунд `action_monitor`. Если предмет снова непрерывно находится за tether 15 секунд, ожидаются `rolling_reconfirmed`, cooldown 20 секунд и `action_dispatched ... dispatch=2`; третьей отправки быть не должно, вместо неё один `action_limit_reached`. Возврат внутрь до 15 секунд обязан дать `recovery_reset` и начать следующий эпизод с нуля. После завершения полностью закрыть игру, вернуть `artifact_rescue_actions=false` и `artifact_rescue_debug_same_id_teleport=false`; allowlist можно оставить, поскольку два action-gate выключены.
+
+## Отдельный third-stage stabilization test
+
+Этот сценарий не является продолжением обычного теста и не включается заранее. Использовать только именной save после принятого repeat-rescue прогона, где `af_fonar#6362` уже имеет два verified обычных dispatch и третий confirmed rolling. Перед загрузкой полностью закрыть игру и временно выставить:
+
+```ini
+artifact_rescue_observe_only = true
+artifact_rescue_actions = true
+artifact_rescue_debug_same_id_teleport = true
+artifact_rescue_debug_artifact_ids = 6362
+artifact_rescue_debug_reason = rolling
+artifact_rescue_debug_monitor_ms = 30000
+artifact_rescue_debug_monitor_log_ms = 5000
+artifact_rescue_debug_cooldown_ms = 20000
+artifact_rescue_debug_max_dispatches = 2
+artifact_rescue_debug_same_frame_stabilization = true
+debug_mode = on
+debug_force_decoy_type = empty
+```
+
+Первый post-load snapshot обязан только снять fresh-snapshot gate. После cooldown ожидается `action_dispatched ... dispatch=3,physics=same_frame_fix_release`, перед ним `action_stabilization_attempt`, затем inventory всех элементов и `action_stabilization_released`; отсутствие shell/API допустимо только как `stabilization_unavailable/failed`, сам same-ID teleport всё равно должен пройти. Далее обязательны обычные `position_verified` и минимум 30 секунд `action_monitor`. Сверить pre/post linear/angular velocity, ID `6362`, section `af_fonar`, отсутствие permanent fixed-состояния и нового dispatch после hard limit=3. Финальная обязательная проверка — игрок подбирает именно этот Фонарь: должен появиться `owned`/закрытие области, предмет остаётся в инвентаре и нормально участвует в Rojok-классе/мутации. После теста полностью закрыть игру и вернуть actions/same-ID/stabilization gates в `false`, `debug_mode=auto`.
 
 ## Debug-журнал
 

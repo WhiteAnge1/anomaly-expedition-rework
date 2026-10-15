@@ -63,7 +63,7 @@
 - `utils_item.script` реально переносит один и тот же item ID сначала на другой уровень, затем назад, чтобы провести online/offline цикл. Это доказывает сохранение ID, но такой двухуровневый трюк слишком опасен для награды вылазки.
 - У online `game_object` нет общего экспортированного `set_position`; `set_actor_position` относится к актёру.
 - `physics_shell` экспортирует `get_linear_vel`, `get_angular_vel`, `apply_force`, а modded exes — также `apply_torque`. Надёжных `set_linear_velocity/set_angular_velocity` в установленном API нет.
-- У `physics_element` есть `fix/release_fixed`, но временная фиксация каждого элемента меняет физическое состояние и требует отдельного испытания.
+- У `physics_element` есть `fix/release_fixed`, но временная фиксация каждого элемента меняет физическое состояние. Поэтому следующий default-off эксперимент делает fix/release синхронно в одном callback, только после двух verified обычных rescue и только на третьем independent rolling.
 - `ray_pick` с flags `2` проверяет статическую геометрию. Сам RVM использует вертикальный луч возле nav-точки для укладки объектов на пол.
 
 Вывод: безопасный кандидат — same-ID `alife():teleport_object` с очисткой двух db-кешей и последующей проверкой server/online позиции. Перенос online ID и поведение скорости нужно сначала проверить на временном тестовом артефакте. Recreate запрещён: он разрывает RVM `artefact_id`, очередь/сохранённые мутации Rojok, индексы реворка и map spots.
@@ -164,7 +164,7 @@
 ## Поэтапная проверка перед включением
 
 1. Provenance/observe-only принят полем на T1/T2/T3: origin, чистый underground, rolling, save/load и NPC lineage подтверждены. Полевой T1 также выявил и закрыл ложную переклассификацию rolling→underground на реальном склоне.
-2. Первый default-off прогон exact ID `1407` подтвердил свежий post-load snapshot, один same-ID teleport, сохранение ID/section и достижение target; контрольный `6362` не перемещался. Однако online-предмет продолжил движение (`anchor dxz 25.4 → 22.1 → 36.1`), поэтому три близких sample не доказывают стабильность. Текущий следующий прогон проверяет оба ID независимо: `position_verified`, мониторинг не менее 30 секунд, новый rolling 15 секунд, cooldown 20 секунд и максимум второй dispatch. Physics shell по-прежнему не трогается.
+2. Первый default-off прогон exact ID `1407` подтвердил свежий post-load snapshot, один same-ID teleport, сохранение ID/section и достижение target; контрольный `6362` не перемещался. Однако online-предмет продолжил движение (`anchor dxz 25.4 → 22.1 → 36.1`), поэтому три близких sample не доказывают стабильность. Repeat-rescue прогон затем подтвердил два verified/30s обычных dispatch `6362`, третий independent rolling за `15081 ms` и hard stop на двух действиях; `1407` остался внутри. Ошибок AER/FATAL не было. Следующий узкий этап — третий default-off dispatch только для `6362` с same-callback fix/release и обязательной проверкой подбора.
 3. Проверить три искусственных случая: origin mismatch, underground, уход за tether. Доступный склон не должен срабатывать.
 4. Включить только initial-origin correction; затем отдельными этапами underground и rolling.
 5. Проверить NPC pickup, смерть NPC, `actor_pickup_recreated_id`, exact marker, Rojok queue ровно один раз и штатный cleanup.

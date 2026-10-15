@@ -585,7 +585,11 @@ local function terminal_provenance(record, terminal, reason, snapshot)
     record.reason = reason
     record.timestamps = record.timestamps or {}
     record.timestamps[terminal .. "_at"] = time_global()
-    provenance_log(terminal, record, snapshot, reason)
+    local action = record.actions and record.actions[#record.actions]
+    local stabilization = action and action.stabilization
+    local extra = stabilization and ("last_dispatch=" .. tostring(action.dispatch_index)
+        .. ",stabilization_status=" .. tostring(stabilization.status)) or nil
+    provenance_log(terminal, record, snapshot, reason, extra)
 end
 
 local function disable_provenance(record, context, err)
@@ -997,6 +1001,22 @@ local function artifact_action_count(record)
     return count
 end
 
+local function artifact_verified_ordinary_action_count(record)
+    local count = 0
+    for _, action in ipairs(record.actions or {}) do
+        if action.kind == "debug_same_id_teleport" and action.verified_at
+        and not action.stabilization_requested then
+            count = count + 1
+        end
+    end
+    return count
+end
+
+local function artifact_rescue_stabilization_enabled(record)
+    return artifact_rescue_debug_action_enabled(record)
+        and C.get_bool("global", "artifact_rescue_debug_same_frame_stabilization", false)
+end
+
 local function latest_artifact_action(record)
     local action = record.actions and record.actions[#record.actions]
     return action and action.kind == "debug_same_id_teleport" and action or nil
@@ -1079,6 +1099,148 @@ local function clear_artifact_position_caches(id)
         db.offline_objects[id].level_vertex_id = nil
     end
     if db and db.spawned_vertex_by_id then db.spawned_vertex_by_id[id] = nil end
+end
+
+local function read_physics_velocity(shell, angular)
+    local value = vector():set(0, 0, 0)
+    local ok, err = pcall(function()
+        if angular then
+            shell:get_angular_vel(value)
+        else
+            shell:get_linear_vel(value)
+        end
+    end)
+    return ok and pos_table(value) or nil, ok and nil or tostring(err)
+end
+
+local function attempt_same_frame_stabilization(record, action, snapshot)
+    action.stabilization = {
+        status = "attempting",
+        attempted_at = time_global(),
+        same_callback_release = true,
+        fixed_indices = {},
+        released_indices = {},
+        errors = {},
+    }
+    local result = action.stabilization
+    provenance_log("action_stabilization_attempt", record, snapshot, record.primary_reason,
+        "dispatch=" .. tostring(action.dispatch_index) .. ",mode=same_callback_fix_release")
+    local function fail(event, reason)
+        result.status = event
+        result.reason = reason
+        provenance_log(event, record, snapshot, record.primary_reason,
+            "dispatch=" .. tostring(action.dispatch_index) .. ",reason=" .. tostring(reason))
+        return false
+    end
+
+    local online_ok, online = pcall(function() return level.object_by_id(record.artifact_id) end)
+    if not (online_ok and online) then return fail("stabilization_unavailable", "exact_online_object_missing") end
+    if object_section(online) ~= record.section then
+        return fail("stabilization_failed", "online_section_mismatch")
+    end
+    local shell_ok, shell = pcall(function() return online:get_physics_shell() end)
+    if not (shell_ok and shell) then return fail("stabilization_unavailable", "physics_shell_missing") end
+
+    result.linear_before, result.linear_before_error = read_physics_velocity(shell, false)
+    result.angular_before, result.angular_before_error = read_physics_velocity(shell, true)
+    local count_ok, element_count = pcall(function() return shell:get_elements_number() end)
+    element_count = count_ok and math.floor(tonumber(element_count) or 0) or 0
+    if element_count < 1 then return fail("stabilization_unavailable", "physics_elements_missing") end
+    result.element_count = element_count
+
+    local candidates = {}
+    local pre_fixed = 0
+    for index = 0, element_count - 1 do
+        local element_ok, element = pcall(function() return shell:get_element_by_order(index) end)
+        if not (element_ok and element) then
+            result.errors[#result.errors + 1] = "element_" .. tostring(index) .. "_unavailable"
+        else
+            local fixed_ok, was_fixed = pcall(function() return element:is_fixed() end)
+            local fix_method_ok, fix_method = pcall(function() return element.fix end)
+            local release_method_ok, release_method = pcall(function() return element.release_fixed end)
+            if not fixed_ok then
+                result.errors[#result.errors + 1] = "element_" .. tostring(index) .. "_fixed_state_unavailable"
+            elseif was_fixed then
+                pre_fixed = pre_fixed + 1
+            elseif not (fix_method_ok and type(fix_method) == "function"
+            and release_method_ok and type(release_method) == "function") then
+                result.errors[#result.errors + 1] = "element_" .. tostring(index) .. "_fix_release_api_unavailable"
+            else
+                candidates[#candidates + 1] = {
+                    index = index,
+                    element = element,
+                    fix_method = fix_method,
+                    release_method = release_method,
+                }
+            end
+        end
+    end
+    result.pre_fixed_count = pre_fixed
+    result.candidate_count = #candidates
+    provenance_log("action_stabilization_elements", record, snapshot, record.primary_reason,
+        "dispatch=" .. tostring(action.dispatch_index)
+        .. ",elements=" .. tostring(element_count) .. ",candidates=" .. tostring(#candidates)
+        .. ",pre_fixed=" .. tostring(pre_fixed)
+        .. ",linear_before=" .. fmt_position(result.linear_before)
+        .. ",angular_before=" .. fmt_position(result.angular_before))
+    if #candidates == 0 then return fail("stabilization_unavailable", "no_safe_unfixed_elements") end
+
+    -- Every candidate is placed in the cleanup list before fix() is attempted.
+    -- There is no yield or saved state between fix and the release sweep.
+    local fix_failures = 0
+    for _, candidate in ipairs(candidates) do
+        local fixed_ok, fixed_error = pcall(candidate.fix_method, candidate.element)
+        if fixed_ok then
+            result.fixed_indices[#result.fixed_indices + 1] = candidate.index
+        else
+            fix_failures = fix_failures + 1
+            result.errors[#result.errors + 1] = "fix_" .. tostring(candidate.index) .. ":" .. tostring(fixed_error)
+        end
+    end
+
+    local release_failures = 0
+    for _, candidate in ipairs(candidates) do
+        local released_ok, released_error = pcall(candidate.release_method, candidate.element)
+        local state_ok, still_fixed = pcall(function() return candidate.element:is_fixed() end)
+        if (not released_ok) or (state_ok and still_fixed) then
+            -- A second same-callback attempt is the only retry; no fixed lease
+            -- is ever carried into another frame or save.
+            local retry_ok, retry_error = pcall(candidate.release_method, candidate.element)
+            local retry_state_ok, retry_still_fixed = pcall(function() return candidate.element:is_fixed() end)
+            released_ok = retry_ok and (not retry_state_ok or not retry_still_fixed)
+            if not retry_ok then
+                released_error = retry_error or released_error
+            elseif retry_state_ok and retry_still_fixed then
+                released_error = "still_fixed_after_retry"
+            else
+                released_error = nil
+            end
+        end
+        if released_ok then
+            result.released_indices[#result.released_indices + 1] = candidate.index
+        else
+            release_failures = release_failures + 1
+            result.errors[#result.errors + 1] = "release_" .. tostring(candidate.index) .. ":" .. tostring(released_error)
+        end
+    end
+    result.linear_after, result.linear_after_error = read_physics_velocity(shell, false)
+    result.angular_after, result.angular_after_error = read_physics_velocity(shell, true)
+    result.fix_failures = fix_failures
+    result.release_failures = release_failures
+    provenance_log("action_stabilization_released", record, snapshot, record.primary_reason,
+        "dispatch=" .. tostring(action.dispatch_index)
+        .. ",fixed=" .. tostring(#result.fixed_indices)
+        .. ",released=" .. tostring(#result.released_indices)
+        .. ",release_failures=" .. tostring(release_failures)
+        .. ",linear_after=" .. fmt_position(result.linear_after)
+        .. ",angular_after=" .. fmt_position(result.angular_after))
+    if fix_failures == 0 and release_failures == 0 and #result.errors == 0 then
+        result.status = "released"
+        return true
+    end
+    return fail("stabilization_failed", "fix_failures=" .. tostring(fix_failures)
+        .. ",release_failures=" .. tostring(release_failures)
+        .. ",errors=" .. table.concat(result.errors, "|"))
 end
 
 local function update_debug_same_id_rescue(record, snapshot, now)
@@ -1229,13 +1391,21 @@ local function update_debug_same_id_rescue(record, snapshot, now)
     or not (record.rolling and record.rolling.confirmed) then return end
 
     local action_count = artifact_action_count(record)
-    local max_dispatches = math.min(2, math.max(1, math.floor(
+    local ordinary_max_dispatches = math.min(2, math.max(1, math.floor(
         C.get_number("global", "artifact_rescue_debug_max_dispatches", 2))))
-    if action_count >= max_dispatches then
-        if not record.action_limit_reported then
-            record.action_limit_reported = true
+    local verified_ordinary = artifact_verified_ordinary_action_count(record)
+    local stabilization_requested = action_count == 2
+        and verified_ordinary >= 2
+        and artifact_rescue_stabilization_enabled(record)
+    local effective_max_dispatches = (stabilization_requested or action_count >= 3)
+        and 3 or ordinary_max_dispatches
+    if action_count >= effective_max_dispatches then
+        if record.action_limit_reported_for ~= action_count then
+            record.action_limit_reported_for = action_count
             provenance_log("action_limit_reached", record, snapshot, record.primary_reason,
-                "dispatches=" .. tostring(action_count) .. ",maximum=" .. tostring(max_dispatches))
+                "dispatches=" .. tostring(action_count) .. ",maximum=" .. tostring(effective_max_dispatches)
+                .. ",verified_ordinary=" .. tostring(verified_ordinary)
+                .. ",stabilization_gate=" .. tostring(artifact_rescue_stabilization_enabled(record)))
         end
         return
     end
@@ -1274,6 +1444,7 @@ local function update_debug_same_id_rescue(record, snapshot, now)
         verification_checks = 0,
         verification_samples = 0,
         dispatch_index = action_count + 1,
+        stabilization_requested = stabilization_requested,
     }
     record.actions[#record.actions + 1] = action
     clear_artifact_position_caches(record.artifact_id)
@@ -1286,15 +1457,23 @@ local function update_debug_same_id_rescue(record, snapshot, now)
         disable_provenance(record, "same_id_teleport_dispatch", move_error)
         return
     end
+    if stabilization_requested then
+        attempt_same_frame_stabilization(record, action, snapshot)
+    end
     action.status = "verifying"
     action.dispatched_at = now
     record.rescue_count = (record.rescue_count or 0) + 1
     record.rolling_rescue_count = (record.rolling_rescue_count or 0) + 1
     record.state = "verifying"
     record.timestamps.verifying_at = now
+    local physics_mode = stabilization_requested and "same_frame_fix_release" or "none"
     provenance_log("action_dispatched", record, snapshot, record.primary_reason,
-        "kind=debug_same_id_teleport,same_id=true,physics=none,dispatch=" .. tostring(action.dispatch_index)
-        .. ",maximum=" .. tostring(max_dispatches) .. ",target=" .. fmt_position(target.pos))
+        "kind=debug_same_id_teleport,same_id=true,physics=" .. physics_mode
+        .. ",dispatch=" .. tostring(action.dispatch_index)
+        .. ",maximum=" .. tostring(effective_max_dispatches)
+        .. ",stabilization_requested=" .. tostring(stabilization_requested)
+        .. ",stabilization_status=" .. tostring(action.stabilization and action.stabilization.status or "none")
+        .. ",target=" .. fmt_position(target.pos))
 end
 
 local function artifact_diagnostic_text(snapshot)

@@ -27,6 +27,7 @@ $required = @(
     'tools\test_loot_policy.ps1',
     'tools\test_geometry_policy.ps1',
     'tools\test_artifact_rescue_policy.ps1',
+    'tools\test_artifact_stabilization_policy.ps1',
     'docs\ARTIFACT-RESCUE-DESIGN.md',
     'docs\ARTIFACT-RESCUE-RESEARCH.md',
     'docs\ARTIFACT-RESCUE-OBSERVE.md'
@@ -329,6 +330,7 @@ if ($Profile -eq 'full' -or $Profile -eq 'geometry') {
 }
 if ($Profile -eq 'full' -or $Profile -eq 'fast') {
     & (Join-Path $ModRoot 'tools\test_artifact_rescue_policy.ps1') -ModRoot $ModRoot
+    & (Join-Path $ModRoot 'tools\test_artifact_stabilization_policy.ps1') -ModRoot $ModRoot
 }
 if ($Profile -eq 'full' -or $Profile -eq 'loot') {
     & (Join-Path $ModRoot 'tools\test_loot_policy.ps1') -Samples 200000

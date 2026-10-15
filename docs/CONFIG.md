@@ -64,7 +64,8 @@
 | `artifact_rescue_debug_monitor_ms` | `30000` | Минимальный мониторинг после `position_verified` |
 | `artifact_rescue_debug_monitor_log_ms` | `5000` | Интервал журнала displacement/distance/tether margin |
 | `artifact_rescue_debug_cooldown_ms` | `20000` | Пауза после повторного rolling-confirmation до второго dispatch |
-| `artifact_rescue_debug_max_dispatches` | `2` | Независимый предел same-ID отправок на original ID |
+| `artifact_rescue_debug_max_dispatches` | `2` | Предел обычных same-ID отправок на original ID |
+| `artifact_rescue_debug_same_frame_stabilization` | `false` | Отдельный gate третьего experimental dispatch после двух verified обычных; требует все предыдущие rescue-gate |
 | `artifact_rescue_origin_radius` | `2` | Радиус признака near-origin; сам по себе никогда не подтверждает ошибку |
 | `artifact_rescue_origin_field_margin` | `2` | Запас сверх `sqrt(2) * size` при проверке несовпадения с исходным полем |
 | `artifact_rescue_origin_nav_mismatch` | `4` | Порог несогласованности позиции с nav vertex |
@@ -80,7 +81,9 @@ Provenance schema 2 сохраняет ID/section, шаблон и размер 
 
 Строгий origin-кандидат требует одновременно near-origin, несовпадение с конкретным полем и его размером, плохой vertex/nav, отсутствие parent и валидную static-ray цель. Underground требует всех порогов из таблицы и отсутствия владельца. Rolling начинается при любом устойчивом превышении `radius + 5 м`; возврат внутрь полностью сбрасывает эпизод. Первая подтверждённая причина сохраняет причинный приоритет: rolling за пределами игровой nav-сетки не становится underground только из-за низкого world Y/invalid vertex.
 
-Prototype не является пользовательской функцией. Он работает только при одновременных `artifact_rescue_observe_only=true`, `artifact_rescue_actions=true`, `artifact_rescue_debug_same_id_teleport=true`, exact ID `1407`/`6362` и причине rolling. Первый свежий snapshot после load только классифицирует состояние. Три проверки в радиусе 4 м дают лишь `position_verified`; затем идёт минимум 30 секунд наблюдения. Новый непрерывный выход за `radius+5` должен длиться 15 секунд, после чего действует 20-секундный cooldown; предел — два dispatch независимо на ID. Тот же ID/section сохраняется, recreate, offline-cycle, physics и section fallback запрещены. Штатные количества `4/8/6` не меняются.
+Prototype не является пользовательской функцией. Он работает только при одновременных `artifact_rescue_observe_only=true`, `artifact_rescue_actions=true`, `artifact_rescue_debug_same_id_teleport=true`, exact ID `1407`/`6362` и причине rolling. Первый свежий snapshot после load только классифицирует состояние. Три проверки в радиусе 4 м дают лишь `position_verified`; затем идёт минимум 30 секунд наблюдения. Новый непрерывный выход за `radius+5` должен длиться 15 секунд, после чего действует 20-секундный cooldown; обычный предел — два dispatch независимо на ID.
+
+`artifact_rescue_debug_same_frame_stabilization=true` разрешает ровно третий dispatch только после двух обычных действий с `verified_at` и нового независимого rolling-confirmation. После same-ID teleport код проверяет exact online-object и все physics elements, временно фиксирует только ранее не fixed элементы и освобождает только их в том же callback. Shell/API/element failure не отменяет teleport: пишется `stabilization_unavailable/failed`, затем продолжаются position verification и мониторинг. Permanent fix, перенос fixed-состояния через кадр/save, recreate, offline-cycle, `apply_force` и section fallback запрещены. После третьего dispatch действует hard maximum `3`.
 
 ## Диагностика и тестовые параметры
 
