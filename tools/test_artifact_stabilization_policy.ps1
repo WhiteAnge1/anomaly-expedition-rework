@@ -72,7 +72,7 @@ Assert-True $confirmed 'independent rolling episode did not confirm after reset 
 
 foreach ($needle in @(
     'local function artifact_verified_ordinary_action_count(record)',
-    'local function artifact_rescue_stabilization_mode(record)',
+    'local function artifact_rescue_stabilization_mode(record, persisted_reason)',
     'artifact_rescue_debug_same_frame_stabilization',
     'local function attempt_same_frame_stabilization(record, action, snapshot)',
     'same_callback_release = true',

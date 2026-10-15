@@ -30,6 +30,16 @@ function Held-TimeoutReached([int]$ConfiguredTimeout, [int]$Duration) {
 Assert-True (-not (Held-TimeoutReached 0 999999999)) 'held timeout 0 did not disable automatic release'
 Assert-True (Held-TimeoutReached 120000 120000) 'positive held timeout no longer releases at its deadline'
 
+function Resolve-PostTeleportHeld([string]$RecordReason, [string]$PersistedActionReason, [bool]$ReacquireAndFix) {
+    $effectiveReason = if ($PersistedActionReason) { $PersistedActionReason } else { $RecordReason }
+    if ($effectiveReason -ne 'rolling') { return 'record_disabled_gate' }
+    if (-not $ReacquireAndFix) { return 'record_disabled_fix' }
+    return 'held'
+}
+
+Assert-True ((Resolve-PostTeleportHeld 'post_rescue_monitor' 'rolling' $true) -eq 'held') 'held_pending was rejected after position_verified changed record.reason'
+Assert-True ((Resolve-PostTeleportHeld 'post_rescue_monitor' 'rolling' $false) -eq 'record_disabled_fix') 'real post-teleport reacquire/fix failure did not fail closed'
+
 # Journal ownership: only elements observed unfixed and successfully fixed by
 # this action enter the persistent release list.
 $elements = @(
@@ -54,6 +64,8 @@ foreach ($needle in @(
     'mode = "held"', 'status = "held_attempting"', 'active = false',
     'action.held_pending = true', 'status = "held_pending"',
     'if action.held_pending then', 'action.status ~= "position_verified"',
+    'artifact_rescue_stabilization_mode(record, action.reason)',
+    'local held_error = "held_gate_unavailable"',
     'post_teleport_position_not_verified', 'post_teleport_held_stabilization',
     'held.element_indices[#held.element_indices + 1] = candidate.index',
     'for _, element_index in ipairs(held.element_indices or {}) do',
@@ -78,10 +90,15 @@ $teleport = $main.IndexOf('alife():teleport_object(', $dispatchStart)
 $pending = $main.IndexOf('action.held_pending = true', $teleport)
 $dispatchedLog = $main.IndexOf('provenance_log("action_dispatched"', $pending)
 $verifiedLog = $main.IndexOf('provenance_log("position_verified"', $updateStart)
+$persistedMode = $main.IndexOf('artifact_rescue_stabilization_mode(record, action.reason)', $verifiedLog)
 $heldAttemptCall = $main.IndexOf('attempt_held_stabilization(record, action, snapshot)', $verifiedLog)
+$pendingCleared = $main.IndexOf('action.held_pending = false', $heldAttemptCall)
+$failedGuard = $main.IndexOf('if not held_ok then', $pendingCleared)
+$failClosed = $main.IndexOf('disable_provenance(record, "post_teleport_held_stabilization"', $failedGuard)
 Assert-True ($teleport -gt $dispatchStart -and $pending -gt $teleport -and $dispatchedLog -gt $pending) 'held dispatch is not journaled as pending after teleport'
-Assert-True ($verifiedLog -gt $updateStart -and $heldAttemptCall -gt $verifiedLog -and $heldAttemptCall -lt $dispatchStart) 'held fix is not deferred until post-teleport position verification'
+Assert-True ($verifiedLog -gt $updateStart -and $persistedMode -gt $verifiedLog -and $heldAttemptCall -gt $persistedMode -and $heldAttemptCall -lt $dispatchStart) 'held fix is not deferred until post-teleport position verification with its persisted reason'
 Assert-True ($main.IndexOf('attempt_held_stabilization(record, action, snapshot)', $teleport) -eq -1) 'held fix is still attempted in the dispatch callback'
+Assert-True ($pendingCleared -gt $heldAttemptCall -and $failedGuard -gt $pendingCleared -and $failClosed -gt $failedGuard) 'real post-teleport held failure is not fail closed after the attempt'
 Assert-True ($main.Contains('local timeout = configured_timeout > 0 and math.max(30000, configured_timeout) or 0')) 'held timeout zero-disable semantics missing'
 Assert-True ($main.Contains('if timeout > 0 and held.duration_ms >= timeout then')) 'held timeout release is not guarded by a positive timeout'
 

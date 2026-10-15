@@ -455,7 +455,7 @@ local function artifact_rescue_observe_enabled()
     return C.get_bool("global", "artifact_rescue_observe_only", false)
 end
 
-local function artifact_rescue_debug_action_enabled(record)
+local function artifact_rescue_debug_action_enabled(record, persisted_reason)
     if not artifact_rescue_observe_enabled()
     or not C.get_bool("global", "artifact_rescue_actions", false)
     or not C.get_bool("global", "artifact_rescue_debug_same_id_teleport", false) then
@@ -470,7 +470,7 @@ local function artifact_rescue_debug_action_enabled(record)
     local configured_reason = string.lower(C.get_string("global", "artifact_rescue_debug_reason", "rolling"))
     return ARTIFACT_RESCUE_DEBUG_IDS[record_id] == true
         and configured_ids[record_id] == true
-        and tostring(record.primary_reason or record.reason) == configured_reason
+        and tostring(persisted_reason or record.primary_reason or record.reason) == configured_reason
 end
 
 local function artifact_zone_size(anom_zone)
@@ -1025,8 +1025,8 @@ local function artifact_verified_ordinary_action_count(record)
     return count
 end
 
-local function artifact_rescue_stabilization_mode(record)
-    if not artifact_rescue_debug_action_enabled(record) then return nil end
+local function artifact_rescue_stabilization_mode(record, persisted_reason)
+    if not artifact_rescue_debug_action_enabled(record, persisted_reason) then return nil end
     local same_frame = C.get_bool("global", "artifact_rescue_debug_same_frame_stabilization", false)
     local held = C.get_bool("global", "artifact_rescue_debug_held_stabilization", false)
     if same_frame and held then return "conflict" end
@@ -1573,13 +1573,19 @@ local function update_debug_same_id_rescue(record, snapshot, now)
                     "kind=debug_same_id_teleport,same_id=true,checks=" .. tostring(action.verification_checks)
                     .. ",monitor_ms=" .. tostring(math.max(30000, C.get_number("global", "artifact_rescue_debug_monitor_ms", 30000))))
                 if action.held_pending then
-                    local held_ok = artifact_rescue_stabilization_mode(record) == "held"
-                        and attempt_held_stabilization(record, action, snapshot)
+                    local held_mode = artifact_rescue_stabilization_mode(record, action.reason)
+                    local held_ok = false
+                    local held_error = "held_gate_unavailable"
+                    if held_mode == "held" then
+                        held_ok = attempt_held_stabilization(record, action, snapshot)
+                        held_error = action.stabilization and action.stabilization.status
+                            or "held_attempt_status_missing"
+                    end
                     action.held_pending = false
                     if not held_ok then
                         action.status = "stabilization_failed"
                         disable_provenance(record, "post_teleport_held_stabilization",
-                            action.stabilization and action.stabilization.status or "held_gate_unavailable")
+                            held_error)
                         return
                     end
                 end
