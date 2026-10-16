@@ -186,6 +186,51 @@ if ($verification.cooldown_ms -eq 0 -and $verification.dispatches -lt 2) { $veri
 Assert-True ($verification.dispatches -eq 2) 'second dispatch was not admitted after cooldown'
 Assert-True (-not (Confirm-Rolling 100 @(106,107,104,106,107) @(0,5000,10000,15000,20000))) 'return inside did not reset repeat rolling episode'
 
+# Held verification proves same-field teleport before it fixes the shell.  It
+# deliberately accepts natural drift inside a bounded target/field envelope;
+# a teleport that did not reach the field, or an object leaving the envelope,
+# remains fail-closed.  Non-held debug actions keep the old strict 4 m window.
+function Test-VerificationEnvelope {
+    param(
+        [double]$Radius,
+        [double]$TargetDxz,
+        [double]$TargetDy,
+        [double]$AnchorDxz,
+        [bool]$StabilizationRequested
+    )
+    $targetLimit = 4
+    $verticalLimit = 4
+    if ($StabilizationRequested) {
+        if ($Radius -le 0) { return $false }
+        $targetLimit = [Math]::Max(4, [Math]::Min(32, $Radius * 0.5))
+        $verticalLimit = [Math]::Max(4, [Math]::Min(16, $Radius * 0.25))
+        $tetherLimit = $Radius + 5
+        return $TargetDxz -le $targetLimit -and $TargetDy -le $verticalLimit -and $AnchorDxz -le $tetherLimit
+    }
+    return $TargetDxz -le $targetLimit -and $TargetDy -le $verticalLimit
+}
+
+$levitatingSnapshots = @(
+    @{ target_dxz = 7; target_dy = 3; anchor_dxz = 18 },
+    @{ target_dxz = 15; target_dy = 6; anchor_dxz = 20 },
+    @{ target_dxz = 26; target_dy = 9; anchor_dxz = 22 }
+)
+$levitatingAccepted = @($levitatingSnapshots | Where-Object {
+    Test-VerificationEnvelope 72 $_.target_dxz $_.target_dy $_.anchor_dxz $true
+}).Count
+Assert-True ($levitatingAccepted -eq 3) 'levitating held artifact did not reach verification after three in-envelope drifting snapshots'
+Assert-True (-not (Test-VerificationEnvelope 72 40 9 22 $true)) 'held verifier accepted object outside target envelope'
+Assert-True (-not (Test-VerificationEnvelope 72 26 9 78 $true)) 'held verifier accepted object outside linked field tether'
+Assert-True (-not (Test-VerificationEnvelope 72 220 40 220 $true)) 'held verifier masked a teleport that did not reach the field'
+Assert-True (-not (Test-VerificationEnvelope 72 4.1 0 1 $false)) 'non-held verifier lost strict target window'
+$outsideEnvelopeState = 'verifying'
+foreach ($check in 1..10) {
+    if (-not (Test-VerificationEnvelope 72 40 9 22 $true) -and $check -ge 10) {
+        $outsideEnvelopeState = 'disabled'
+    }
+}
+Assert-True ($outsideEnvelopeState -eq 'disabled') 'object outside held envelope did not fail closed after 10 checks'
+
 foreach ($needle in @(
     'schema = 4', 'artifact_provenance = {}', 'local ARTIFACT_PROVENANCE_SCHEMA = 2',
     'local ARTIFACT_RESCUE_DEBUG_IDS = { [1407] = true, [6362] = true }',
@@ -209,6 +254,10 @@ foreach ($needle in @(
     'production_same_id_teleport',
     'alife():teleport_object(record.artifact_id, target.gvid, target.lvid, pos_vector(target.pos))',
     'record.state = "verifying"', 'record.state = "monitoring"', 'action.status = "position_verified"',
+    'position_verification_sample', 'mode=" .. (action.stabilization_requested and "held_envelope" or "tight_target")',
+    'target_limit = math.max(4, math.min(32, linked_radius * 0.5))',
+    'vertical_limit = math.max(4, math.min(16, linked_radius * 0.25))',
+    'target_envelope_not_reached_after_10_checks',
     'action_monitor', 'rolling_reconfirmed', 'action_monitor_complete', 'action_limit_reached',
     'legacy_three_frame_stable_migrated',
     'local physics_mode = "none"',

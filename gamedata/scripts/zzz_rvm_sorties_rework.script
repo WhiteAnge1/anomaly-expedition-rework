@@ -1573,10 +1573,44 @@ local function update_debug_same_id_rescue(record, snapshot, now)
         if not validate_same_id_action_context(record, snapshot, action, "same_id_teleport_verify") then return end
         local pos = snapshot.online_pos or snapshot.server_pos
         local target = action.target and action.target.pos
+        local linked_radius = tonumber(record.linked_radius)
+        if action.stabilization_requested
+        and not (record.linked_center and linked_radius and linked_radius > 0) then
+            action.status = "verification_failed"
+            disable_provenance(record, "same_id_teleport_verify_target", "linked_tether_invalid")
+            return
+        end
         action.verification_checks = (action.verification_checks or 0) + 1
+        local target_dxz = pos and target and distance_xz(pos, target) or 9999
+        local target_dy = pos and target and math.abs(pos.y - target.y) or 9999
+        local target_limit = 4
+        local vertical_limit = 4
+        local tether_limit = nil
+        local anchor_dxz = nil
+        if action.stabilization_requested then
+            -- A held rescue must first prove that teleport reached the intended
+            -- field, not that a naturally drifting shell has already stopped.
+            -- The held fix below is what stops levitating artifacts.
+            target_limit = math.max(4, math.min(32, linked_radius * 0.5))
+            vertical_limit = math.max(4, math.min(16, linked_radius * 0.25))
+            tether_limit = linked_radius
+                + math.max(0, C.get_number("global", "artifact_rescue_rolling_edge_margin", 5))
+            anchor_dxz = pos and distance_xz(pos, record.linked_center) or 9999
+        end
         local good = snapshot.server_exists and snapshot.server_section == action.section
             and snapshot.server_gvid == action.target.gvid and pos and target
-            and distance_xz(pos, target) <= 4 and math.abs(pos.y - target.y) <= 4
+            and target_dxz <= target_limit and target_dy <= vertical_limit
+            and (not action.stabilization_requested or anchor_dxz <= tether_limit)
+        provenance_log("position_verification_sample", record, snapshot, record.primary_reason,
+            "check=" .. tostring(action.verification_checks)
+            .. ",accepted=" .. tostring(good)
+            .. ",mode=" .. (action.stabilization_requested and "held_envelope" or "tight_target")
+            .. ",target_dxz=" .. tostring(round1(target_dxz))
+            .. ",target_dy=" .. tostring(round1(target_dy))
+            .. ",target_limit=" .. tostring(round1(target_limit))
+            .. ",vertical_limit=" .. tostring(round1(vertical_limit))
+            .. ",anchor_dxz=" .. tostring(anchor_dxz and round1(anchor_dxz) or "none")
+            .. ",tether_limit=" .. tostring(tether_limit and round1(tether_limit) or "none"))
         if good then
             action.verification_samples = (action.verification_samples or 0) + 1
             if action.verification_samples >= 3 then
@@ -1620,7 +1654,10 @@ local function update_debug_same_id_rescue(record, snapshot, now)
             action.verification_samples = 0
             if action.verification_checks >= 10 then
                 action.status = "verification_failed"
-                disable_provenance(record, "same_id_teleport_verify", "target_not_stable_after_10_checks")
+                disable_provenance(record, "same_id_teleport_verify",
+                    "target_envelope_not_reached_after_10_checks,target_dxz=" .. tostring(round1(target_dxz))
+                    .. ",target_dy=" .. tostring(round1(target_dy))
+                    .. ",anchor_dxz=" .. tostring(anchor_dxz and round1(anchor_dxz) or "none"))
             end
         end
         return
