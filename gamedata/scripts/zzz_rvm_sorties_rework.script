@@ -159,20 +159,92 @@ local function release_log(fmt, ...)
     end
 end
 
+-- Marshal persists the stock RVM field center through the engine userdata
+-- __persist hook.  In existing saves that value can come back as a get()-based
+-- userdata rather than a vector with directly readable x/y/z fields.  Keep the
+-- boundary strict and canonicalize every accepted representation before doing
+-- arithmetic.  Numeric strings and partially populated/mixed forms are rejected.
+-- ORIGIN_POSITION_NORMALIZER_BEGIN
+function ORIGIN.normalize_position(value)
+    if value == nil then return nil, nil, "missing" end
+
+    local function finite_number(component)
+        return type(component) == "number" and component == component
+        and component ~= math.huge and component ~= -math.huge
+    end
+    local function protected_component(key)
+        local ok, component = pcall(function() return value[key] end)
+        return ok and component or nil
+    end
+    local function canonical(x, y, z, schema)
+        if not finite_number(x) or not finite_number(y) or not finite_number(z) then
+            return nil, nil, schema .. "_non_numeric"
+        end
+        return { x = x, y = y, z = z }, schema, nil
+    end
+
+    local x, y, z = protected_component("x"), protected_component("y"), protected_component("z")
+    if x ~= nil or y ~= nil or z ~= nil then return canonical(x, y, z, "keyed_xyz") end
+
+    if type(value) == "table" then
+        x, y, z = protected_component(1), protected_component(2), protected_component(3)
+        if x ~= nil or y ~= nil or z ~= nil then return canonical(x, y, z, "array_xyz") end
+    end
+
+    local getter_ok, getter = pcall(function() return value.get end)
+    if getter_ok and type(getter) == "function" then
+        local call_ok, gx, gy, gz = pcall(getter, value, 0, 0, 0, 0, 0, 0, 0)
+        if not call_ok then return nil, nil, "get_call_failed" end
+        return canonical(gx, gy, gz, "marshal_get_xyz")
+    end
+    return nil, nil, tostring(type(value)) .. "_unsupported"
+end
+-- ORIGIN_POSITION_NORMALIZER_END
+
+function ORIGIN.log_registry_position_shape(value, schema, reason)
+    ORIGIN.registry_position_shapes = ORIGIN.registry_position_shapes or {}
+    local identity = tostring(schema or reason or type(value))
+    if ORIGIN.registry_position_shapes[identity] then return end
+    ORIGIN.registry_position_shapes[identity] = true
+
+    local keys = {}
+    if type(value) == "table" then
+        local ok = pcall(function()
+            for key, component in pairs(value) do
+                if #keys < 8 then keys[#keys + 1] = tostring(key) .. ":" .. type(component) end
+            end
+        end)
+        if not ok then keys = { "unreadable" } end
+        table.sort(keys)
+    end
+    local getter_ok, getter = pcall(function() return value and value.get end)
+    printf(PREFIX .. " origin registry position schema value_type=%s keys=%s get=%s accepted=%s reason=%s",
+        tostring(type(value)), #keys > 0 and table.concat(keys, ",") or "none",
+        getter_ok and tostring(type(getter)) or "unreadable", tostring(schema or "none"),
+        tostring(reason or "none"))
+end
+
 local function pos_table(pos)
-    return pos and { x = pos.x, y = pos.y, z = pos.z } or nil
+    local normalized = ORIGIN.normalize_position(pos)
+    return normalized
 end
 
 local function pos_vector(pos)
-    return pos and vector():set(pos.x, pos.y, pos.z) or nil
+    local normalized = ORIGIN.normalize_position(pos)
+    return normalized and vector():set(normalized.x, normalized.y, normalized.z) or nil
 end
 
+-- ORIGIN_DISTANCE_XZ_BEGIN
 local function distance_xz(a, b)
-    if not (a and b) then return 999999 end
-    local dx = a.x - b.x
-    local dz = a.z - b.z
-    return math.sqrt(dx * dx + dz * dz)
+    local left, _, left_error = ORIGIN.normalize_position(a)
+    local right, _, right_error = ORIGIN.normalize_position(b)
+    if not left then return 999999, "left_" .. tostring(left_error) end
+    if not right then return 999999, "right_" .. tostring(right_error) end
+    local dx = left.x - right.x
+    local dz = left.z - right.z
+    return math.sqrt(dx * dx + dz * dz), nil
 end
+-- ORIGIN_DISTANCE_XZ_END
 
 local function fmt_number(value)
     value = tonumber(value) or 0
@@ -576,12 +648,20 @@ function ORIGIN.field_target(record)
     if matches ~= 1 then return nil, "rvm_field_match_count:" .. tostring(matches) end
     if not valid_vertex_id(match_lvid) or not match.pos then return nil, "rvm_field_identity_invalid" end
 
-    local field_pos = pos_table(match.pos)
+    local field_pos, field_schema, field_pos_error = ORIGIN.normalize_position(match.pos)
+    ORIGIN.log_registry_position_shape(match.pos, field_schema, field_pos_error)
+    if not field_pos then
+        return nil, "rvm_field_position_invalid:" .. tostring(field_pos_error)
+    end
     local field_size = tonumber(match.size_zone)
     local expected_size = tonumber(record.zone_size)
+    local provenance_distance, provenance_distance_error = distance_xz(field_pos, record.spawn_input_pos)
+    if provenance_distance_error then
+        return nil, "rvm_field_position_compare_invalid:" .. tostring(provenance_distance_error)
+    end
     if tostring(match.anom_zone) ~= tostring(record.anom_zone)
     or not field_size or not expected_size or math.abs(field_size - expected_size) > 0.1
-    or not record.spawn_input_pos or distance_xz(field_pos, record.spawn_input_pos) > 0.5 then
+    or provenance_distance > 0.5 then
         return nil, "rvm_field_provenance_mismatch"
     end
 
@@ -589,7 +669,11 @@ function ORIGIN.field_target(record)
     if not nav_ok or not nav then return nil, "rvm_field_vertex_position_missing" end
     local target, target_error = artifact_static_target(pos_table(nav))
     if not target then return nil, "rvm_field_target_" .. tostring(target_error) end
-    if target.lvid ~= match_lvid or distance_xz(target.pos, field_pos) > 2
+    local target_distance, target_distance_error = distance_xz(target.pos, field_pos)
+    if target_distance_error then
+        return nil, "rvm_field_target_position_invalid:" .. tostring(target_distance_error)
+    end
+    if target.lvid ~= match_lvid or target_distance > 2
     or math.abs(target.pos.y - nav.y) > 2 then
         return nil, "rvm_field_target_layer_mismatch"
     end
