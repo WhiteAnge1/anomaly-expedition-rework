@@ -20,12 +20,13 @@ local census_error_reported = false
 local next_artifact_diagnostic = 0
 local reported_artifact_overlaps = {}
 local safe_alive = nil
-local ARTIFACT_PROVENANCE_SCHEMA = 3
+local ARTIFACT_PROVENANCE_SCHEMA = 4
 local INVALID_VERTEX_ID = 4294967295
 local ARTIFACT_RESCUE_DEBUG_IDS = { [1407] = true, [6362] = true }
 local release_held_stabilization = nil
 local release_all_held_stabilizations = nil
 local saved_origin_evidence_valid = nil
+local rebuild_artifact_zone_after_origin = nil
 
 -- Category selection is a separate weighted roll. Every entry points to an
 -- exact online_offline_group section; the section's fixed npc list is the
@@ -548,6 +549,67 @@ local function artifact_static_target(pos)
     return result, reason
 end
 
+-- RVM keeps the authoritative field registry local, but intentionally exposes
+-- it through its normal save_state callback.  Reading that callback is safer
+-- than guessing from our yellow search area: the latter was generated from the
+-- broken artifact position and may itself be stale.  Exact artifact ID plus
+-- the saved field vertex, template, center and size identifies one RVM field.
+local function rvm_origin_field_target(record)
+    if not (record and raid_anomalys and type(raid_anomalys.save_state) == "function") then
+        return nil, "rvm_field_registry_unavailable"
+    end
+    local payload = {}
+    local saved, save_error = pcall(raid_anomalys.save_state, payload)
+    if not saved then return nil, "rvm_field_registry_error:" .. tostring(save_error) end
+    local registry = payload.raid_current_anomaly_zones
+    if type(registry) ~= "table" then return nil, "rvm_field_registry_missing" end
+
+    local match_lvid, match = nil, nil
+    local matches = 0
+    for lvid, field in pairs(registry) do
+        if type(field) == "table" and tonumber(field.artefact_id) == tonumber(record.artifact_id) then
+            matches = matches + 1
+            match_lvid = tonumber(lvid)
+            match = field
+        end
+    end
+    if matches ~= 1 then return nil, "rvm_field_match_count:" .. tostring(matches) end
+    if not valid_vertex_id(match_lvid) or not match.pos then return nil, "rvm_field_identity_invalid" end
+
+    local field_pos = pos_table(match.pos)
+    local field_size = tonumber(match.size_zone)
+    local expected_size = tonumber(record.zone_size)
+    if tostring(match.anom_zone) ~= tostring(record.anom_zone)
+    or not field_size or not expected_size or math.abs(field_size - expected_size) > 0.1
+    or not record.spawn_input_pos or distance_xz(field_pos, record.spawn_input_pos) > 0.5 then
+        return nil, "rvm_field_provenance_mismatch"
+    end
+
+    local nav_ok, nav = pcall(level.vertex_position, match_lvid)
+    if not nav_ok or not nav then return nil, "rvm_field_vertex_position_missing" end
+    local target, target_error = artifact_static_target(pos_table(nav))
+    if not target then return nil, "rvm_field_target_" .. tostring(target_error) end
+    if target.lvid ~= match_lvid or distance_xz(target.pos, field_pos) > 2
+    or math.abs(target.pos.y - nav.y) > 2 then
+        return nil, "rvm_field_target_layer_mismatch"
+    end
+
+    target.valid = true
+    target.source = "rvm_field_center"
+    target.support = "stock_lvid_static_ray"
+    target.field_lvid = match_lvid
+    record.rvm_field = {
+        lvid = match_lvid,
+        pos = field_pos,
+        nav_pos = pos_table(nav),
+        size = field_size,
+        anom_zone = tostring(match.anom_zone),
+        matched_at = time_global(),
+    }
+    record.origin_target = target
+    return target, nil
+end
+
 local function compute_observe_target(record)
     if record.target and record.target.valid then return record.target end
     if not (record.spawn_input_pos and record.zone_size) then return nil end
@@ -600,8 +662,50 @@ local function provenance_log(event, record, snapshot, reason, extra)
         tostring(record.position_source or "none"), fmt_position(record.target and record.target.pos), tostring(extra or "none"))
 end
 
+local function server_switch_flag(server, name)
+    if not server then return nil end
+    local ok, method = pcall(function() return server[name] end)
+    if not ok or type(method) ~= "function" then return nil end
+    local called, value = pcall(method, server)
+    return called and type(value) == "boolean" and value or nil
+end
+
+local function restore_origin_switch_flags(record, context)
+    local transition = record and record.origin_relocation
+    if not (transition and transition.flags_forced and not transition.flags_restored) then return true end
+    local sim = alife()
+    if not sim then return false end
+    local online = transition.original_switch_online
+    local offline = transition.original_switch_offline
+    if type(online) ~= "boolean" or type(offline) ~= "boolean" then return false end
+    local online_ok, online_error = pcall(sim.set_switch_online, sim, record.artifact_id, online)
+    local offline_ok, offline_error = pcall(sim.set_switch_offline, sim, record.artifact_id, offline)
+    if not (online_ok and offline_ok) then
+        printf(PREFIX .. " ERROR origin switch flags restore failed id=%s context=%s online_error=%s offline_error=%s",
+            tostring(record.artifact_id), tostring(context), tostring(online_error), tostring(offline_error))
+        return false
+    end
+    transition.flags_restored = true
+    transition.flags_forced = false
+    provenance_log("origin_switch_flags_restored", record, nil, record.reason,
+        "context=" .. tostring(context) .. ",online=" .. tostring(online) .. ",offline=" .. tostring(offline))
+    return true
+end
+
+local function restore_all_origin_switch_flags(context)
+    local restored = true
+    for _, record in pairs(state.artifact_provenance or {}) do
+        local transition = record.origin_relocation
+        if transition and transition.flags_forced then
+            if not restore_origin_switch_flags(record, context) then restored = false end
+        end
+    end
+    return restored
+end
+
 local function terminal_provenance(record, terminal, reason, snapshot)
     if not record or record.state == terminal then return end
+    restore_origin_switch_flags(record, "terminal_" .. tostring(terminal))
     if release_held_stabilization then
         local released_ok, released_error = pcall(release_held_stabilization,
             record, snapshot, "terminal_" .. tostring(terminal) .. ":" .. tostring(reason))
@@ -623,6 +727,7 @@ end
 
 local function disable_provenance(record, context, err)
     if not record then return end
+    restore_origin_switch_flags(record, "disable_" .. tostring(context))
     if release_held_stabilization then
         pcall(release_held_stabilization, record, nil, "record_disabled:" .. tostring(context))
     end
@@ -863,8 +968,15 @@ end
 
 local function observe_origin_candidate(record, snapshot)
     if record.origin.checked or not snapshot.server_exists or not snapshot.server_pos then return end
-    local target = compute_observe_target(record)
-    if not target then return end
+    local target, field_error = rvm_origin_field_target(record)
+    if not target then
+        if record.origin.registry_error ~= field_error then
+            record.origin.registry_error = field_error
+            provenance_log("origin_field_unproven", record, snapshot, "origin_mismatch",
+                "reason=" .. tostring(field_error) .. ",action_deferred=true")
+        end
+        return
+    end
     local pos = snapshot.server_pos
     local first = record.first_server
     local initial_pos = first and first.pos
@@ -887,8 +999,8 @@ local function observe_origin_candidate(record, snapshot)
     local identity_ok = record.section ~= nil and snapshot.server_section == record.section
         and valid_vertex_id(first.gvid) and snapshot.server_gvid == first.gvid
         and level_ok and current_level == record.level
-    local target_ok = target.valid == true and target.source == "field_candidate"
-        and target.support == "static_ray" and valid_vertex_id(target.lvid)
+    local target_ok = target.valid == true and target.source == "rvm_field_center"
+        and target.support == "stock_lvid_static_ray" and valid_vertex_id(target.lvid)
         and valid_vertex_id(target.gvid)
     record.origin.checked = true
     record.origin.near_origin = origin_distance <= origin_radius
@@ -902,6 +1014,7 @@ local function observe_origin_candidate(record, snapshot)
     if record.origin.near_origin and record.origin.initial_near_origin
     and field_distance > field_limit and initial_field_distance > field_limit
     and nav_bad and identity_ok and target_ok then
+        record.target = target
         record.origin.confirmed = true
         local extra = "origin_distance=" .. fmt_number(origin_distance)
             .. ",initial_origin_distance=" .. fmt_number(initial_origin_distance)
@@ -911,6 +1024,7 @@ local function observe_origin_candidate(record, snapshot)
             .. ",nav_bad=" .. tostring(nav_bad) .. ",identity_ok=" .. tostring(identity_ok)
             .. ",target_source=" .. tostring(target.source)
             .. ",target_support=" .. tostring(target.support)
+            .. ",field_lvid=" .. tostring(target.field_lvid)
         begin_artifact_suspect(record, "origin_mismatch", snapshot, extra)
         record.active_samples = 1
         record.active_duration_ms = 0
@@ -1155,8 +1269,10 @@ local function validate_same_id_action_context(record, snapshot, action, context
             disable_provenance(record, context .. "_target", "saved_target_invalid")
             return false
         end
-        if action.rescue_policy == "held_first"
-        and (target.source ~= "field_candidate" or target.support ~= "static_ray") then
+        local production_target_ok = action.reason == "origin_mismatch"
+            and target.source == "rvm_field_center" and target.support == "stock_lvid_static_ray"
+            or target.source == "field_candidate" and target.support == "static_ray"
+        if action.rescue_policy == "held_first" and not production_target_ok then
             disable_provenance(record, context .. "_target", "production_target_provenance_invalid")
             return false
         end
@@ -1173,6 +1289,62 @@ local function clear_artifact_position_caches(id)
         db.offline_objects[id].level_vertex_id = nil
     end
     if db and db.spawned_vertex_by_id then db.spawned_vertex_by_id[id] = nil end
+end
+
+-- teleport_object is safe for the already-tested rolling/underground paths,
+-- but a broken world-origin object can still own an online CGameObject shell.
+-- Teleporting that state makes X-Ray attempt net_spawn for the same ID.  For
+-- origin recovery only, request a normal ALife offline transition, wait until
+-- the exact online object is gone, then teleport and restore the original
+-- switch policy.  No object is released or recreated.
+local function prepare_origin_offline_transition(record, snapshot)
+    if not snapshot.online_exists then return true end
+    local transition = record.origin_relocation
+    if transition and transition.flags_forced then
+        transition.wait_checks = (transition.wait_checks or 0) + 1
+        if transition.wait_checks >= 10 then
+            restore_origin_switch_flags(record, "origin_offline_timeout")
+            disable_provenance(record, "origin_offline_transition", "online_shell_persisted_after_10_checks")
+        end
+        return false
+    end
+
+    local server_ok, server = pcall(alife_object, record.artifact_id)
+    server = server_ok and server or nil
+    local original_online = server_switch_flag(server, "can_switch_online")
+    local original_offline = server_switch_flag(server, "can_switch_offline")
+    if type(original_online) ~= "boolean" or type(original_offline) ~= "boolean" then
+        disable_provenance(record, "origin_offline_transition", "switch_policy_unreadable")
+        return false
+    end
+    local sim = alife()
+    if not sim then
+        disable_provenance(record, "origin_offline_transition", "alife_unavailable")
+        return false
+    end
+    transition = {
+        stage = "offline_requested",
+        requested_at = time_global(),
+        wait_checks = 0,
+        original_switch_online = original_online,
+        original_switch_offline = original_offline,
+        flags_forced = true,
+        flags_restored = false,
+    }
+    record.origin_relocation = transition
+    local online_ok, online_error = pcall(sim.set_switch_online, sim, record.artifact_id, false)
+    local offline_ok, offline_error = pcall(sim.set_switch_offline, sim, record.artifact_id, true)
+    if not (online_ok and offline_ok) then
+        restore_origin_switch_flags(record, "origin_offline_request_failed")
+        disable_provenance(record, "origin_offline_transition",
+            "request_failed,online_error=" .. tostring(online_error)
+            .. ",offline_error=" .. tostring(offline_error))
+        return false
+    end
+    provenance_log("origin_offline_requested", record, snapshot, record.primary_reason,
+        "same_id=true,release=false,recreate=false,original_online=" .. tostring(original_online)
+        .. ",original_offline=" .. tostring(original_offline))
+    return false
 end
 
 local function read_physics_velocity(shell, angular)
@@ -1603,7 +1775,9 @@ local function update_debug_same_id_rescue(record, snapshot, now)
         local pos = snapshot.online_pos or snapshot.server_pos
         local target = action.target and action.target.pos
         local linked_radius = tonumber(record.linked_radius)
+        local origin_action = action.reason == "origin_mismatch"
         if action.stabilization_requested
+        and not origin_action
         and not (record.linked_center and linked_radius and linked_radius > 0) then
             action.status = "verification_failed"
             disable_provenance(record, "same_id_teleport_verify_target", "linked_tether_invalid")
@@ -1616,7 +1790,7 @@ local function update_debug_same_id_rescue(record, snapshot, now)
         local vertical_limit = 4
         local tether_limit = nil
         local anchor_dxz = nil
-        if action.stabilization_requested then
+        if action.stabilization_requested and not origin_action then
             -- A held rescue must first prove that teleport reached the intended
             -- field, not that a naturally drifting shell has already stopped.
             -- The held fix below is what stops levitating artifacts.
@@ -1629,11 +1803,12 @@ local function update_debug_same_id_rescue(record, snapshot, now)
         local good = snapshot.server_exists and snapshot.server_section == action.section
             and snapshot.server_gvid == action.target.gvid and pos and target
             and target_dxz <= target_limit and target_dy <= vertical_limit
-            and (not action.stabilization_requested or anchor_dxz <= tether_limit)
+            and (not action.stabilization_requested or origin_action or anchor_dxz <= tether_limit)
         provenance_log("position_verification_sample", record, snapshot, record.primary_reason,
             "check=" .. tostring(action.verification_checks)
             .. ",accepted=" .. tostring(good)
-            .. ",mode=" .. (action.stabilization_requested and "held_envelope" or "tight_target")
+            .. ",mode=" .. (origin_action and "origin_exact_field"
+                or action.stabilization_requested and "held_envelope" or "tight_target")
             .. ",target_dxz=" .. fmt_number(target_dxz)
             .. ",target_dy=" .. fmt_number(target_dy)
             .. ",target_limit=" .. fmt_number(target_limit)
@@ -1643,6 +1818,31 @@ local function update_debug_same_id_rescue(record, snapshot, now)
         if good then
             action.verification_samples = (action.verification_samples or 0) + 1
             if action.verification_samples >= 3 then
+                if origin_action and not action.area_rebuilt then
+                    action.area_rebuild_attempts = (action.area_rebuild_attempts or 0) + 1
+                    local rebuilt_ok, rebuilt = pcall(rebuild_artifact_zone_after_origin, record, action, snapshot)
+                    if not (rebuilt_ok and rebuilt) then
+                        provenance_log("origin_area_rebuild_pending", record, snapshot, record.primary_reason,
+                            "attempt=" .. tostring(action.area_rebuild_attempts)
+                            .. ",error=" .. tostring(rebuilt_ok and "placement_unavailable" or rebuilt))
+                        if action.area_rebuild_attempts >= 5 then
+                            action.status = "verification_failed"
+                            disable_provenance(record, "origin_area_rebuild",
+                                rebuilt_ok and "placement_unavailable_after_5_attempts" or rebuilt)
+                        end
+                        return
+                    end
+                    action.area_rebuilt = true
+                    linked_radius = tonumber(record.linked_radius)
+                end
+                if action.held_pending and not snapshot.online_exists then
+                    if not action.held_wait_online_reported then
+                        action.held_wait_online_reported = true
+                        provenance_log("stabilization_waiting_online", record, snapshot, record.primary_reason,
+                            "position_verified_server=true,area_rebuilt=" .. tostring(action.area_rebuilt == true))
+                    end
+                    return
+                end
                 action.status = "position_verified"
                 action.verified_at = now
                 action.monitoring_duration_ms = tonumber(action.monitoring_duration_ms) or 0
@@ -1832,6 +2032,7 @@ local function update_debug_same_id_rescue(record, snapshot, now)
     if (record.cooldown_remaining_ms or 0) > 0 then return end
 
     if not validate_same_id_action_context(record, snapshot, nil, "same_id_teleport_dispatch") then return end
+    local target = nil
     if rescue_reason == "origin_mismatch" then
         local current = snapshot.server_pos
         local zone_size = tonumber(record.zone_size)
@@ -1854,14 +2055,25 @@ local function update_debug_same_id_rescue(record, snapshot, now)
                 .. ",field_limit=" .. fmt_number(field_limit))
             return
         end
+        local target_error = nil
+        target, target_error = rvm_origin_field_target(record)
+        if not target then
+            disable_provenance(record, "same_id_origin_dispatch_evidence",
+                "fresh_rvm_field_unproven:" .. tostring(target_error))
+            return
+        end
+        record.target = target
+    else
+        target = compute_observe_target(record)
     end
-    local target = compute_observe_target(record)
     if not (target and target.valid and valid_vertex_id(target.lvid) and valid_vertex_id(target.gvid)) then
         disable_provenance(record, "same_id_teleport_target", "valid_target_unavailable")
         return
     end
-    if rescue_policy == "held_first"
-    and (target.source ~= "field_candidate" or target.support ~= "static_ray") then
+    local production_target_ok = rescue_reason == "origin_mismatch"
+        and target.source == "rvm_field_center" and target.support == "stock_lvid_static_ray"
+        or target.source == "field_candidate" and target.support == "static_ray"
+    if rescue_policy == "held_first" and not production_target_ok then
         disable_provenance(record, "same_id_teleport_target", "production_target_provenance_invalid")
         return
     end
@@ -1871,6 +2083,8 @@ local function update_debug_same_id_rescue(record, snapshot, now)
         disable_provenance(record, "same_id_teleport_identity", "server_or_section_mismatch")
         return
     end
+    if rescue_reason == "origin_mismatch"
+    and not prepare_origin_offline_transition(record, snapshot) then return end
 
     local action = {
         kind = "debug_same_id_teleport",
@@ -1880,7 +2094,7 @@ local function update_debug_same_id_rescue(record, snapshot, now)
         section = record.section,
         target = {
             pos = pos_table(target.pos), lvid = target.lvid, gvid = target.gvid,
-            source = target.source, support = target.support,
+            source = target.source, support = target.support, field_lvid = target.field_lvid,
         },
         requested_at = now,
         verification_checks = 0,
@@ -1895,10 +2109,21 @@ local function update_debug_same_id_rescue(record, snapshot, now)
     local moved, move_error = pcall(function()
         alife():teleport_object(record.artifact_id, target.gvid, target.lvid, pos_vector(target.pos))
     end)
+    local flags_restored = true
+    if rescue_reason == "origin_mismatch" then
+        flags_restored = restore_origin_switch_flags(record,
+            moved and "origin_teleport_dispatched" or "origin_teleport_failed")
+    end
     if not moved then
         action.status = "dispatch_failed"
         action.error = tostring(move_error)
         disable_provenance(record, "same_id_teleport_dispatch", move_error)
+        return
+    end
+    if not flags_restored then
+        action.status = "dispatch_failed"
+        action.error = "origin_switch_flags_restore_failed"
+        disable_provenance(record, "origin_switch_flags_restore", action.error)
         return
     end
     if stabilization_requested then
@@ -2440,6 +2665,69 @@ local function create_artifact_zone(artifact_id)
         end
     end
     report_artifact_center_failure(artifact_id, art.position, attempted, rejects)
+    return false
+end
+
+rebuild_artifact_zone_after_origin = function(record, action, snapshot)
+    if not (record and action and snapshot and snapshot.server_exists
+    and action.reason == "origin_mismatch" and action.target
+    and action.target.source == "rvm_field_center"
+    and action.target.support == "stock_lvid_static_ray") then return false end
+    local old_key = record.linked_anchor_id and tostring(record.linked_anchor_id) or nil
+    local zone = old_key and state.zones[old_key] or nil
+    if not (zone and not zone.closed and zone.kind == "artifact"
+    and tonumber(zone.artifact_id) == tonumber(record.artifact_id)) then return false end
+    local artifact_pos = snapshot.online_pos or snapshot.server_pos
+    if not artifact_pos or distance_xz(artifact_pos, action.target.pos) > 4
+    or math.abs(artifact_pos.y - action.target.pos.y) > 4 then return false end
+
+    local radius = tonumber(zone.radius) or random_radius()
+    local fmin = math.min(1, math.max(0, balanced("artifact_offset_fraction_min", 0.35)))
+    local fmax = math.min(1, math.max(fmin, balanced("artifact_offset_fraction_max", 0.80)))
+    local offset_limit = radius * fmax
+    local attempts = math.floor(C.get_number("global", "placement_attempts", 60))
+    for _ = 1, attempts do
+        local angle = math.random() * math.pi * 2
+        local offset = radius * (fmin + math.random() * (fmax - fmin))
+        local candidate = vector():set(artifact_pos.x + math.cos(angle) * offset,
+            artifact_pos.y, artifact_pos.z + math.sin(angle) * offset)
+        local lvid = valid_vertex(candidate)
+        local fixed = lvid and level.vertex_position(lvid) or nil
+        local snapped_offset = fixed and distance_xz(fixed, artifact_pos) or nil
+        if fixed and snapped_offset <= offset_limit and separated(fixed, true) then
+            local anchor_id, center, paw_anchor = create_anchor(fixed)
+            if anchor_id then
+                -- Commit the replacement only after its new anchor exists.
+                -- The artifact and all RVM field objects are left untouched.
+                remove_spot(zone)
+                release_anchor(zone)
+                state.zones[old_key] = nil
+                for lineage_id, anchor_key in pairs(state.artifact_zone or {}) do
+                    if tostring(anchor_key) == old_key then
+                        state.artifact_zone[lineage_id] = tostring(anchor_id)
+                    end
+                end
+                zone.anchor_id = anchor_id
+                zone.center = center
+                zone.radius = radius
+                zone.artifact_offset = snapped_offset
+                zone.artifact_offset_fraction = radius > 0 and snapped_offset / radius or 0
+                zone.paw_anchor = paw_anchor
+                zone.origin_rebuilt = true
+                zone.origin_rebuilt_from_anchor = tonumber(old_key)
+                state.zones[tostring(anchor_id)] = zone
+                state.artifact_zone[tostring(record.artifact_id)] = tostring(anchor_id)
+                link_artifact_provenance(zone)
+                add_zone_spots(zone)
+                provenance_log("origin_area_rebuilt", record, snapshot, action.reason,
+                    "old_anchor=" .. tostring(old_key) .. ",new_anchor=" .. tostring(anchor_id)
+                    .. ",center=" .. fmt_position(center) .. ",radius=" .. tostring(radius))
+                release_log("artifact area rebuilt after origin recovery id=%s anchor=%s radius=%s",
+                    tostring(record.artifact_id), tostring(anchor_id), tostring(radius))
+                return true
+            end
+        end
+    end
     return false
 end
 
@@ -3862,6 +4150,13 @@ end
 
 local function actor_on_first_update()
     install_hooks()
+    for _, record in pairs(state.artifact_provenance or {}) do
+        local transition = record.origin_relocation
+        if transition and transition.flags_forced
+        and not artifact_rescue_action_policy(record, "origin_mismatch") then
+            restore_origin_switch_flags(record, "first_update_actions_disabled")
+        end
+    end
     local current_level = level.name()
     if state.pending_transition and state.level_name then
         local raid_level = z_raid_item_travel_dungeons and z_raid_item_travel_dungeons.level_name_dunge
@@ -3916,6 +4211,9 @@ local function actor_on_update()
 end
 
 local function on_before_level_changing()
+    if not restore_all_origin_switch_flags("before_level_changing") then
+        printf(PREFIX .. " ERROR origin switch flags restore incomplete before level change")
+    end
     if release_all_held_stabilizations then
         local ok, released = pcall(release_all_held_stabilizations, "before_level_changing")
         if not ok or not released then
@@ -3932,6 +4230,9 @@ local function on_before_level_changing()
 end
 
 local function save_state(m_data)
+    if not restore_all_origin_switch_flags("pre_save") then
+        printf(PREFIX .. " ERROR origin switch flags pre-save restore incomplete")
+    end
     if release_all_held_stabilizations then
         local ok, released = pcall(release_all_held_stabilizations, "pre_save")
         if not ok or not released then
@@ -4018,8 +4319,11 @@ saved_origin_evidence_valid = function(record)
         and origin.nav_bad == true
         and record.section ~= nil and record.level ~= nil
         and valid_vertex_id(first.gvid)
-        and target.valid == true and target.source == "field_candidate"
-        and target.support == "static_ray"
+        and record.rvm_field and valid_vertex_id(record.rvm_field.lvid)
+        and record.rvm_field.anom_zone == tostring(record.anom_zone)
+        and target.valid == true and target.source == "rvm_field_center"
+        and target.support == "stock_lvid_static_ray"
+        and target.field_lvid == record.rvm_field.lvid
         and valid_vertex_id(target.lvid) and valid_vertex_id(target.gvid)
 end
 
@@ -4088,6 +4392,27 @@ local function migrate_artifact_provenance(previous_schema)
                     record.reason = "saved_origin_evidence_incomplete"
                     record.origin.confirmed = false
                 end
+            end
+            if saved_provenance_schema > 0 and saved_provenance_schema < 4
+            and (record.primary_reason == "origin_mismatch" or record.reason == "origin_mismatch"
+                or record.causal_origin == "origin_mismatch")
+            and record.state ~= "owned" and record.state ~= "closed" and record.state ~= "released" then
+                -- Schema 3 guessed a surface from X/Z and could select another
+                -- vertical layer. Preserve its audit trail, but require a fresh
+                -- exact match against RVM's own field registry before acting.
+                record.legacy_origin_actions = record.actions
+                record.actions = {}
+                record.target = nil
+                record.origin_target = nil
+                record.rvm_field = nil
+                record.origin_relocation = nil
+                record.origin.checked = false
+                record.origin.confirmed = false
+                record.origin.registry_error = nil
+                record.primary_reason = nil
+                record.reason = "origin_rvm_field_revalidation_required"
+                record.state = "observing_server"
+                record.disabled = false
             end
             if saved_provenance_schema > 0 and saved_provenance_schema < ARTIFACT_PROVENANCE_SCHEMA then
                 record.provenance_schema = ARTIFACT_PROVENANCE_SCHEMA

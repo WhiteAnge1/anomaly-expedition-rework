@@ -30,18 +30,37 @@ function Test-OriginCandidate {
     return $InitialOriginDistance -le 2 -and $CurrentOriginDistance -le 2 `
         -and $InitialFieldDistance -gt $fieldLimit -and $CurrentFieldDistance -gt $fieldLimit `
         -and $NavBad -and (-not $Owned) -and $IdentityValid `
-        -and $TargetSource -eq 'field_candidate' -and $TargetSupport -eq 'static_ray'
+        -and $TargetSource -eq 'rvm_field_center' -and $TargetSupport -eq 'stock_lvid_static_ray'
 }
 
 # A legitimate field near world origin must never be classified from origin
 # alone.  Recovery requires matching initial/current evidence, identity and
 # exact production target provenance.
-Assert-True (-not (Test-OriginCandidate 0.2 0.3 8 9 10 $true $false $true 'field_candidate' 'static_ray')) 'legitimate near-origin field was classified'
-Assert-True (Test-OriginCandidate 0.2 0.3 40 41 10 $true $false $true 'field_candidate' 'static_ray') 'strict origin mismatch was not classified'
-Assert-True (-not (Test-OriginCandidate 0.2 0.3 40 41 10 $false $false $true 'field_candidate' 'static_ray')) 'origin classifier ignored nav guard'
-Assert-True (-not (Test-OriginCandidate 0.2 0.3 40 41 10 $true $true $true 'field_candidate' 'static_ray')) 'origin classifier ignored ownership guard'
-Assert-True (-not (Test-OriginCandidate 0.2 0.3 40 41 10 $true $false $false 'field_candidate' 'static_ray')) 'origin classifier ignored identity guard'
-Assert-True (-not (Test-OriginCandidate 0.2 0.3 40 41 10 $true $false $true 'field_candidate' 'none')) 'origin classifier ignored static-ray provenance'
+Assert-True (-not (Test-OriginCandidate 0.2 0.3 8 9 10 $true $false $true 'rvm_field_center' 'stock_lvid_static_ray')) 'legitimate near-origin field was classified'
+Assert-True (Test-OriginCandidate 0.2 0.3 40 41 10 $true $false $true 'rvm_field_center' 'stock_lvid_static_ray') 'strict origin mismatch was not classified'
+Assert-True (-not (Test-OriginCandidate 0.2 0.3 40 41 10 $false $false $true 'rvm_field_center' 'stock_lvid_static_ray')) 'origin classifier ignored nav guard'
+Assert-True (-not (Test-OriginCandidate 0.2 0.3 40 41 10 $true $true $true 'rvm_field_center' 'stock_lvid_static_ray')) 'origin classifier ignored ownership guard'
+Assert-True (-not (Test-OriginCandidate 0.2 0.3 40 41 10 $true $false $false 'rvm_field_center' 'stock_lvid_static_ray')) 'origin classifier ignored identity guard'
+Assert-True (-not (Test-OriginCandidate 0.2 0.3 40 41 10 $true $false $true 'field_candidate' 'static_ray')) 'origin classifier accepted a guessed field candidate'
+
+function Resolve-RvmFieldFixture {
+    param([int]$ArtifactId, [string]$Template, [double]$Size, [object[]]$Registry)
+    $matches = @($Registry | Where-Object { $_.artefact_id -eq $ArtifactId })
+    if ($matches.Count -ne 1) { return $null }
+    $field = $matches[0]
+    if ($field.anom_zone -ne $Template -or [Math]::Abs($field.size_zone - $Size) -gt 0.1 `
+        -or $field.target_lvid -ne $field.field_lvid -or -not $field.static_support) { return $null }
+    return $field
+}
+$fieldFixtures = @(
+    @{ artefact_id=6910; anom_zone='electr_1_1'; size_zone=10; field_lvid=4294; target_lvid=4294; static_support=$true },
+    @{ artefact_id=6930; anom_zone='chem_2_1'; size_zone=16; field_lvid=7712; target_lvid=7712; static_support=$true }
+)
+Assert-True ($null -ne (Resolve-RvmFieldFixture 6910 'electr_1_1' 10 $fieldFixtures)) 'generic registry resolver rejected electr family fixture'
+Assert-True ($null -ne (Resolve-RvmFieldFixture 6930 'chem_2_1' 16 $fieldFixtures)) 'generic registry resolver rejected chem family fixture'
+Assert-True ($null -eq (Resolve-RvmFieldFixture 9999 'chem_2_1' 16 $fieldFixtures)) 'missing registry match did not fail closed'
+$ambiguousFixtures = @($fieldFixtures[0], @{} + $fieldFixtures[0])
+Assert-True ($null -eq (Resolve-RvmFieldFixture 6910 'electr_1_1' 10 $ambiguousFixtures)) 'ambiguous registry match did not fail closed'
 
 function Invoke-PreventiveSpawnModel {
     param([object[]]$Candidates, [int]$MaximumAttempts, [double]$FieldLimit)
@@ -178,52 +197,63 @@ $schema1 = @{ provenance_schema = 1; state = 'rescue_pending'; reason = 'undergr
 if ($schema1.provenance_schema -eq 1 -and $schema1.rolling.confirmed) {
     $schema1.primary_reason = 'rolling'
     $schema1.reason = 'rolling'
-    $schema1.provenance_schema = 3
+    $schema1.provenance_schema = 4
 }
-Assert-True ($schema1.provenance_schema -eq 3 -and $schema1.primary_reason -eq 'rolling' -and $schema1.reason -eq 'rolling') 'schema-1 causal migration failed'
+Assert-True ($schema1.provenance_schema -eq 4 -and $schema1.primary_reason -eq 'rolling' -and $schema1.reason -eq 'rolling') 'schema-1 causal migration failed'
 
-# Schema-2 strict-origin saves retain the captured original identity and become
-# actionable only after a fresh post-load snapshot. Ownership remains terminal.
+# Schema-3 origin saves used a guessed X/Z target. They retain their audit trail
+# but are reset to observation until the live RVM field registry proves exactly
+# one field and supplies its original level vertex.
 $originSave = @{
-    provenance_schema = 2; state = 'rescue_pending'; reason = 'origin_mismatch';
+    provenance_schema = 3; state = 'rescue_pending'; reason = 'origin_mismatch';
     primary_reason = 'origin_mismatch'; artifact_id = 6910; section = 'af_ball'; level = 'y04_pole';
     zone_size = 10; spawn_input_pos = @{ x=40; y=0; z=0 };
     first_server = @{ pos=@{x=0.2;y=0;z=0.1}; lvid=4294967295; gvid=5337 };
     target = @{ valid=$true; source='field_candidate'; support='static_ray'; lvid=123; gvid=5337 };
     origin = @{ checked=$true; confirmed=$false; near_origin=$true; nav_bad=$true };
     ownership = @{ parent_id = 65535 };
-    awaiting_fresh_snapshot = $false; dispatched = $false
+    actions = @(@{ reason='origin_mismatch'; status='verification_failed' }); dispatched = $false
 }
 $originRestored = $originSave | ConvertTo-Json -Depth 8 | ConvertFrom-Json
-$originStoredEvidence = $originRestored.origin.near_origin -and $originRestored.origin.nav_bad `
-    -and $originRestored.target.valid -and $originRestored.target.source -eq 'field_candidate' `
-    -and $originRestored.target.support -eq 'static_ray' -and $originRestored.section -eq 'af_ball' `
-    -and $originRestored.level -eq 'y04_pole'
-if ($originRestored.provenance_schema -lt 3 -and $originRestored.state -eq 'rescue_pending' `
-    -and $originRestored.reason -eq 'origin_mismatch' -and $originStoredEvidence) {
-    $originRestored.provenance_schema = 3
-    $originRestored.primary_reason = 'origin_mismatch'
+$originRestored | Add-Member -NotePropertyName legacy_origin_actions -NotePropertyValue $originRestored.actions
+$originRestored.actions = @()
+$originRestored.target = $null
+$originRestored.origin.checked = $false
+$originRestored.origin.confirmed = $false
+$originRestored.primary_reason = $null
+$originRestored.reason = 'origin_rvm_field_revalidation_required'
+$originRestored.state = 'observing_server'
+$originRestored.provenance_schema = 4
+Assert-True ($originRestored.state -eq 'observing_server' -and -not $originRestored.origin.checked `
+    -and $null -eq $originRestored.target -and $originRestored.legacy_origin_actions.Count -eq 1) 'legacy origin save did not reset to exact-field revalidation'
+
+$rvmField = @{ artefact_id=6910; anom_zone='electr_1_1'; size_zone=10; lvid=123; pos=@{x=40;y=0;z=0} }
+$exactTarget = @{ valid=$true; source='rvm_field_center'; support='stock_lvid_static_ray'; field_lvid=123; lvid=123; gvid=5337 }
+$exactFieldProven = $rvmField.artefact_id -eq $originRestored.artifact_id `
+    -and $rvmField.size_zone -eq $originRestored.zone_size `
+    -and $exactTarget.field_lvid -eq $rvmField.lvid `
+    -and $exactTarget.source -eq 'rvm_field_center' -and $exactTarget.support -eq 'stock_lvid_static_ray'
+if ($exactFieldProven -and $originRestored.ownership.parent_id -eq 65535) {
     $originRestored.origin.confirmed = $true
-    $originRestored.awaiting_fresh_snapshot = $true
-}
-if ($originRestored.awaiting_fresh_snapshot) { $originRestored.awaiting_fresh_snapshot = $false }
-Assert-True (-not $originRestored.dispatched -and $originRestored.origin.confirmed) 'origin save dispatched on load or lost confirmation'
-if (-not $originRestored.awaiting_fresh_snapshot -and $originRestored.ownership.parent_id -eq 65535 `
-    -and $originRestored.origin.confirmed -and $originRestored.artifact_id -eq 6910 `
-    -and $originRestored.section -eq 'af_ball' -and $originRestored.level -eq 'y04_pole') {
     $originRestored.dispatched = $true
 }
-Assert-True ($originRestored.dispatched) 'strict origin save was not eligible after fresh snapshot'
+Assert-True ($originRestored.dispatched) 'strict origin save was not eligible after exact RVM field proof'
 $originRestored.ownership.parent_id = 1404
 $originRestored.dispatched = $false
 if ($originRestored.ownership.parent_id -ne 65535) { $originRestored.state = 'owned' }
 Assert-True ($originRestored.state -eq 'owned' -and -not $originRestored.dispatched) 'origin recovery ignored NPC/actor ownership after load'
-$weakOriginSave = $originSave | ConvertTo-Json -Depth 8 | ConvertFrom-Json
-$weakOriginSave.target.support = 'none'
-$weakOriginEvidence = $weakOriginSave.origin.near_origin -and $weakOriginSave.origin.nav_bad `
-    -and $weakOriginSave.target.source -eq 'field_candidate' -and $weakOriginSave.target.support -eq 'static_ray'
-if (-not $weakOriginEvidence) { $weakOriginSave.state = 'disabled'; $weakOriginSave.reason = 'saved_origin_evidence_incomplete' }
-Assert-True ($weakOriginSave.state -eq 'disabled') 'weak saved origin evidence did not fail closed during migration'
+
+# The online shell must disappear before teleport; timeout restores the original
+# switch policy and fails closed without releasing or recreating the object.
+$transition = @{ online=$true; wait_checks=0; teleported=$false; flags_restored=$false }
+while ($transition.online -and $transition.wait_checks -lt 10) { $transition.wait_checks++ }
+if ($transition.wait_checks -ge 10) { $transition.flags_restored=$true }
+Assert-True (-not $transition.teleported -and $transition.flags_restored) 'origin online-shell timeout did not fail closed/restore flags'
+$transition = @{ online=$true; wait_checks=0; teleported=$false; flags_restored=$false }
+$transition.wait_checks++
+$transition.online=$false
+if (-not $transition.online) { $transition.teleported=$true; $transition.flags_restored=$true }
+Assert-True ($transition.teleported -and $transition.flags_restored) 'origin offline transition did not gate teleport/restore flags'
 
 # Load never dispatches an action.  The first fresh snapshot is consumed only
 # as a classifier/recovery gate; the following update may dispatch if the item
@@ -350,7 +380,7 @@ Assert-True ($runtimeLog -eq 'check=1,accepted=true,mode=held_envelope,target_dx
 Assert-True (-not $verificationLogBlock.Contains('round1(')) 'verification logging regressed to undeclared round1 helper'
 
 foreach ($needle in @(
-    'schema = 4', 'artifact_provenance = {}', 'local ARTIFACT_PROVENANCE_SCHEMA = 3',
+    'schema = 4', 'artifact_provenance = {}', 'local ARTIFACT_PROVENANCE_SCHEMA = 4',
     'local ARTIFACT_RESCUE_DEBUG_IDS = { [1407] = true, [6362] = true }',
     'spawn_input_pos', 'first_server', 'last_good_server', 'last_good_online',
     'linked_anchor_id', 'linked_radius', 'ownership', 'lineage_ids', 'cooldown_remaining_ms',
@@ -369,9 +399,19 @@ foreach ($needle in @(
     'x = record.spawn_input_pos.x + offset.x',
     'z = record.spawn_input_pos.z + offset.z',
     'distance_xz(target.pos, record.spawn_input_pos) <= maximum',
-    'target.source ~= "field_candidate" or target.support ~= "static_ray"',
+    'target.source == "rvm_field_center" and target.support == "stock_lvid_static_ray"',
     'production_target_provenance_invalid',
-    'source = target.source, support = target.support',
+    'source = target.source, support = target.support, field_lvid = target.field_lvid',
+    'local function rvm_origin_field_target(record)', 'raid_anomalys.save_state',
+    'rvm_field_match_count:', 'rvm_field_provenance_mismatch', 'rvm_field_target_layer_mismatch',
+    'local function prepare_origin_offline_transition(record, snapshot)',
+    'origin_offline_requested', 'online_shell_persisted_after_10_checks',
+    'flags_restored = restore_origin_switch_flags(record,',
+    'restore_origin_switch_flags(record, "first_update_actions_disabled")',
+    'restore_all_origin_switch_flags("before_level_changing")',
+    'restore_all_origin_switch_flags("pre_save")',
+    'rebuild_artifact_zone_after_origin = function(record, action, snapshot)',
+    'origin_area_rebuilt', 'origin_rvm_field_revalidation_required',
     'production_same_id_teleport',
     'local function guarded_rvm_artifact_spawn(base_spawn, anom_zone, field_pos, level_tier)',
     'inner_env ~= raid_anomalys', 'stock_inner_environment_unverified; spawn deferred',
@@ -381,7 +421,7 @@ foreach ($needle in @(
     'rawset(raid_anomalys, "alife_create_item", saved_create)',
     'alife():teleport_object(record.artifact_id, target.gvid, target.lvid, pos_vector(target.pos))',
     'record.state = "verifying"', 'record.state = "monitoring"', 'action.status = "position_verified"',
-    'position_verification_sample', 'mode=" .. (action.stabilization_requested and "held_envelope" or "tight_target")',
+    'position_verification_sample', 'origin_action and "origin_exact_field"',
     'target_limit = math.max(4, math.min(32, linked_radius * 0.5))',
     'vertical_limit = math.max(4, math.min(16, linked_radius * 0.25))',
     'target_envelope_not_reached_after_10_checks',
