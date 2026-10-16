@@ -26,7 +26,7 @@ local ARTIFACT_RESCUE_DEBUG_IDS = { [1407] = true, [6362] = true }
 local release_held_stabilization = nil
 local release_all_held_stabilizations = nil
 local saved_origin_evidence_valid = nil
-local rebuild_artifact_zone_after_origin = nil
+local ORIGIN = {}
 
 -- Category selection is a separate weighted roll. Every entry points to an
 -- exact online_offline_group section; the section's fixed npc list is the
@@ -554,7 +554,7 @@ end
 -- than guessing from our yellow search area: the latter was generated from the
 -- broken artifact position and may itself be stale.  Exact artifact ID plus
 -- the saved field vertex, template, center and size identifies one RVM field.
-local function rvm_origin_field_target(record)
+function ORIGIN.field_target(record)
     if not (record and raid_anomalys and type(raid_anomalys.save_state) == "function") then
         return nil, "rvm_field_registry_unavailable"
     end
@@ -662,7 +662,7 @@ local function provenance_log(event, record, snapshot, reason, extra)
         tostring(record.position_source or "none"), fmt_position(record.target and record.target.pos), tostring(extra or "none"))
 end
 
-local function server_switch_flag(server, name)
+function ORIGIN.server_switch_flag(server, name)
     if not server then return nil end
     local ok, method = pcall(function() return server[name] end)
     if not ok or type(method) ~= "function" then return nil end
@@ -670,7 +670,7 @@ local function server_switch_flag(server, name)
     return called and type(value) == "boolean" and value or nil
 end
 
-local function restore_origin_switch_flags(record, context)
+function ORIGIN.restore_switch_flags(record, context)
     local transition = record and record.origin_relocation
     if not (transition and transition.flags_forced and not transition.flags_restored) then return true end
     local sim = alife()
@@ -692,12 +692,12 @@ local function restore_origin_switch_flags(record, context)
     return true
 end
 
-local function restore_all_origin_switch_flags(context)
+function ORIGIN.restore_all_switch_flags(context)
     local restored = true
     for _, record in pairs(state.artifact_provenance or {}) do
         local transition = record.origin_relocation
         if transition and transition.flags_forced then
-            if not restore_origin_switch_flags(record, context) then restored = false end
+            if not ORIGIN.restore_switch_flags(record, context) then restored = false end
         end
     end
     return restored
@@ -705,7 +705,7 @@ end
 
 local function terminal_provenance(record, terminal, reason, snapshot)
     if not record or record.state == terminal then return end
-    restore_origin_switch_flags(record, "terminal_" .. tostring(terminal))
+    ORIGIN.restore_switch_flags(record, "terminal_" .. tostring(terminal))
     if release_held_stabilization then
         local released_ok, released_error = pcall(release_held_stabilization,
             record, snapshot, "terminal_" .. tostring(terminal) .. ":" .. tostring(reason))
@@ -727,7 +727,7 @@ end
 
 local function disable_provenance(record, context, err)
     if not record then return end
-    restore_origin_switch_flags(record, "disable_" .. tostring(context))
+    ORIGIN.restore_switch_flags(record, "disable_" .. tostring(context))
     if release_held_stabilization then
         pcall(release_held_stabilization, record, nil, "record_disabled:" .. tostring(context))
     end
@@ -968,7 +968,7 @@ end
 
 local function observe_origin_candidate(record, snapshot)
     if record.origin.checked or not snapshot.server_exists or not snapshot.server_pos then return end
-    local target, field_error = rvm_origin_field_target(record)
+    local target, field_error = ORIGIN.field_target(record)
     if not target then
         if record.origin.registry_error ~= field_error then
             record.origin.registry_error = field_error
@@ -1297,13 +1297,13 @@ end
 -- origin recovery only, request a normal ALife offline transition, wait until
 -- the exact online object is gone, then teleport and restore the original
 -- switch policy.  No object is released or recreated.
-local function prepare_origin_offline_transition(record, snapshot)
+function ORIGIN.prepare_offline_transition(record, snapshot)
     if not snapshot.online_exists then return true end
     local transition = record.origin_relocation
     if transition and transition.flags_forced then
         transition.wait_checks = (transition.wait_checks or 0) + 1
         if transition.wait_checks >= 10 then
-            restore_origin_switch_flags(record, "origin_offline_timeout")
+            ORIGIN.restore_switch_flags(record, "origin_offline_timeout")
             disable_provenance(record, "origin_offline_transition", "online_shell_persisted_after_10_checks")
         end
         return false
@@ -1311,8 +1311,8 @@ local function prepare_origin_offline_transition(record, snapshot)
 
     local server_ok, server = pcall(alife_object, record.artifact_id)
     server = server_ok and server or nil
-    local original_online = server_switch_flag(server, "can_switch_online")
-    local original_offline = server_switch_flag(server, "can_switch_offline")
+    local original_online = ORIGIN.server_switch_flag(server, "can_switch_online")
+    local original_offline = ORIGIN.server_switch_flag(server, "can_switch_offline")
     if type(original_online) ~= "boolean" or type(original_offline) ~= "boolean" then
         disable_provenance(record, "origin_offline_transition", "switch_policy_unreadable")
         return false
@@ -1335,7 +1335,7 @@ local function prepare_origin_offline_transition(record, snapshot)
     local online_ok, online_error = pcall(sim.set_switch_online, sim, record.artifact_id, false)
     local offline_ok, offline_error = pcall(sim.set_switch_offline, sim, record.artifact_id, true)
     if not (online_ok and offline_ok) then
-        restore_origin_switch_flags(record, "origin_offline_request_failed")
+        ORIGIN.restore_switch_flags(record, "origin_offline_request_failed")
         disable_provenance(record, "origin_offline_transition",
             "request_failed,online_error=" .. tostring(online_error)
             .. ",offline_error=" .. tostring(offline_error))
@@ -1820,7 +1820,7 @@ local function update_debug_same_id_rescue(record, snapshot, now)
             if action.verification_samples >= 3 then
                 if origin_action and not action.area_rebuilt then
                     action.area_rebuild_attempts = (action.area_rebuild_attempts or 0) + 1
-                    local rebuilt_ok, rebuilt = pcall(rebuild_artifact_zone_after_origin, record, action, snapshot)
+                    local rebuilt_ok, rebuilt = pcall(ORIGIN.rebuild_artifact_zone, record, action, snapshot)
                     if not (rebuilt_ok and rebuilt) then
                         provenance_log("origin_area_rebuild_pending", record, snapshot, record.primary_reason,
                             "attempt=" .. tostring(action.area_rebuild_attempts)
@@ -2056,7 +2056,7 @@ local function update_debug_same_id_rescue(record, snapshot, now)
             return
         end
         local target_error = nil
-        target, target_error = rvm_origin_field_target(record)
+        target, target_error = ORIGIN.field_target(record)
         if not target then
             disable_provenance(record, "same_id_origin_dispatch_evidence",
                 "fresh_rvm_field_unproven:" .. tostring(target_error))
@@ -2084,7 +2084,7 @@ local function update_debug_same_id_rescue(record, snapshot, now)
         return
     end
     if rescue_reason == "origin_mismatch"
-    and not prepare_origin_offline_transition(record, snapshot) then return end
+    and not ORIGIN.prepare_offline_transition(record, snapshot) then return end
 
     local action = {
         kind = "debug_same_id_teleport",
@@ -2111,7 +2111,7 @@ local function update_debug_same_id_rescue(record, snapshot, now)
     end)
     local flags_restored = true
     if rescue_reason == "origin_mismatch" then
-        flags_restored = restore_origin_switch_flags(record,
+        flags_restored = ORIGIN.restore_switch_flags(record,
             moved and "origin_teleport_dispatched" or "origin_teleport_failed")
     end
     if not moved then
@@ -2668,7 +2668,7 @@ local function create_artifact_zone(artifact_id)
     return false
 end
 
-rebuild_artifact_zone_after_origin = function(record, action, snapshot)
+function ORIGIN.rebuild_artifact_zone(record, action, snapshot)
     if not (record and action and snapshot and snapshot.server_exists
     and action.reason == "origin_mismatch" and action.target
     and action.target.source == "rvm_field_center"
@@ -4150,11 +4150,16 @@ end
 
 local function actor_on_first_update()
     install_hooks()
+    if not ORIGIN.startup_reported then
+        ORIGIN.startup_reported = true
+        printf(PREFIX .. " startup self-test ok version=0.2.1-alpha provenance_schema=%s origin_namespace=true",
+            tostring(ARTIFACT_PROVENANCE_SCHEMA))
+    end
     for _, record in pairs(state.artifact_provenance or {}) do
         local transition = record.origin_relocation
         if transition and transition.flags_forced
         and not artifact_rescue_action_policy(record, "origin_mismatch") then
-            restore_origin_switch_flags(record, "first_update_actions_disabled")
+            ORIGIN.restore_switch_flags(record, "first_update_actions_disabled")
         end
     end
     local current_level = level.name()
@@ -4211,7 +4216,7 @@ local function actor_on_update()
 end
 
 local function on_before_level_changing()
-    if not restore_all_origin_switch_flags("before_level_changing") then
+    if not ORIGIN.restore_all_switch_flags("before_level_changing") then
         printf(PREFIX .. " ERROR origin switch flags restore incomplete before level change")
     end
     if release_all_held_stabilizations then
@@ -4230,7 +4235,7 @@ local function on_before_level_changing()
 end
 
 local function save_state(m_data)
-    if not restore_all_origin_switch_flags("pre_save") then
+    if not ORIGIN.restore_all_switch_flags("pre_save") then
         printf(PREFIX .. " ERROR origin switch flags pre-save restore incomplete")
     end
     if release_all_held_stabilizations then

@@ -1,6 +1,7 @@
 ﻿param(
     [string]$ModRoot = (Split-Path -Parent $PSScriptRoot),
     [string]$PythonDeps = "",
+    [string]$LuaRuntimeDeps = "",
     [string]$BuildModsRoot = "",
     [ValidateSet('fast','full','watcher','geometry','loot')]
     [string]$Profile = 'full'
@@ -29,6 +30,7 @@ $required = @(
     'tools\test_artifact_rescue_policy.ps1',
     'tools\test_artifact_stabilization_policy.ps1',
     'tools\test_artifact_held_stabilization_policy.ps1',
+    'tools\test_lua51_compile.py',
     'docs\ARTIFACT-RESCUE-DESIGN.md',
     'docs\ARTIFACT-RESCUE-RESEARCH.md',
     'docs\ARTIFACT-RESCUE-OBSERVE.md'
@@ -333,6 +335,24 @@ if ($Profile -eq 'full' -or $Profile -eq 'fast') {
     & (Join-Path $ModRoot 'tools\test_artifact_rescue_policy.ps1') -ModRoot $ModRoot
     & (Join-Path $ModRoot 'tools\test_artifact_stabilization_policy.ps1') -ModRoot $ModRoot
     & (Join-Path $ModRoot 'tools\test_artifact_held_stabilization_policy.ps1') -ModRoot $ModRoot
+
+    if (-not $LuaRuntimeDeps) {
+        $projectRoot = Split-Path -Parent (Split-Path -Parent $ModRoot)
+        $candidate = Join-Path $projectRoot 'work\lua-runtime'
+        if (Test-Path -LiteralPath $candidate) { $LuaRuntimeDeps = $candidate }
+    }
+    if (-not $LuaRuntimeDeps -or -not (Test-Path -LiteralPath $LuaRuntimeDeps)) {
+        $failures.Add('Lua 5.1/LuaJIT runtime dependency missing; pass -LuaRuntimeDeps')
+    } else {
+        $savedPythonPath = $env:PYTHONPATH
+        try {
+            $env:PYTHONPATH = $LuaRuntimeDeps
+            python (Join-Path $ModRoot 'tools\test_lua51_compile.py') $ModRoot
+            if ($LASTEXITCODE -ne 0) { $failures.Add('Lua 5.1/LuaJIT compile failed') }
+        } finally {
+            $env:PYTHONPATH = $savedPythonPath
+        }
+    }
 }
 if ($Profile -eq 'full' -or $Profile -eq 'loot') {
     & (Join-Path $ModRoot 'tools\test_loot_policy.ps1') -Samples 200000
