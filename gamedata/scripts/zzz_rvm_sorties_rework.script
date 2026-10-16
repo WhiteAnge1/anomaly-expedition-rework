@@ -1605,12 +1605,12 @@ local function update_debug_same_id_rescue(record, snapshot, now)
             "check=" .. tostring(action.verification_checks)
             .. ",accepted=" .. tostring(good)
             .. ",mode=" .. (action.stabilization_requested and "held_envelope" or "tight_target")
-            .. ",target_dxz=" .. tostring(round1(target_dxz))
-            .. ",target_dy=" .. tostring(round1(target_dy))
-            .. ",target_limit=" .. tostring(round1(target_limit))
-            .. ",vertical_limit=" .. tostring(round1(vertical_limit))
-            .. ",anchor_dxz=" .. tostring(anchor_dxz and round1(anchor_dxz) or "none")
-            .. ",tether_limit=" .. tostring(tether_limit and round1(tether_limit) or "none"))
+            .. ",target_dxz=" .. fmt_number(target_dxz)
+            .. ",target_dy=" .. fmt_number(target_dy)
+            .. ",target_limit=" .. fmt_number(target_limit)
+            .. ",vertical_limit=" .. fmt_number(vertical_limit)
+            .. ",anchor_dxz=" .. tostring(anchor_dxz and fmt_number(anchor_dxz) or "none")
+            .. ",tether_limit=" .. tostring(tether_limit and fmt_number(tether_limit) or "none"))
         if good then
             action.verification_samples = (action.verification_samples or 0) + 1
             if action.verification_samples >= 3 then
@@ -1655,9 +1655,9 @@ local function update_debug_same_id_rescue(record, snapshot, now)
             if action.verification_checks >= 10 then
                 action.status = "verification_failed"
                 disable_provenance(record, "same_id_teleport_verify",
-                    "target_envelope_not_reached_after_10_checks,target_dxz=" .. tostring(round1(target_dxz))
-                    .. ",target_dy=" .. tostring(round1(target_dy))
-                    .. ",anchor_dxz=" .. tostring(anchor_dxz and round1(anchor_dxz) or "none"))
+                    "target_envelope_not_reached_after_10_checks,target_dxz=" .. fmt_number(target_dxz)
+                    .. ",target_dy=" .. fmt_number(target_dy)
+                    .. ",anchor_dxz=" .. tostring(anchor_dxz and fmt_number(anchor_dxz) or "none"))
             end
         end
         return

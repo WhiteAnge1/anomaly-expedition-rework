@@ -231,6 +231,35 @@ foreach ($check in 1..10) {
 }
 Assert-True ($outsideEnvelopeState -eq 'disabled') 'object outside held envelope did not fail closed after 10 checks'
 
+# Execute a model of the production diagnostic path using the formatter name
+# extracted from the actual Lua block.  This catches undeclared/global helper
+# calls such as the field-found round1() failure instead of merely checking
+# that a logging string exists.
+$verificationLogStart = $main.IndexOf('provenance_log("position_verification_sample"')
+$verificationLogEnd = $main.IndexOf('if good then', $verificationLogStart)
+$verificationLogBlock = if ($verificationLogStart -ge 0 -and $verificationLogEnd -gt $verificationLogStart) {
+    $main.Substring($verificationLogStart, $verificationLogEnd - $verificationLogStart)
+} else { '' }
+$formatterCall = [regex]::Match($verificationLogBlock, 'target_dxz="\s*\.\.\s*([A-Za-z_][A-Za-z0-9_]*)\(target_dxz\)')
+$formatterName = if ($formatterCall.Success) { $formatterCall.Groups[1].Value } else { '' }
+$formatterDeclaration = if ($formatterName) { $main.IndexOf("local function $formatterName(") } else { -1 }
+$formatterAvailable = $formatterDeclaration -ge 0 -and $formatterDeclaration -lt $verificationLogStart
+$formatNumberModel = if ($formatterAvailable -and $formatterName -eq 'fmt_number') {
+    { param([double]$Value) ([Math]::Floor($Value * 10 + 0.5) / 10).ToString([Globalization.CultureInfo]::InvariantCulture) }
+} else { $null }
+$runtimeLog = $null
+$runtimeLogError = $null
+try {
+    if ($null -eq $formatNumberModel) { throw "formatter_unavailable:$formatterName" }
+    $runtimeLog = 'check=1,accepted=true,mode=held_envelope,target_dxz=' + (& $formatNumberModel 25.56)
+    $runtimeLog += ',target_dy=' + (& $formatNumberModel 8.44)
+    $runtimeLog += ',target_limit=' + (& $formatNumberModel 32)
+} catch { $runtimeLogError = $_.Exception.Message }
+Assert-True ($formatterAvailable) 'verification logging formatter is not a preceding local Lua helper'
+Assert-True ($null -eq $runtimeLogError) "verification logging runtime model failed: $runtimeLogError"
+Assert-True ($runtimeLog -eq 'check=1,accepted=true,mode=held_envelope,target_dxz=25.6,target_dy=8.4,target_limit=32') 'verification logging runtime model output mismatch'
+Assert-True (-not $verificationLogBlock.Contains('round1(')) 'verification logging regressed to undeclared round1 helper'
+
 foreach ($needle in @(
     'schema = 4', 'artifact_provenance = {}', 'local ARTIFACT_PROVENANCE_SCHEMA = 2',
     'local ARTIFACT_RESCUE_DEBUG_IDS = { [1407] = true, [6362] = true }',
