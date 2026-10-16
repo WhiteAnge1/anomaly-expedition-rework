@@ -208,7 +208,8 @@ foreach ($needle in @(
 }
 
 foreach ($needle in @(
-    'artifact_rescue_observe_only = false', 'artifact_rescue_actions = false',
+    'artifact_rescue_observe_only = true', 'artifact_rescue_actions = false',
+    'artifact_rescue_rolling_policy = held_first',
     'artifact_rescue_debug_same_id_teleport = false', 'artifact_rescue_debug_artifact_ids = 1407,6362',
     'artifact_rescue_debug_reason = rolling',
     'artifact_rescue_debug_monitor_ms = 30000', 'artifact_rescue_debug_monitor_log_ms = 5000',

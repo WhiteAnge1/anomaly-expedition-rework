@@ -72,7 +72,7 @@ Assert-True $confirmed 'independent rolling episode did not confirm after reset 
 
 foreach ($needle in @(
     'local function artifact_verified_ordinary_action_count(record)',
-    'local function artifact_rescue_stabilization_mode(record, persisted_reason)',
+    'local function artifact_rescue_stabilization_mode(record, persisted_reason, rescue_policy)',
     'artifact_rescue_debug_same_frame_stabilization',
     'local function attempt_same_frame_stabilization(record, action, snapshot)',
     'same_callback_release = true',
@@ -83,7 +83,8 @@ foreach ($needle in @(
     'pcall(candidate.release_method, candidate.element)',
     'action_stabilization_attempt', 'action_stabilization_released',
     'stabilization_unavailable', 'stabilization_failed',
-    'local stabilization_after_verified = stabilization_mode == "held" and held_after_verified or 2',
+    'local stabilization_after_verified = rescue_policy == "held_first" and 0',
+    'or stabilization_mode == "held" and held_after_verified or 2',
     'local stabilization_requested = action_count == stabilization_after_verified',
     'and verified_ordinary >= stabilization_after_verified', 'stabilization_mode == "same_frame"',
     'local effective_max_dispatches = stabilization_already_dispatched and action_count',

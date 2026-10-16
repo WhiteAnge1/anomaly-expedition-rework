@@ -473,6 +473,20 @@ local function artifact_rescue_debug_action_enabled(record, persisted_reason)
         and tostring(persisted_reason or record.primary_reason or record.reason) == configured_reason
 end
 
+local function artifact_rescue_action_policy(record, persisted_reason)
+    if not artifact_rescue_observe_enabled()
+    or not C.get_bool("global", "artifact_rescue_actions", false)
+    or tostring(persisted_reason or record.primary_reason or record.reason) ~= "rolling" then
+        return nil
+    end
+    local policy = string.lower(C.get_string("global", "artifact_rescue_rolling_policy", "held_first"))
+    if policy == "held_first" then return policy end
+    if policy == "debug_teleport" and artifact_rescue_debug_action_enabled(record, persisted_reason) then
+        return policy
+    end
+    return nil
+end
+
 local function artifact_zone_size(anom_zone)
     local family, index = string.match(tostring(anom_zone or ""), "^([%a]+)_(%d)")
     local known = { chem = true, electr = true, therm = true, gravi = true, mosquito = true, fuzz = true, psy = true }
@@ -796,9 +810,10 @@ local function confirm_artifact_candidate(record, reason, snapshot, extra)
     record.reason = record.primary_reason
     record.timestamps.confirmed_at = time_global()
     record.counters.confirmed = (record.counters.confirmed or 0) + 1
+    local action_policy = artifact_rescue_action_policy(record)
     provenance_log("confirmed", record, snapshot, record.primary_reason,
-        extra .. "; observe_only=" .. tostring(not artifact_rescue_debug_action_enabled(record))
-        .. "; action=none")
+        extra .. "; observe_only=" .. tostring(action_policy == nil)
+        .. "; action=" .. tostring(action_policy or "none"))
     return true
 end
 
@@ -1025,8 +1040,11 @@ local function artifact_verified_ordinary_action_count(record)
     return count
 end
 
-local function artifact_rescue_stabilization_mode(record, persisted_reason)
-    if not artifact_rescue_debug_action_enabled(record, persisted_reason) then return nil end
+local function artifact_rescue_stabilization_mode(record, persisted_reason, rescue_policy)
+    local policy = rescue_policy or artifact_rescue_action_policy(record, persisted_reason)
+    if policy == "held_first" then return "held" end
+    if policy ~= "debug_teleport"
+    or not artifact_rescue_debug_action_enabled(record, persisted_reason) then return nil end
     local same_frame = C.get_bool("global", "artifact_rescue_debug_same_frame_stabilization", false)
     local held = C.get_bool("global", "artifact_rescue_debug_held_stabilization", false)
     if same_frame and held then return "conflict" end
@@ -1383,20 +1401,15 @@ local function maintain_held_stabilization(record, snapshot, now)
     if held.release_required then
         return release_held_stabilization(record, snapshot, "load_recovery")
     end
-    local record_id = math.floor(tonumber(record.artifact_id) or 0)
-    local configured_id = false
-    for _, value in ipairs(split_csv(C.get_string("global", "artifact_rescue_debug_artifact_ids", ""))) do
-        if math.floor(tonumber(value) or -1) == record_id then configured_id = true; break end
-    end
+    local production_held = action.rescue_policy == "held_first"
     local same_frame_gate = C.get_bool("global", "artifact_rescue_debug_same_frame_stabilization", false)
-    local held_gate = artifact_rescue_observe_enabled()
-        and C.get_bool("global", "artifact_rescue_actions", false)
-        and C.get_bool("global", "artifact_rescue_debug_same_id_teleport", false)
-        and C.get_bool("global", "artifact_rescue_debug_held_stabilization", false)
-        and ARTIFACT_RESCUE_DEBUG_IDS[record_id] == true and configured_id
-    if not held_gate or same_frame_gate then
+    local held_gate = production_held
+        and artifact_rescue_action_policy(record, action.reason) == "held_first"
+        or (not production_held and artifact_rescue_stabilization_mode(
+            record, action.reason, action.rescue_policy or "debug_teleport") == "held")
+    if not held_gate or (not production_held and same_frame_gate) then
         return release_held_stabilization(record, snapshot,
-            same_frame_gate and "stabilization_gate_conflict" or "held_gate_disabled")
+            (not production_held and same_frame_gate) and "stabilization_gate_conflict" or "held_gate_disabled")
     end
     local parent_id = snapshot.online_parent_id or snapshot.parent_id
     if parent_id ~= nil and parent_id ~= 65535 then
@@ -1407,7 +1420,8 @@ local function maintain_held_stabilization(record, snapshot, now)
         return release_held_stabilization(record, snapshot, "current_level_changed")
     end
     advance_persisted_duration(held, "duration_ms", "last_sample_at", now)
-    local configured_timeout = C.get_number("global", "artifact_rescue_debug_held_timeout_ms", 120000)
+    local configured_timeout = production_held and 0
+        or C.get_number("global", "artifact_rescue_debug_held_timeout_ms", 120000)
     local timeout = configured_timeout > 0 and math.max(30000, configured_timeout) or 0
     if timeout > 0 and held.duration_ms >= timeout then
         return release_held_stabilization(record, snapshot, "held_timeout")
@@ -1573,7 +1587,8 @@ local function update_debug_same_id_rescue(record, snapshot, now)
                     "kind=debug_same_id_teleport,same_id=true,checks=" .. tostring(action.verification_checks)
                     .. ",monitor_ms=" .. tostring(math.max(30000, C.get_number("global", "artifact_rescue_debug_monitor_ms", 30000))))
                 if action.held_pending then
-                    local held_mode = artifact_rescue_stabilization_mode(record, action.reason)
+                    local held_mode = artifact_rescue_stabilization_mode(
+                        record, action.reason, action.rescue_policy)
                     local held_ok = false
                     local held_error = "held_gate_unavailable"
                     if held_mode == "held" then
@@ -1686,7 +1701,8 @@ local function update_debug_same_id_rescue(record, snapshot, now)
         return
     end
 
-    if not artifact_rescue_debug_action_enabled(record)
+    local rescue_policy = artifact_rescue_action_policy(record)
+    if not rescue_policy
     or record.state ~= "rescue_pending"
     or record.primary_reason ~= "rolling"
     or not (record.rolling and record.rolling.confirmed) then return end
@@ -1695,10 +1711,11 @@ local function update_debug_same_id_rescue(record, snapshot, now)
     local ordinary_max_dispatches = math.min(2, math.max(1, math.floor(
         C.get_number("global", "artifact_rescue_debug_max_dispatches", 2))))
     local verified_ordinary = artifact_verified_ordinary_action_count(record)
-    local stabilization_mode = artifact_rescue_stabilization_mode(record)
+    local stabilization_mode = artifact_rescue_stabilization_mode(record, nil, rescue_policy)
     local held_after_verified = math.min(2, math.max(0, math.floor(
         C.get_number("global", "artifact_rescue_debug_held_after_verified_actions", 2))))
-    local stabilization_after_verified = stabilization_mode == "held" and held_after_verified or 2
+    local stabilization_after_verified = rescue_policy == "held_first" and 0
+        or stabilization_mode == "held" and held_after_verified or 2
     local stabilization_requested = action_count == stabilization_after_verified
         and verified_ordinary >= stabilization_after_verified
         and (stabilization_mode == "same_frame" or stabilization_mode == "held")
@@ -1757,6 +1774,7 @@ local function update_debug_same_id_rescue(record, snapshot, now)
         verification_checks = 0,
         verification_samples = 0,
         dispatch_index = action_count + 1,
+        rescue_policy = rescue_policy,
         stabilization_requested = stabilization_requested,
         stabilization_mode = stabilization_mode,
     }
@@ -1797,6 +1815,7 @@ local function update_debug_same_id_rescue(record, snapshot, now)
         "kind=debug_same_id_teleport,same_id=true,physics=" .. physics_mode
         .. ",dispatch=" .. tostring(action.dispatch_index)
         .. ",maximum=" .. tostring(effective_max_dispatches)
+        .. ",policy=" .. tostring(rescue_policy)
         .. ",stabilization_after_verified=" .. tostring(stabilization_after_verified)
         .. ",stabilization_requested=" .. tostring(stabilization_requested)
         .. ",stabilization_status=" .. tostring(action.stabilization and action.stabilization.status or "none")

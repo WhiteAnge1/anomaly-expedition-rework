@@ -119,13 +119,18 @@ rare_artifact_chance = 70
 update_interval_ms = 1000
 
 ; --------------------------------------------------------------------------
-; Спасение рейдовых артефактов. false полностью отключает классификаторы, но
-; provenance всё равно сохраняется для совместимости save/load.
-artifact_rescue_observe_only = false
-; Общий предохранитель активных действий. Публичный default false.
+; Спасение рейдовых артефактов. Классификаторы включены по умолчанию, но сами
+; действия требуют отдельного master gate ниже.
+artifact_rescue_observe_only = true
+; Общий предохранитель активных действий. Безопасный default false.
 artifact_rescue_actions = false
-; Узкий лабораторный прототип: same-ID teleport без recreate/physics только для
-; exact original IDs 1407 и 6362 и причины rolling. Section fallback запрещён.
+; Production policy: held_first. После штатных 15 секунд подтверждённого rolling
+; первый rescue делает same-ID teleport, три fresh snapshots, reacquire и held.
+; Значение debug_teleport возвращает закрытый exact-ID лабораторный сценарий.
+artifact_rescue_rolling_policy = held_first
+; Узкий laboratory fallback при artifact_rescue_rolling_policy=debug_teleport:
+; same-ID teleport только для exact original IDs 1407 и 6362 и причины rolling.
+; Section fallback запрещён.
 ; После position_verified каждый ID независимо наблюдается минимум 30 секунд;
 ; повторный непрерывный выход radius+5 на 15 секунд допускает второй dispatch
 ; только после cooldown 20 секунд. Максимум две отправки на каждый ID.
@@ -142,8 +147,7 @@ artifact_rescue_debug_monitor_log_ms = 5000
 artifact_rescue_debug_cooldown_ms = 20000
 artifact_rescue_debug_max_dispatches = 2
 artifact_rescue_debug_same_frame_stabilization = false
-; Test-only: 2 сохраняет штатную схему «два verified rescue, затем held».
-; 0 разрешает held на первом подтверждённом rolling, не пропуская teleport/verification/fix.
+; Только для policy=debug_teleport: диагностический порог verified rescue до held.
 artifact_rescue_debug_held_after_verified_actions = 2
 ; Альтернативный, несовместимый с same-frame gate эксперимент: третий dispatch
 ; фиксирует заново полученные элементы только после post-teleport position_verified

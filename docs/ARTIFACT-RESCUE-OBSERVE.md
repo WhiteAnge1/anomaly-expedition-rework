@@ -1,6 +1,6 @@
-# Artifact rescue: provenance и observe-only, стадия 1
+# Artifact rescue: provenance, observe-only и rolling held policy
 
-Статус: тестируемая альфа наблюдателя. Активного спасения в этой стадии нет: предметы не перемещаются, не пересоздаются, не фиксируются физикой и не освобождаются. Штатные количества RVM `4/8/6` не изменены.
+Статус: production-кандидат для причины `rolling` подтверждён полевым тестом; безопасный master gate по умолчанию выключен. `origin/underground` остаются observe-only. Предметы никогда не пересоздаются, штатные количества RVM `4/8/6` не изменены.
 
 ## Что сохраняется
 
@@ -20,9 +20,9 @@ NPC-подбор в этой сборке может уничтожить мир
 
 ## State machine этой стадии
 
-Рабочая цепочка: `captured -> observing_server -> observing_online -> suspect -> rescue_pending`.
+Рабочая цепочка: `captured -> observing_server -> observing_online -> suspect -> rescue_pending -> verifying -> monitoring`.
 
-Терминалы: `owned`, `closed`, `released`, `disabled`. Будущие `verifying/stable` относятся к активной стадии и сейчас недостижимы. `rescue_pending` — только запись подтверждённой диагностики; в логе она помечается `observe_only=true; action=none`.
+Терминалы: `owned`, `closed`, `released`, `disabled`. При выключенном master gate `rescue_pending` остаётся диагностикой с `action=none`. При `held_first` подтверждённый rolling получает единственный активный rescue; остальные причины действий не получают.
 
 ## Классификаторы
 
@@ -45,6 +45,14 @@ Rolling начинается, когда свободный предмет да�
 
 Поляна завершила phase 1 отдельным rolling-тестом. `af_night_star#1407` и `af_fonar#6362` независимо подтвердили выход за `radius+5` через `15160/15157 ms`. Они затем продолжили катиться по реальному склону за игровую часть карты: последующий низкий Y/invalid nav являлся продолжением rolling, а не новым underground. Provenance schema 2 хранит `primary_reason`; подтверждённый rolling больше не передаётся underground-классификатору, пока объект не вернётся внутрь tether. Чистый underground на Поляне отдельно подтвердил `af_signet#6740`, вертикально упавший внутри своего круга.
 
+## Принятая production policy `held_first`
+
+После штатного непрерывного rolling-confirmation за 15 секунд первый rescue делает same-ID teleport к проверенной static-ray цели. Три fresh snapshots подтверждают тот же ID/section/level и позицию; только затем runtime повторно получает текущий online physics shell, фиксирует ранее unfixed elements и сохраняет release journal. Production held бессрочный: proximity и time release отсутствуют. Освобождение разрешено только при ownership/pickup, выключении master gate, terminal/cleanup, перед save/level transition и при load recovery.
+
+Полевой тест 16 октября 2026 года на `af_fonar#6362` прошёл полностью: dispatch `1/1`, три проверки позиции, post-teleport reacquire, один held element с `pre_fixed=0`; linear velocity изменилась с `0,-0.2,-1` на `0,0,0`, angular — с `-9.8,0,-0.1` на `0,0,0`. Координаты не менялись весь 30-секундный monitor. Обычный pickup дал `held_released reason=actor_pickup_callback release=owned_without_world_shell`, затем `closed reason=actor_pickup`; последующий переход с предметом в инвентаре проблем не показал.
+
+Production policy не использует exact-ID allowlist и debug stabilization gates. Её выбирает `artifact_rescue_rolling_policy=held_first`; общий `artifact_rescue_actions=false` остаётся безопасным default до ограниченного multi-artifact smoke-test.
+
 ## Лабораторный same-ID prototype
 
 Prototype по умолчанию полностью выключен. Закрытый allowlist содержит только exact original IDs `1407` и `6362` с причиной rolling; section-only fallback отсутствует. Каждый ID имеет независимый предел в два same-ID `alife():teleport_object`, без recreate/offline-cycle/physics. Schema-1 сейв принятого теста мигрирует в schema 2 и восстанавливает первичную rolling-причину даже после старой ложной переклассификации.
@@ -56,6 +64,7 @@ Prototype по умолчанию полностью выключен. Закр�
 ```ini
 artifact_rescue_observe_only = true
 artifact_rescue_actions = true
+artifact_rescue_rolling_policy = debug_teleport
 artifact_rescue_debug_same_id_teleport = true
 artifact_rescue_debug_artifact_ids = 1407,6362
 artifact_rescue_debug_reason = rolling
@@ -76,6 +85,7 @@ debug_mode = on
 ```ini
 artifact_rescue_observe_only = true
 artifact_rescue_actions = true
+artifact_rescue_rolling_policy = debug_teleport
 artifact_rescue_debug_same_id_teleport = true
 artifact_rescue_debug_artifact_ids = 6362
 artifact_rescue_debug_reason = rolling
@@ -97,6 +107,7 @@ Same-frame тест доказал корректное мгновенное о�
 ```ini
 artifact_rescue_observe_only = true
 artifact_rescue_actions = true
+artifact_rescue_rolling_policy = debug_teleport
 artifact_rescue_debug_same_id_teleport = true
 artifact_rescue_debug_artifact_ids = 6362
 artifact_rescue_debug_reason = rolling
@@ -112,7 +123,7 @@ debug_mode = on
 debug_force_decoy_type = empty
 ```
 
-При test-only пороге `0` исходный сейв с `actions=0` должен на первом подтверждённом rolling дать `action_dispatched ... dispatch=1,physics=held_pending,stabilization_after_verified=0` → `position_verified` → `action_stabilization_held_attempt` → `action_stabilization_held ... held=1,pre_fixed=0` и затем 30–60 секунд без движения. Teleport, три post-teleport snapshots и reacquire/fix не пропускаются. Production-default порога остаётся `2`, то есть обычная схема «два verified rescue, третий held» не меняется. Затем подойти и подобрать Фонарь. Callback должен сначала записать `action_stabilization_held_released`, затем `owned/closed`; проверить exact ID/section, наличие предмета в инвентаре, класс и мутацию. При `held_timeout_ms=0` автоматического time/proximity release нет: если подбор не срабатывает, не сохраняться и не покидать уровень до фиксации результата, после чего завершить тест штатным lifecycle-release. После выхода вернуть held/actions/same-ID gates в `false`, `debug_mode=auto`.
+Этот исторический test-only профиль подтвердил путь, который теперь принят как production `held_first`: `action_dispatched ... dispatch=1,physics=held_pending,stabilization_after_verified=0` → `position_verified` → `action_stabilization_held_attempt` → `action_stabilization_held ... held=1,pre_fixed=0`. Debug-порог `2` сохраняется только для воспроизведения прежней схемы; production всегда начинает held на первом rescue. После диагностического теста вернуть `actions/same-ID/held=false`, `debug_mode=auto`.
 
 ## Debug-журнал
 

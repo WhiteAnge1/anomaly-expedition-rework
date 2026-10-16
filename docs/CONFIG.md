@@ -52,12 +52,13 @@
 
 Центр artifact-области настраивается ключами `artifact_offset_fraction_min/max` через обычную иерархию `[global] → [tier_N] → [level_*]`. Принятые профили: T1 `0.35..0.80` без изменений, T2 `0.10..0.20`, T3 `0.06..0.12`. После привязки к level-vertex проверяется уже фактическое смещение центра; превышение max отклоняется. Release-log сообщает `tier/level/offset/fraction/limit/range`. Настоящие artifact-области могут перекрываться друг с другом, потому что штатный RVM способен создать несколько артефактов в одной anomaly-zone; `zone_separation_min` по-прежнему действует для ложных областей и не превращён в общий запрет кластеров. Это исправляет только отображаемую геометрию и не перемещает сам артефакт; случаи `(0,0,0)` и underground остаются отдельной задачей rescue. При невозможности построить центр rate-limited лог показывает позицию, `near_origin` (не далее 2 м от мирового нуля) и накопленные причины отказов `invalid_vertex/post_snap_limit/separation/anchor_failure`.
 
-## Artifact rescue: наблюдение и лабораторный prototype
+## Artifact rescue: production policy, наблюдение и лабораторный prototype
 
 | Параметр | Default | Назначение |
 |---|---:|---|
-| `artifact_rescue_observe_only` | `false` | Включает сохраняемые классификаторы и debug-события; никаких действий над предметом |
-| `artifact_rescue_actions` | `false` | Общий master gate любых активных действий; публично всегда `false` |
+| `artifact_rescue_observe_only` | `true` | Включает сохраняемые классификаторы и debug-события; без master gate предмет не меняется |
+| `artifact_rescue_actions` | `false` | Общий master gate любых активных действий; безопасный default оставляет только наблюдение |
+| `artifact_rescue_rolling_policy` | `held_first` | Production policy: первый подтверждённый rolling сразу проходит teleport → 3 snapshots → reacquire → indefinite held; `debug_teleport` выбирает старую exact-ID лабораторную схему |
 | `artifact_rescue_debug_same_id_teleport` | `false` | Второй gate лабораторного same-ID teleport |
 | `artifact_rescue_debug_artifact_ids` | `1407,6362` | Закрытый exact original-ID allowlist; код отклоняет любые другие ID и section fallback |
 | `artifact_rescue_debug_reason` | `rolling` | Единственная разрешённая причина prototype; сейчас поддерживается только `rolling` |
@@ -66,7 +67,7 @@
 | `artifact_rescue_debug_cooldown_ms` | `20000` | Пауза после повторного rolling-confirmation до второго dispatch |
 | `artifact_rescue_debug_max_dispatches` | `2` | Предел обычных same-ID отправок на original ID |
 | `artifact_rescue_debug_same_frame_stabilization` | `false` | Отдельный gate третьего experimental dispatch после двух verified обычных; требует все предыдущие rescue-gate |
-| `artifact_rescue_debug_held_after_verified_actions` | `2` | Test-only порог verified обычных rescue перед held; `0` отправляет первый подтверждённый rolling сразу через настоящий teleport → verification → held |
+| `artifact_rescue_debug_held_after_verified_actions` | `2` | Порог только для `debug_teleport`; production `held_first` всегда использует ноль обычных rescue |
 | `artifact_rescue_debug_held_stabilization` | `false` | Альтернативный third-stage gate: удерживает только зафиксированные модом элементы до pickup/release trigger; несовместим с same-frame gate |
 | `artifact_rescue_debug_held_timeout_ms` | `120000` | Аварийное освобождение held-элементов; `0` отключает time release, положительное значение ограничивается снизу 30 секундами |
 | `artifact_rescue_origin_radius` | `2` | Радиус признака near-origin; сам по себе никогда не подтверждает ошибку |
@@ -84,11 +85,13 @@ Provenance schema 2 сохраняет ID/section, шаблон и размер 
 
 Строгий origin-кандидат требует одновременно near-origin, несовпадение с конкретным полем и его размером, плохой vertex/nav, отсутствие parent и валидную static-ray цель. Underground требует всех порогов из таблицы и отсутствия владельца. Rolling начинается при любом устойчивом превышении `radius + 5 м`; возврат внутрь полностью сбрасывает эпизод. Первая подтверждённая причина сохраняет причинный приоритет: rolling за пределами игровой nav-сетки не становится underground только из-за низкого world Y/invalid vertex.
 
-Prototype не является пользовательской функцией. Он работает только при одновременных `artifact_rescue_observe_only=true`, `artifact_rescue_actions=true`, `artifact_rescue_debug_same_id_teleport=true`, exact ID `1407`/`6362` и причине rolling. Первый свежий snapshot после load только классифицирует состояние. Три проверки в радиусе 4 м дают лишь `position_verified`; затем идёт минимум 30 секунд наблюдения. Новый непрерывный выход за `radius+5` должен длиться 15 секунд, после чего действует 20-секундный cooldown; обычный предел — два dispatch независимо на ID.
+При `artifact_rescue_rolling_policy=held_first` и включённом master gate любой перехваченный модом артефакт с первичной причиной `rolling` после штатных 15 секунд сразу получает первый и единственный same-ID rescue. После teleport обязательны три проверки в радиусе 4 м, повторное получение текущего online physics shell и фиксация только ранее unfixed элементов. Production held не имеет time/proximity release: освобождение происходит при ownership/pickup, выключении gate, terminal/cleanup, перед save/level transition и при load recovery. `origin_mismatch` и `underground` остаются observe-only.
+
+Prototype не является пользовательской функцией. Он выбирается только через `artifact_rescue_rolling_policy=debug_teleport` и дополнительно требует `artifact_rescue_debug_same_id_teleport=true`, exact ID `1407`/`6362` и debug-настройки ниже. В нём по-прежнему можно воспроизвести старые ordinary/same-frame/held сценарии.
 
 `artifact_rescue_debug_same_frame_stabilization=true` разрешает ровно третий dispatch только после двух обычных действий с `verified_at` и нового независимого rolling-confirmation. После same-ID teleport код проверяет exact online-object и все physics elements, временно фиксирует только ранее не fixed элементы и освобождает только их в том же callback. Shell/API/element failure не отменяет teleport: пишется `stabilization_unavailable/failed`, затем продолжаются position verification и мониторинг. Permanent fix, перенос fixed-состояния через кадр/save, recreate, offline-cycle, `apply_force` и section fallback запрещены. После третьего dispatch действует hard maximum `3`.
 
-`artifact_rescue_debug_held_stabilization=true` — отдельный pickup-эксперимент и не может работать одновременно с same-frame gate: конфликт оставляет обычный limit=2. На третьем dispatch журнал сохраняет только индексы ранее unfixed элементов, которые мод успешно зафиксировал и перепроверил. Release выполняется только для этого списка при pickup/owner change, выключении gate, timeout, terminal/cleanup, до level change и до сериализации save. Если pre-save release не подтверждён, journal получает `release_required`, а load обязан сначала повторить release и блокирует дальнейшие rescue-действия. Несмотря на guard, полевой held-тест запрещает ручные save/load и выход с уровня: это узкий эксперимент возможности pickup, не production-механика.
+`artifact_rescue_debug_held_stabilization=true` относится только к `debug_teleport` и не может работать одновременно с same-frame gate. Его timeout и порог сохраняются для диагностики. Production `held_first` использует тот же проверенный post-teleport journal/release-контракт, но всегда с порогом `0` и без автоматического timeout.
 
 ## Диагностика и тестовые параметры
 

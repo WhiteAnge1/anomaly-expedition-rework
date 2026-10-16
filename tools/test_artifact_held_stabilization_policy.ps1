@@ -46,9 +46,30 @@ function Resolve-StabilizationRequest([int]$ActionCount, [int]$VerifiedOrdinary,
 }
 
 Assert-True (Resolve-StabilizationRequest 0 0 'held' 0) 'test-only held threshold 0 did not request real stabilization on first rolling'
-Assert-True (-not (Resolve-StabilizationRequest 0 0 'held' 2)) 'production held default no longer requires two verified ordinary rescues'
-Assert-True (Resolve-StabilizationRequest 2 2 'held' 2) 'production two-rescue held policy was lost'
+Assert-True (-not (Resolve-StabilizationRequest 0 0 'held' 2)) 'debug held threshold 2 no longer requires two verified ordinary rescues'
+Assert-True (Resolve-StabilizationRequest 2 2 'held' 2) 'debug two-rescue held policy was lost'
 Assert-True (-not (Resolve-StabilizationRequest 0 0 'same_frame' 0)) 'held test override leaked into same-frame mode'
+
+function Resolve-EffectiveMaximum([int]$ActionCount, [bool]$Requested, [bool]$AlreadyDispatched, [int]$OrdinaryMaximum) {
+    if ($AlreadyDispatched) { return $ActionCount }
+    if ($Requested) { return $ActionCount + 1 }
+    return $OrdinaryMaximum
+}
+
+Assert-True ((Resolve-EffectiveMaximum 0 $true $false 2) -eq 1) 'production first held dispatch maximum is not one'
+Assert-True ((Resolve-EffectiveMaximum 1 $false $true 2) -eq 1) 'production policy allowed another rescue after held dispatch'
+
+function Resolve-RescuePolicy([bool]$Observe, [bool]$Actions, [string]$Policy, [string]$Reason, [bool]$ExactDebugId) {
+    if (-not $Observe -or -not $Actions -or $Reason -ne 'rolling') { return 'none' }
+    if ($Policy -eq 'held_first') { return 'held_first' }
+    if ($Policy -eq 'debug_teleport' -and $ExactDebugId) { return 'debug_teleport' }
+    return 'none'
+}
+
+Assert-True ((Resolve-RescuePolicy $true $true 'held_first' 'rolling' $false) -eq 'held_first') 'production rolling policy still depends on exact debug ID'
+Assert-True ((Resolve-RescuePolicy $true $false 'held_first' 'rolling' $false) -eq 'none') 'production master gate default is not safe'
+Assert-True ((Resolve-RescuePolicy $true $true 'held_first' 'underground' $false) -eq 'none') 'production policy leaked into underground'
+Assert-True ((Resolve-RescuePolicy $true $true 'debug_teleport' 'rolling' $false) -eq 'none') 'debug policy ignored exact-ID gate'
 
 # Journal ownership: only elements observed unfixed and successfully fixed by
 # this action enter the persistent release list.
@@ -74,7 +95,7 @@ foreach ($needle in @(
     'mode = "held"', 'status = "held_attempting"', 'active = false',
     'action.held_pending = true', 'status = "held_pending"',
     'if action.held_pending then', 'action.status ~= "position_verified"',
-    'artifact_rescue_stabilization_mode(record, action.reason)',
+    'record, action.reason, action.rescue_policy)',
     'local held_error = "held_gate_unavailable"',
     'post_teleport_position_not_verified', 'post_teleport_held_stabilization',
     'held.element_indices[#held.element_indices + 1] = candidate.index',
@@ -91,7 +112,13 @@ foreach ($needle in @(
     'stabilization_mode == "held"', 'local physics_mode = "none"',
     'physics_mode = stabilization_mode == "held" and "held_pending" or "same_frame_fix_release"',
     'artifact_rescue_debug_held_after_verified_actions',
-    'local stabilization_after_verified = stabilization_mode == "held" and held_after_verified or 2',
+    'local stabilization_after_verified = rescue_policy == "held_first" and 0',
+    'or stabilization_mode == "held" and held_after_verified or 2',
+    'local function artifact_rescue_action_policy(record, persisted_reason)',
+    'if policy == "held_first" then return policy end',
+    'rescue_policy = rescue_policy',
+    'local production_held = action.rescue_policy == "held_first"',
+    'local configured_timeout = production_held and 0',
     'local effective_max_dispatches = stabilization_already_dispatched and action_count',
     'or stabilization_requested and (action_count + 1) or ordinary_max_dispatches'
 )) {
@@ -104,7 +131,7 @@ $teleport = $main.IndexOf('alife():teleport_object(', $dispatchStart)
 $pending = $main.IndexOf('action.held_pending = true', $teleport)
 $dispatchedLog = $main.IndexOf('provenance_log("action_dispatched"', $pending)
 $verifiedLog = $main.IndexOf('provenance_log("position_verified"', $updateStart)
-$persistedMode = $main.IndexOf('artifact_rescue_stabilization_mode(record, action.reason)', $verifiedLog)
+$persistedMode = $main.IndexOf('record, action.reason, action.rescue_policy)', $verifiedLog)
 $heldAttemptCall = $main.IndexOf('attempt_held_stabilization(record, action, snapshot)', $verifiedLog)
 $pendingCleared = $main.IndexOf('action.held_pending = false', $heldAttemptCall)
 $failedGuard = $main.IndexOf('if not held_ok then', $pendingCleared)
@@ -118,6 +145,7 @@ Assert-True ($main.Contains('if timeout > 0 and held.duration_ms >= timeout then
 
 foreach ($needle in @(
     'artifact_rescue_debug_same_frame_stabilization = false',
+    'artifact_rescue_rolling_policy = held_first',
     'artifact_rescue_debug_held_after_verified_actions = 2',
     'artifact_rescue_debug_held_stabilization = false',
     'artifact_rescue_debug_held_timeout_ms = 120000'
