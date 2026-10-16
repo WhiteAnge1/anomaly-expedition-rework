@@ -15,23 +15,69 @@ function Assert-True([bool]$Condition, [string]$Message) {
 
 function Test-OriginCandidate {
     param(
-        [double]$OriginDistance,
-        [double]$FieldDistance,
+        [double]$InitialOriginDistance,
+        [double]$CurrentOriginDistance,
+        [double]$InitialFieldDistance,
+        [double]$CurrentFieldDistance,
         [double]$ZoneSize,
         [bool]$NavBad,
         [bool]$Owned,
-        [bool]$TargetValid
+        [bool]$IdentityValid,
+        [string]$TargetSource,
+        [string]$TargetSupport
     )
     $fieldLimit = [Math]::Sqrt(2) * $ZoneSize + 2
-    return $OriginDistance -le 2 -and $FieldDistance -gt $fieldLimit -and $NavBad -and (-not $Owned) -and $TargetValid
+    return $InitialOriginDistance -le 2 -and $CurrentOriginDistance -le 2 `
+        -and $InitialFieldDistance -gt $fieldLimit -and $CurrentFieldDistance -gt $fieldLimit `
+        -and $NavBad -and (-not $Owned) -and $IdentityValid `
+        -and $TargetSource -eq 'field_candidate' -and $TargetSupport -eq 'static_ray'
 }
 
-# A legitimate field near world origin must never be classified from origin alone.
-Assert-True (-not (Test-OriginCandidate 0.2 8 10 $true $false $true)) 'legitimate near-origin field was classified'
-Assert-True (Test-OriginCandidate 0.2 40 10 $true $false $true) 'strict origin mismatch was not classified'
-Assert-True (-not (Test-OriginCandidate 0.2 40 10 $false $false $true)) 'origin classifier ignored nav guard'
-Assert-True (-not (Test-OriginCandidate 0.2 40 10 $true $true $true)) 'origin classifier ignored ownership guard'
-Assert-True (-not (Test-OriginCandidate 0.2 40 10 $true $false $false)) 'origin classifier ignored target guard'
+# A legitimate field near world origin must never be classified from origin
+# alone.  Recovery requires matching initial/current evidence, identity and
+# exact production target provenance.
+Assert-True (-not (Test-OriginCandidate 0.2 0.3 8 9 10 $true $false $true 'field_candidate' 'static_ray')) 'legitimate near-origin field was classified'
+Assert-True (Test-OriginCandidate 0.2 0.3 40 41 10 $true $false $true 'field_candidate' 'static_ray') 'strict origin mismatch was not classified'
+Assert-True (-not (Test-OriginCandidate 0.2 0.3 40 41 10 $false $false $true 'field_candidate' 'static_ray')) 'origin classifier ignored nav guard'
+Assert-True (-not (Test-OriginCandidate 0.2 0.3 40 41 10 $true $true $true 'field_candidate' 'static_ray')) 'origin classifier ignored ownership guard'
+Assert-True (-not (Test-OriginCandidate 0.2 0.3 40 41 10 $true $false $false 'field_candidate' 'static_ray')) 'origin classifier ignored identity guard'
+Assert-True (-not (Test-OriginCandidate 0.2 0.3 40 41 10 $true $false $true 'field_candidate' 'none')) 'origin classifier ignored static-ray provenance'
+
+function Invoke-PreventiveSpawnModel {
+    param([object[]]$Candidates, [int]$MaximumAttempts, [double]$FieldLimit)
+    $attempts = 0
+    $creates = 0
+    $queued = 0
+    $selectedSection = $null
+    foreach ($candidate in $Candidates) {
+        if ($attempts -ge $MaximumAttempts) { break }
+        $attempts++
+        if (-not $candidate.valid_vertex -or -not $candidate.static_support `
+            -or $candidate.field_distance -gt $FieldLimit) { continue }
+        $creates++
+        $queued++
+        $selectedSection = $candidate.section
+        return @{ status='created_guarded'; attempts=$attempts; creates=$creates; queued=$queued; section=$selectedSection; visible=$true }
+    }
+    return @{ status='retry_exhausted'; attempts=$attempts; creates=$creates; queued=$queued; section=$selectedSection; visible=$true }
+}
+
+$preventedThenCreated = Invoke-PreventiveSpawnModel @(
+    @{ valid_vertex=$false; static_support=$false; field_distance=20; section='af_ring' },
+    @{ valid_vertex=$true; static_support=$false; field_distance=20; section='af_ring' },
+    @{ valid_vertex=$true; static_support=$true; field_distance=20; section='af_ring' }
+) 8 40
+Assert-True ($preventedThenCreated.status -eq 'created_guarded' -and $preventedThenCreated.attempts -eq 3) 'preventive guard did not bounded-retry invalid/unsupported candidates'
+Assert-True ($preventedThenCreated.creates -eq 1 -and $preventedThenCreated.queued -eq 1 -and $preventedThenCreated.section -eq 'af_ring') 'preventive guard did not preserve single stock section/queue path'
+$preventedAll = Invoke-PreventiveSpawnModel @(
+    @{ valid_vertex=$false; static_support=$false; field_distance=20; section='af_ring' },
+    @{ valid_vertex=$true; static_support=$true; field_distance=50; section='af_ring' }
+) 2 40
+Assert-True ($preventedAll.status -eq 'retry_exhausted' -and $preventedAll.creates -eq 0 -and $preventedAll.visible) 'preventive exhaustion created an object or failed silently'
+$nearOriginLegitimateSpawn = Invoke-PreventiveSpawnModel @(
+    @{ valid_vertex=$true; static_support=$true; field_distance=1; section='af_ball' }
+) 8 40
+Assert-True ($nearOriginLegitimateSpawn.status -eq 'created_guarded') 'preventive guard rejected a valid field genuinely near world origin'
 
 function Confirm-Underground {
     param([double[]]$Drops, [double[]]$VertexGaps, [int[]]$Times, [bool]$Owned)
@@ -132,9 +178,52 @@ $schema1 = @{ provenance_schema = 1; state = 'rescue_pending'; reason = 'undergr
 if ($schema1.provenance_schema -eq 1 -and $schema1.rolling.confirmed) {
     $schema1.primary_reason = 'rolling'
     $schema1.reason = 'rolling'
-    $schema1.provenance_schema = 2
+    $schema1.provenance_schema = 3
 }
-Assert-True ($schema1.provenance_schema -eq 2 -and $schema1.primary_reason -eq 'rolling' -and $schema1.reason -eq 'rolling') 'schema-1 causal migration failed'
+Assert-True ($schema1.provenance_schema -eq 3 -and $schema1.primary_reason -eq 'rolling' -and $schema1.reason -eq 'rolling') 'schema-1 causal migration failed'
+
+# Schema-2 strict-origin saves retain the captured original identity and become
+# actionable only after a fresh post-load snapshot. Ownership remains terminal.
+$originSave = @{
+    provenance_schema = 2; state = 'rescue_pending'; reason = 'origin_mismatch';
+    primary_reason = 'origin_mismatch'; artifact_id = 6910; section = 'af_ball'; level = 'y04_pole';
+    zone_size = 10; spawn_input_pos = @{ x=40; y=0; z=0 };
+    first_server = @{ pos=@{x=0.2;y=0;z=0.1}; lvid=4294967295; gvid=5337 };
+    target = @{ valid=$true; source='field_candidate'; support='static_ray'; lvid=123; gvid=5337 };
+    origin = @{ checked=$true; confirmed=$false; near_origin=$true; nav_bad=$true };
+    ownership = @{ parent_id = 65535 };
+    awaiting_fresh_snapshot = $false; dispatched = $false
+}
+$originRestored = $originSave | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+$originStoredEvidence = $originRestored.origin.near_origin -and $originRestored.origin.nav_bad `
+    -and $originRestored.target.valid -and $originRestored.target.source -eq 'field_candidate' `
+    -and $originRestored.target.support -eq 'static_ray' -and $originRestored.section -eq 'af_ball' `
+    -and $originRestored.level -eq 'y04_pole'
+if ($originRestored.provenance_schema -lt 3 -and $originRestored.state -eq 'rescue_pending' `
+    -and $originRestored.reason -eq 'origin_mismatch' -and $originStoredEvidence) {
+    $originRestored.provenance_schema = 3
+    $originRestored.primary_reason = 'origin_mismatch'
+    $originRestored.origin.confirmed = $true
+    $originRestored.awaiting_fresh_snapshot = $true
+}
+if ($originRestored.awaiting_fresh_snapshot) { $originRestored.awaiting_fresh_snapshot = $false }
+Assert-True (-not $originRestored.dispatched -and $originRestored.origin.confirmed) 'origin save dispatched on load or lost confirmation'
+if (-not $originRestored.awaiting_fresh_snapshot -and $originRestored.ownership.parent_id -eq 65535 `
+    -and $originRestored.origin.confirmed -and $originRestored.artifact_id -eq 6910 `
+    -and $originRestored.section -eq 'af_ball' -and $originRestored.level -eq 'y04_pole') {
+    $originRestored.dispatched = $true
+}
+Assert-True ($originRestored.dispatched) 'strict origin save was not eligible after fresh snapshot'
+$originRestored.ownership.parent_id = 1404
+$originRestored.dispatched = $false
+if ($originRestored.ownership.parent_id -ne 65535) { $originRestored.state = 'owned' }
+Assert-True ($originRestored.state -eq 'owned' -and -not $originRestored.dispatched) 'origin recovery ignored NPC/actor ownership after load'
+$weakOriginSave = $originSave | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+$weakOriginSave.target.support = 'none'
+$weakOriginEvidence = $weakOriginSave.origin.near_origin -and $weakOriginSave.origin.nav_bad `
+    -and $weakOriginSave.target.source -eq 'field_candidate' -and $weakOriginSave.target.support -eq 'static_ray'
+if (-not $weakOriginEvidence) { $weakOriginSave.state = 'disabled'; $weakOriginSave.reason = 'saved_origin_evidence_incomplete' }
+Assert-True ($weakOriginSave.state -eq 'disabled') 'weak saved origin evidence did not fail closed during migration'
 
 # Load never dispatches an action.  The first fresh snapshot is consumed only
 # as a classifier/recovery gate; the following update may dispatch if the item
@@ -261,7 +350,7 @@ Assert-True ($runtimeLog -eq 'check=1,accepted=true,mode=held_envelope,target_dx
 Assert-True (-not $verificationLogBlock.Contains('round1(')) 'verification logging regressed to undeclared round1 helper'
 
 foreach ($needle in @(
-    'schema = 4', 'artifact_provenance = {}', 'local ARTIFACT_PROVENANCE_SCHEMA = 2',
+    'schema = 4', 'artifact_provenance = {}', 'local ARTIFACT_PROVENANCE_SCHEMA = 3',
     'local ARTIFACT_RESCUE_DEBUG_IDS = { [1407] = true, [6362] = true }',
     'spawn_input_pos', 'first_server', 'last_good_server', 'last_good_online',
     'linked_anchor_id', 'linked_radius', 'ownership', 'lineage_ids', 'cooldown_remaining_ms',
@@ -273,7 +362,10 @@ foreach ($needle in @(
     'local function update_debug_same_id_rescue(record, snapshot, now)',
     'record.state == "rescue_pending" and record.primary_reason == "rolling"',
     'rescue_reason == "underground" and record.underground and record.underground.confirmed',
-    'underground_rescue_count',
+    'rescue_reason == "origin_mismatch" and record.origin and record.origin.confirmed',
+    'saved_origin_evidence_valid = function(record)', 'saved_origin_evidence_incomplete',
+    'same_id_origin_dispatch_evidence', 'fresh_origin_evidence_mismatch',
+    'origin_rescue_count', 'underground_rescue_count',
     'x = record.spawn_input_pos.x + offset.x',
     'z = record.spawn_input_pos.z + offset.z',
     'distance_xz(target.pos, record.spawn_input_pos) <= maximum',
@@ -281,6 +373,12 @@ foreach ($needle in @(
     'production_target_provenance_invalid',
     'source = target.source, support = target.support',
     'production_same_id_teleport',
+    'local function guarded_rvm_artifact_spawn(base_spawn, anom_zone, field_pos, level_tier)',
+    'inner_env ~= raid_anomalys', 'stock_inner_environment_unverified; spawn deferred',
+    'rejection = "invalid_second_vertex"', 'artifact_static_target(pos_table(spawn_pos))',
+    'candidate_outside_captured_field', 'created_guarded', 'retry_exhausted',
+    'rawset(raid_anomalys, "level", saved_level)',
+    'rawset(raid_anomalys, "alife_create_item", saved_create)',
     'alife():teleport_object(record.artifact_id, target.gvid, target.lvid, pos_vector(target.pos))',
     'record.state = "verifying"', 'record.state = "monitoring"', 'action.status = "position_verified"',
     'position_verification_sample', 'mode=" .. (action.stabilization_requested and "held_envelope" or "tight_target")',
@@ -306,6 +404,7 @@ foreach ($needle in @(
     'artifact_rescue_observe_only = true', 'artifact_rescue_actions = false',
     'artifact_rescue_rolling_policy = held_first',
     'artifact_rescue_underground_policy = held_first',
+    'artifact_rescue_origin_policy = held_first', 'artifact_spawn_guard_attempts = 8',
     'artifact_rescue_debug_same_id_teleport = false', 'artifact_rescue_debug_artifact_ids = 1407,6362',
     'artifact_rescue_debug_reason = rolling',
     'artifact_rescue_debug_monitor_ms = 30000', 'artifact_rescue_debug_monitor_log_ms = 5000',

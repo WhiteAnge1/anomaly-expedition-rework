@@ -119,7 +119,8 @@ foreach ($needle in @(
     'or stabilization_mode == "held" and held_after_verified or 2',
     'local function artifact_rescue_action_policy(record, persisted_reason)',
     'if policy == "held_first" then return policy end',
-    'or "artifact_rescue_underground_policy"',
+    'or reason == "underground" and "artifact_rescue_underground_policy"',
+    'or "artifact_rescue_origin_policy"',
     'rescue_policy = rescue_policy',
     'local production_held = action.rescue_policy == "held_first"',
     'local configured_timeout = production_held and 0',
@@ -151,6 +152,7 @@ foreach ($needle in @(
     'artifact_rescue_debug_same_frame_stabilization = false',
     'artifact_rescue_rolling_policy = held_first',
     'artifact_rescue_underground_policy = held_first',
+    'artifact_rescue_origin_policy = held_first',
     'artifact_rescue_debug_held_after_verified_actions = 2',
     'artifact_rescue_debug_held_stabilization = false',
     'artifact_rescue_debug_held_timeout_ms = 120000'

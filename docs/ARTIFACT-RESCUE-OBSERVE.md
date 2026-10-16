@@ -1,6 +1,6 @@
 # Artifact rescue: provenance, observe-only и rolling held policy
 
-Статус: production-кандидат для причины `rolling` подтверждён полевым тестом; безопасный master gate по умолчанию выключен. `origin/underground` остаются observe-only. Предметы никогда не пересоздаются, штатные количества RVM `4/8/6` не изменены.
+Статус: production executor полево подтверждён для `rolling` и `underground`; safe master gate по умолчанию выключен. Для `origin_mismatch` реализованы preventive spawn guard и готовая recovery policy, требующая отдельного минимального полевого теста. Предметы никогда не пересоздаются.
 
 ## Что сохраняется
 
@@ -43,7 +43,7 @@ Rolling начинается, когда свободный предмет да�
 - Попытка rolling на `af_ball#6910` не является rolling-тестом: предмет уже был `rescue_pending reason=origin_mismatch`, поэтому первичная причина закономерно сохранилась.
 - Два NPC-подбора показали реальную смену ID: `af_dummy_battery#7012 -> #38145` и `af_electra_sparkler#8318 -> #38144`. Предыдущая версия видела только исчезновение старых IDs и ошибочно восстанавливала их как `observing_online`; это стало основанием для lineage-исправления выше.
 
-Поляна завершила phase 1 отдельным rolling-тестом. `af_night_star#1407` и `af_fonar#6362` независимо подтвердили выход за `radius+5` через `15160/15157 ms`. Они затем продолжили катиться по реальному склону за игровую часть карты: последующий низкий Y/invalid nav являлся продолжением rolling, а не новым underground. Provenance schema 2 хранит `primary_reason`; подтверждённый rolling больше не передаётся underground-классификатору, пока объект не вернётся внутрь tether. Чистый underground на Поляне отдельно подтвердил `af_signet#6740`, вертикально упавший внутри своего круга.
+Поляна завершила phase 1 отдельным rolling-тестом. `af_night_star#1407` и `af_fonar#6362` независимо подтвердили выход за `radius+5` через `15160/15157 ms`. Они затем продолжили катиться по реальному склону за игровую часть карты: последующий низкий Y/invalid nav являлся продолжением rolling, а не новым underground. Provenance schema 3 хранит `primary_reason`, preventive journal и строгую origin-миграцию; подтверждённый rolling больше не передаётся underground-классификатору, пока объект не вернётся внутрь tether. Чистый underground на Поляне отдельно подтвердил `af_signet#6740`, вертикально упавший внутри своего круга.
 
 ## Принятая production policy `held_first`
 
@@ -51,7 +51,7 @@ Rolling начинается, когда свободный предмет да�
 
 Полевой тест 16 октября 2026 года на `af_fonar#6362` прошёл полностью: dispatch `1/1`, три проверки позиции, post-teleport reacquire, один held element с `pre_fixed=0`; linear velocity изменилась с `0,-0.2,-1` на `0,0,0`, angular — с `-9.8,0,-0.1` на `0,0,0`. Координаты не менялись весь 30-секундный monitor. Обычный pickup дал `held_released reason=actor_pickup_callback release=owned_without_world_shell`, затем `closed reason=actor_pickup`; последующий переход с предметом в инвентаре проблем не показал.
 
-Production policy не использует exact-ID allowlist и debug stabilization gates. Её выбирает `artifact_rescue_rolling_policy=held_first`; общий `artifact_rescue_actions=false` остаётся безопасным default до ограниченного multi-artifact smoke-test.
+Production policy не использует exact-ID allowlist и debug stabilization gates. Rolling, underground и multi-record routing полево приняты; общий `artifact_rescue_actions=false` остаётся безопасным default, а origin recovery включается для теста отдельно.
 
 ## Production policy настоящего underground
 
@@ -63,7 +63,13 @@ Rescue target вычисляется только из captured `spawn_input_pos
 
 ## Лабораторный same-ID prototype
 
-Prototype по умолчанию полностью выключен. Закрытый allowlist содержит только exact original IDs `1407` и `6362` с причиной rolling; section-only fallback отсутствует. Каждый ID имеет независимый предел в два same-ID `alife():teleport_object`, без recreate/offline-cycle/physics. Schema-1 сейв принятого теста мигрирует в schema 2 и восстанавливает первичную rolling-причину даже после старой ложной переклассификации.
+Prototype по умолчанию полностью выключен. Закрытый allowlist содержит только exact original IDs `1407` и `6362` с причиной rolling; section-only fallback отсутствует. Каждый ID имеет независимый предел в два same-ID `alife():teleport_object`, без recreate/offline-cycle. Schema-1 сейв принятого теста мигрирует в schema 3 и восстанавливает первичную rolling-причину даже после старой ложной переклассификации.
+
+## Preventive и recovery для world origin
+
+Фактический RVM после `shift_vector_for_artefacts` вычисляет второй `level.vertex_id(gen_pos)` и без проверки вызывает `level.vertex_position(lvid)`. При `4294967295` это объясняет создание объекта у world origin. Preventive guard выполняется внутри доказанного Lua 5.1 environment исходной функции, запрещает invalid vertex до настоящего `vertex_position`, требует static-ray support и нахождение кандидата в captured field, затем вызывает штатный внешний `raid_artefacts` wrapper. Поэтому section roll и `addToQueuedArtefacts` для классов/мутаций сохраняются. Восемь неудачных попыток дают явный `ERROR` и ни одного объекта.
+
+Recovery не использует один `near_origin`. Одновременно обязательны: initial и fresh server position внутри origin radius; оба существенно дальше допустимого размера от captured `spawn_input_pos`; bad initial/nav evidence; прежние ID, section, level и GVID; отсутствие owner; сохранённая цель `field_candidate/static_ray`. Schema-2 запись без полного набора переводится в `disabled`. После первого post-load defer origin использует тот же same-ID teleport → три envelope snapshots → held → pickup release. `artifact_rescue_origin_policy=held_first` готова, но master actions остаётся `false` до теста.
 
 После `load_restore` запись получает `fresh_snapshot_required=true`. Первый реальный update сначала запускает классификатор: если X-Ray уже восстановил предмет внутрь tether, rolling сбрасывается и действие запрещается. Даже если предмет остался снаружи, этот snapshot только пишет `post_load_snapshot ... action_deferred=true`; dispatch возможен не раньше следующего update. Сохранение server ID/section/game vertex и три snapshots не далее 4 м по XZ/Y дают только `position_verified`. Затем предмет наблюдается минимум 30 секунд с журналом displacement, расстояния до target/anchor и запаса tether. Новый непрерывный выход за `radius+5` должен длиться 15 секунд; возврат внутрь сбрасывает эпизод. После подтверждения действует cooldown 20 секунд, затем разрешён второй и последний dispatch этого ID.
 

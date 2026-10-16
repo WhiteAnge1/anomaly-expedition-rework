@@ -131,6 +131,14 @@ artifact_rescue_rolling_policy = held_first
 ; Отдельная production policy только для настоящего vertical underground.
 ; Она использует captured field provenance и не меняет rolling/origin priority.
 artifact_rescue_underground_policy = held_first
+; Отдельная production policy для строго доказанного world-origin mismatch.
+; Требует captured field provenance, initial+current near-origin, удалённое поле,
+; плохой nav/vertex, прежний ID/section/level и static-ray target.
+artifact_rescue_origin_policy = held_first
+; Штатный RVM-генератор повторно выбирает внутреннюю позицию, пока она не
+; пройдёт valid vertex + static-ray + captured-field guards. При исчерпании
+; объект не создаётся, а ошибка явно пишется в журнал.
+artifact_spawn_guard_attempts = 8
 ; Узкий laboratory fallback при artifact_rescue_rolling_policy=debug_teleport:
 ; same-ID teleport только для exact original IDs 1407 и 6362 и причины rolling.
 ; Section fallback запрещён.

@@ -20,11 +20,12 @@ local census_error_reported = false
 local next_artifact_diagnostic = 0
 local reported_artifact_overlaps = {}
 local safe_alive = nil
-local ARTIFACT_PROVENANCE_SCHEMA = 2
+local ARTIFACT_PROVENANCE_SCHEMA = 3
 local INVALID_VERTEX_ID = 4294967295
 local ARTIFACT_RESCUE_DEBUG_IDS = { [1407] = true, [6362] = true }
 local release_held_stabilization = nil
 local release_all_held_stabilizations = nil
+local saved_origin_evidence_valid = nil
 
 -- Category selection is a separate weighted roll. Every entry points to an
 -- exact online_offline_group section; the section's fixed npc list is the
@@ -477,11 +478,12 @@ local function artifact_rescue_action_policy(record, persisted_reason)
     local reason = tostring(persisted_reason or record.primary_reason or record.reason)
     if not artifact_rescue_observe_enabled()
     or not C.get_bool("global", "artifact_rescue_actions", false)
-    or (reason ~= "rolling" and reason ~= "underground") then
+    or (reason ~= "rolling" and reason ~= "underground" and reason ~= "origin_mismatch") then
         return nil
     end
     local policy_key = reason == "rolling" and "artifact_rescue_rolling_policy"
-        or "artifact_rescue_underground_policy"
+        or reason == "underground" and "artifact_rescue_underground_policy"
+        or "artifact_rescue_origin_policy"
     local policy = string.lower(C.get_string("global", policy_key, "held_first"))
     if policy == "held_first" then return policy end
     if policy == "debug_teleport" and artifact_rescue_debug_action_enabled(record, persisted_reason) then
@@ -635,7 +637,7 @@ local function disable_provenance(record, context, err)
     end
 end
 
-local function capture_artifact_provenance(artifact_id, anom_zone, pos, level_tier)
+local function capture_artifact_provenance(artifact_id, anom_zone, pos, level_tier, spawn_guard)
     state.artifact_provenance = state.artifact_provenance or {}
     local key = tostring(artifact_id)
     local existing = state.artifact_provenance[key]
@@ -671,7 +673,9 @@ local function capture_artifact_provenance(artifact_id, anom_zone, pos, level_ti
         primary_reason = nil,
         causal_origin = nil,
         target = nil,
+        spawn_guard = spawn_guard,
         rescue_count = 0,
+        origin_rescue_count = 0,
         rolling_rescue_count = 0,
         underground_rescue_count = 0,
         cooldown_until = 0,
@@ -680,7 +684,7 @@ local function capture_artifact_provenance(artifact_id, anom_zone, pos, level_ti
         actions = {},
         disabled = false,
         error_once = {},
-        origin = { checked = false },
+        origin = { checked = false, confirmed = false },
         underground = { samples = 0, duration_ms = 0, last_sample_at = nil, confirmed = false },
         rolling = { samples = 0, duration_ms = 0, last_sample_at = nil, max_excess = 0, confirmed = false },
     }
@@ -690,7 +694,9 @@ local function capture_artifact_provenance(artifact_id, anom_zone, pos, level_ti
     state.artifact_provenance[key] = record
     if artifact_rescue_observe_enabled() then compute_observe_target(record) end
     provenance_log("captured", record, nil, record.reason,
-        "field=" .. fmt_position(record.spawn_input_pos) .. ",zone_size=" .. tostring(record.zone_size))
+        "field=" .. fmt_position(record.spawn_input_pos) .. ",zone_size=" .. tostring(record.zone_size)
+        .. ",spawn_guard=" .. tostring(spawn_guard and spawn_guard.status or "legacy_base")
+        .. ",spawn_attempts=" .. tostring(spawn_guard and spawn_guard.attempts or 0))
     if first and not record.disabled then
         record.state = "observing_server"
         record.reason = "first_server_captured"
@@ -860,28 +866,51 @@ local function observe_origin_candidate(record, snapshot)
     local target = compute_observe_target(record)
     if not target then return end
     local pos = snapshot.server_pos
+    local first = record.first_server
+    local initial_pos = first and first.pos
+    if not initial_pos then return end
     local origin_radius = math.max(0, C.get_number("global", "artifact_rescue_origin_radius", 2))
     local origin_distance = math.sqrt(pos.x * pos.x + pos.y * pos.y + pos.z * pos.z)
+    local initial_origin_distance = math.sqrt(initial_pos.x * initial_pos.x
+        + initial_pos.y * initial_pos.y + initial_pos.z * initial_pos.z)
     local field_limit = math.sqrt(2) * record.zone_size
         + C.get_number("global", "artifact_rescue_origin_field_margin", 2)
     local field_distance = distance_xz(pos, record.spawn_input_pos)
-    local first_lvid = record.first_server and record.first_server.lvid
+    local initial_field_distance = distance_xz(initial_pos, record.spawn_input_pos)
+    local first_lvid = first.lvid
     local nav_limit = math.max(0, C.get_number("global", "artifact_rescue_origin_nav_mismatch", 4))
     local nav_bad = not valid_vertex_id(first_lvid)
         or snapshot.nearest_vertex == nil
         or (snapshot.vertex_distance and snapshot.vertex_distance > nav_limit)
         or (snapshot.vertex_delta_y and math.abs(snapshot.vertex_delta_y) > nav_limit)
+    local level_ok, current_level = pcall(function() return level and level.name() end)
+    local identity_ok = record.section ~= nil and snapshot.server_section == record.section
+        and valid_vertex_id(first.gvid) and snapshot.server_gvid == first.gvid
+        and level_ok and current_level == record.level
+    local target_ok = target.valid == true and target.source == "field_candidate"
+        and target.support == "static_ray" and valid_vertex_id(target.lvid)
+        and valid_vertex_id(target.gvid)
     record.origin.checked = true
     record.origin.near_origin = origin_distance <= origin_radius
+    record.origin.initial_near_origin = initial_origin_distance <= origin_radius
     record.origin.field_distance = field_distance
+    record.origin.initial_field_distance = initial_field_distance
     record.origin.field_limit = field_limit
     record.origin.nav_bad = nav_bad
-    record.origin.target_valid = target.valid == true
-    if record.origin.near_origin and field_distance > field_limit and nav_bad and target.valid then
+    record.origin.identity_ok = identity_ok
+    record.origin.target_valid = target_ok
+    if record.origin.near_origin and record.origin.initial_near_origin
+    and field_distance > field_limit and initial_field_distance > field_limit
+    and nav_bad and identity_ok and target_ok then
+        record.origin.confirmed = true
         local extra = "origin_distance=" .. fmt_number(origin_distance)
+            .. ",initial_origin_distance=" .. fmt_number(initial_origin_distance)
             .. ",field_distance=" .. fmt_number(field_distance)
+            .. ",initial_field_distance=" .. fmt_number(initial_field_distance)
             .. ",field_limit=" .. fmt_number(field_limit)
-            .. ",nav_bad=" .. tostring(nav_bad)
+            .. ",nav_bad=" .. tostring(nav_bad) .. ",identity_ok=" .. tostring(identity_ok)
+            .. ",target_source=" .. tostring(target.source)
+            .. ",target_support=" .. tostring(target.support)
         begin_artifact_suspect(record, "origin_mismatch", snapshot, extra)
         record.active_samples = 1
         record.active_duration_ms = 0
@@ -1754,6 +1783,7 @@ local function update_debug_same_id_rescue(record, snapshot, now)
     local rescue_reason_confirmed = rescue_reason == "rolling"
         and record.rolling and record.rolling.confirmed
         or rescue_reason == "underground" and record.underground and record.underground.confirmed
+        or rescue_reason == "origin_mismatch" and record.origin and record.origin.confirmed
     if not rescue_policy
     or record.state ~= "rescue_pending"
     or not rescue_reason_confirmed then return end
@@ -1802,6 +1832,29 @@ local function update_debug_same_id_rescue(record, snapshot, now)
     if (record.cooldown_remaining_ms or 0) > 0 then return end
 
     if not validate_same_id_action_context(record, snapshot, nil, "same_id_teleport_dispatch") then return end
+    if rescue_reason == "origin_mismatch" then
+        local current = snapshot.server_pos
+        local zone_size = tonumber(record.zone_size)
+        if not (current and record.spawn_input_pos and zone_size and zone_size > 0) then
+            disable_provenance(record, "same_id_origin_dispatch_evidence",
+                "fresh_origin_field_provenance_missing")
+            return
+        end
+        local origin_radius = math.max(0, C.get_number("global", "artifact_rescue_origin_radius", 2))
+        local field_limit = math.sqrt(2) * zone_size
+            + C.get_number("global", "artifact_rescue_origin_field_margin", 2)
+        local origin_distance = math.sqrt(current.x * current.x
+            + current.y * current.y + current.z * current.z)
+        local field_distance = distance_xz(current, record.spawn_input_pos)
+        if not saved_origin_evidence_valid(record) or origin_distance > origin_radius
+        or field_distance <= field_limit then
+            disable_provenance(record, "same_id_origin_dispatch_evidence",
+                "fresh_origin_evidence_mismatch,origin_distance=" .. fmt_number(origin_distance)
+                .. ",field_distance=" .. fmt_number(field_distance)
+                .. ",field_limit=" .. fmt_number(field_limit))
+            return
+        end
+    end
     local target = compute_observe_target(record)
     if not (target and target.valid and valid_vertex_id(target.lvid) and valid_vertex_id(target.gvid)) then
         disable_provenance(record, "same_id_teleport_target", "valid_target_unavailable")
@@ -1867,6 +1920,8 @@ local function update_debug_same_id_rescue(record, snapshot, now)
         record.rolling_rescue_count = (record.rolling_rescue_count or 0) + 1
     elseif action.reason == "underground" then
         record.underground_rescue_count = (record.underground_rescue_count or 0) + 1
+    elseif action.reason == "origin_mismatch" then
+        record.origin_rescue_count = (record.origin_rescue_count or 0) + 1
     end
     record.state = "verifying"
     record.timestamps.verifying_at = now
@@ -3474,6 +3529,135 @@ local function prepare_sortie(sortie_type)
     log("prepare details type=%s level=%s", tostring(sortie_type), tostring(level.name()))
 end
 
+-- The stock RVM path validates the field center, then generates a second
+-- artifact position and calls level.vertex_position() without validating that
+-- second vertex.  In this build raid_artefacts keeps the original RVM function
+-- in a public module field while its wrapper owns addToQueuedArtefacts.  Guard
+-- the original function's Lua 5.1 environment synchronously, then call the
+-- outer wrapper so section selection, class/mutation queueing and return shape
+-- stay stock.  If that exact environment relationship is unavailable, fail
+-- closed instead of calling an unguarded path.
+local function guarded_rvm_artifact_spawn(base_spawn, anom_zone, field_pos, level_tier)
+    local result = { status = "guard_unavailable", attempts = 0, rejects = {} }
+    local inner_spawn = raid_artefacts and raid_artefacts.spawn_artefact_in_zone
+    local env_ok, inner_env = pcall(function() return getfenv(inner_spawn) end)
+    if type(base_spawn) ~= "function" or type(inner_spawn) ~= "function"
+    or not env_ok or inner_env ~= raid_anomalys or type(raid_anomalys) ~= "table" then
+        printf(PREFIX .. " ERROR artifact spawn prevention unavailable zone=%s field=(%s) reason=stock_inner_environment_unverified; spawn deferred",
+            tostring(anom_zone), fmt_position(field_pos))
+        return nil, result
+    end
+
+    local create_delegate = rawget(raid_anomalys, "alife_create_item") or alife_create_item
+    local engine_level = level
+    if type(create_delegate) ~= "function" or not engine_level
+    or type(engine_level.vertex_id) ~= "function" or type(engine_level.vertex_position) ~= "function" then
+        printf(PREFIX .. " ERROR artifact spawn prevention unavailable zone=%s field=(%s) reason=engine_spawn_api_unavailable; spawn deferred",
+            tostring(anom_zone), fmt_position(field_pos))
+        return nil, result
+    end
+
+    local zone_size = artifact_zone_size(anom_zone)
+    if not zone_size or not field_pos then
+        printf(PREFIX .. " ERROR artifact spawn prevention unavailable zone=%s field=(%s) reason=field_provenance_missing; spawn deferred",
+            tostring(anom_zone), fmt_position(field_pos))
+        return nil, result
+    end
+    local maximum = math.sqrt(2) * zone_size
+        + C.get_number("global", "artifact_rescue_origin_field_margin", 2)
+    local maximum_attempts = math.min(20, math.max(1, math.floor(
+        C.get_number("global", "artifact_spawn_guard_attempts", 8))))
+    local saved_level = rawget(raid_anomalys, "level")
+    local saved_create = rawget(raid_anomalys, "alife_create_item")
+
+    for attempt = 1, maximum_attempts do
+        result.attempts = attempt
+        local rejection = nil
+        local accepted_target = nil
+        local created_id = nil
+        local level_proxy = {
+            vertex_id = function(candidate)
+                return engine_level.vertex_id(candidate)
+            end,
+            vertex_position = function(lvid)
+                if not valid_vertex_id(lvid) then
+                    rejection = "invalid_second_vertex"
+                    return nil
+                end
+                return engine_level.vertex_position(lvid)
+            end,
+        }
+        rawset(raid_anomalys, "level", level_proxy)
+        rawset(raid_anomalys, "alife_create_item", function(section, spawn, properties)
+            local spawn_pos = type(spawn) == "table" and spawn[1] or nil
+            local spawn_lvid = type(spawn) == "table" and spawn[2] or nil
+            if rejection or not spawn_pos or not valid_vertex_id(spawn_lvid) then
+                rejection = rejection or "invalid_create_input"
+                return {}
+            end
+            local target, target_error = artifact_static_target(pos_table(spawn_pos))
+            if not target then
+                rejection = "unsupported_candidate:" .. tostring(target_error)
+                return {}
+            end
+            if distance_xz(target.pos, field_pos) > maximum then
+                rejection = "candidate_outside_captured_field"
+                return {}
+            end
+            accepted_target = target
+            local created = create_delegate(section, {
+                pos_vector(target.pos), target.lvid, target.gvid,
+            }, properties)
+            if not created then
+                rejection = "create_returned_nil"
+                return {}
+            end
+            created_id = created.id
+            return created
+        end)
+
+        local call_ok, artifact_id_or_error = pcall(base_spawn, anom_zone, field_pos, level_tier)
+        rawset(raid_anomalys, "level", saved_level)
+        rawset(raid_anomalys, "alife_create_item", saved_create)
+
+        if created_id then
+            result.status = call_ok and "created_guarded" or "created_posthook_error"
+            result.target = accepted_target
+            result.artifact_id = created_id
+            if not call_ok then
+                printf(PREFIX .. " ERROR artifact spawn posthook failed id=%s zone=%s error=%s; guarded object preserved, no retry",
+                    tostring(created_id), tostring(anom_zone), tostring(artifact_id_or_error))
+            elseif artifact_id_or_error ~= created_id then
+                printf(PREFIX .. " ERROR artifact spawn guard return mismatch created=%s returned=%s zone=%s; created ID preserved, no retry",
+                    tostring(created_id), tostring(artifact_id_or_error), tostring(anom_zone))
+            end
+            log("artifact spawn prevention accepted id=%s zone=%s attempt=%s/%s field=(%s) target=(%s) source=field_candidate support=static_ray",
+                tostring(created_id), tostring(anom_zone), tostring(attempt), tostring(maximum_attempts),
+                fmt_position(field_pos), fmt_position(accepted_target and accepted_target.pos))
+            return created_id, result
+        end
+
+        if not rejection then
+            result.status = "base_error"
+            result.error = tostring(artifact_id_or_error)
+            printf(PREFIX .. " ERROR artifact spawn prevention aborted zone=%s field=(%s) attempt=%s error=%s; spawn deferred",
+                tostring(anom_zone), fmt_position(field_pos), tostring(attempt), tostring(artifact_id_or_error))
+            return nil, result
+        end
+        result.rejects[rejection] = (result.rejects[rejection] or 0) + 1
+    end
+
+    result.status = "retry_exhausted"
+    local reject_parts = {}
+    for reason, count in pairs(result.rejects) do
+        reject_parts[#reject_parts + 1] = tostring(reason) .. ":" .. tostring(count)
+    end
+    table.sort(reject_parts)
+    printf(PREFIX .. " ERROR artifact spawn prevention exhausted zone=%s field=(%s) attempts=%s rejects=[%s]; no object created, RVM count remains pending",
+        tostring(anom_zone), fmt_position(field_pos), tostring(maximum_attempts), table.concat(reject_parts, ","))
+    return nil, result
+end
+
 local function install_hooks()
     if hooks_installed then return end
     hooks_installed = true
@@ -3481,9 +3665,18 @@ local function install_hooks()
     if raid_anomalys and raid_anomalys.spawn_artefact_in_zone then
         local base_spawn_artifact = raid_anomalys.spawn_artefact_in_zone
         raid_anomalys.spawn_artefact_in_zone = function(anom_zone, pos, level_tier)
-            local artifact_id = base_spawn_artifact(anom_zone, pos, level_tier)
+            local guard_active = enabled() and state.sortie_type == "infected"
+                and state.level_name == level.name()
+            local artifact_id, spawn_guard = nil, nil
+            if guard_active then
+                artifact_id, spawn_guard = guarded_rvm_artifact_spawn(
+                    base_spawn_artifact, anom_zone, pos, level_tier)
+            else
+                artifact_id = base_spawn_artifact(anom_zone, pos, level_tier)
+            end
             if enabled() and artifact_id and state.sortie_type == "infected" and state.level_name == level.name() then
-                local capture_ok, capture_error = pcall(capture_artifact_provenance, artifact_id, anom_zone, pos, level_tier)
+                local capture_ok, capture_error = pcall(capture_artifact_provenance,
+                    artifact_id, anom_zone, pos, level_tier, spawn_guard)
                 if not capture_ok then
                     printf(PREFIX .. " ERROR artifact provenance capture failed id=%s zone=%s error=%s; observer skipped, base artifact preserved",
                         tostring(artifact_id), tostring(anom_zone), tostring(capture_error))
@@ -3791,16 +3984,43 @@ local function legacy_disabled_provenance(artifact_id, zone, reason)
         primary_reason = nil,
         target = nil,
         rescue_count = 0,
+        origin_rescue_count = 0,
         rolling_rescue_count = 0,
         underground_rescue_count = 0,
         cooldown_until = 0,
         actions = {},
         disabled = true,
         error_once = { migration = true },
-        origin = { checked = false },
+        origin = { checked = false, confirmed = false },
         underground = { samples = 0, duration_ms = 0, last_sample_at = nil, confirmed = false },
         rolling = { samples = 0, duration_ms = 0, last_sample_at = nil, max_excess = 0, confirmed = false },
     }
+end
+
+saved_origin_evidence_valid = function(record)
+    local first = record and record.first_server
+    local initial_pos = first and first.pos
+    local field_pos = record and record.spawn_input_pos
+    local zone_size = record and tonumber(record.zone_size)
+    local origin = record and record.origin
+    local target = record and record.target
+    if not (initial_pos and field_pos and zone_size and zone_size > 0 and origin and target) then
+        return false
+    end
+    local origin_radius = math.max(0, C.get_number("global", "artifact_rescue_origin_radius", 2))
+    local initial_origin_distance = math.sqrt(initial_pos.x * initial_pos.x
+        + initial_pos.y * initial_pos.y + initial_pos.z * initial_pos.z)
+    local field_limit = math.sqrt(2) * zone_size
+        + C.get_number("global", "artifact_rescue_origin_field_margin", 2)
+    return initial_origin_distance <= origin_radius
+        and distance_xz(initial_pos, field_pos) > field_limit
+        and origin.near_origin == true
+        and origin.nav_bad == true
+        and record.section ~= nil and record.level ~= nil
+        and valid_vertex_id(first.gvid)
+        and target.valid == true and target.source == "field_candidate"
+        and target.support == "static_ray"
+        and valid_vertex_id(target.lvid) and valid_vertex_id(target.gvid)
 end
 
 local function migrate_artifact_provenance(previous_schema)
@@ -3835,6 +4055,7 @@ local function migrate_artifact_provenance(previous_schema)
             record.actions = record.actions or {}
             record.error_once = record.error_once or {}
             record.origin = record.origin or { checked = false }
+            record.origin.confirmed = record.origin.confirmed == true
             record.underground = record.underground or { samples = 0, duration_ms = 0, confirmed = false }
             record.rolling = record.rolling or { samples = 0, duration_ms = 0, max_excess = 0, confirmed = false }
             local saved_provenance_schema = tonumber(record.provenance_schema) or 0
@@ -3852,6 +4073,23 @@ local function migrate_artifact_provenance(previous_schema)
                 if record.state == "rescue_pending" and record.primary_reason then
                     record.reason = record.primary_reason
                 end
+            end
+            if saved_provenance_schema < 3
+            and record.state == "rescue_pending"
+            and (record.primary_reason == "origin_mismatch" or record.reason == "origin_mismatch") then
+                if saved_origin_evidence_valid(record) then
+                    record.primary_reason = "origin_mismatch"
+                    record.reason = "origin_mismatch"
+                    record.causal_origin = "origin_mismatch"
+                    record.origin.confirmed = true
+                else
+                    record.disabled = true
+                    record.state = "disabled"
+                    record.reason = "saved_origin_evidence_incomplete"
+                    record.origin.confirmed = false
+                end
+            end
+            if saved_provenance_schema > 0 and saved_provenance_schema < ARTIFACT_PROVENANCE_SCHEMA then
                 record.provenance_schema = ARTIFACT_PROVENANCE_SCHEMA
             end
             -- time_global is process-local; accumulated durations survive, raw
@@ -3859,6 +4097,7 @@ local function migrate_artifact_provenance(previous_schema)
             record.underground.last_sample_at = nil
             record.rolling.last_sample_at = nil
             record.rescue_count = tonumber(record.rescue_count) or 0
+            record.origin_rescue_count = tonumber(record.origin_rescue_count) or 0
             record.rolling_rescue_count = tonumber(record.rolling_rescue_count) or 0
             record.underground_rescue_count = tonumber(record.underground_rescue_count) or 0
             record.cooldown_until = tonumber(record.cooldown_until) or 0
