@@ -59,17 +59,20 @@ function Resolve-EffectiveMaximum([int]$ActionCount, [bool]$Requested, [bool]$Al
 Assert-True ((Resolve-EffectiveMaximum 0 $true $false 2) -eq 1) 'production first held dispatch maximum is not one'
 Assert-True ((Resolve-EffectiveMaximum 1 $false $true 2) -eq 1) 'production policy allowed another rescue after held dispatch'
 
-function Resolve-RescuePolicy([bool]$Observe, [bool]$Actions, [string]$Policy, [string]$Reason, [bool]$ExactDebugId) {
-    if (-not $Observe -or -not $Actions -or $Reason -ne 'rolling') { return 'none' }
+function Resolve-RescuePolicy([bool]$Observe, [bool]$Actions, [string]$RollingPolicy, [string]$UndergroundPolicy, [string]$Reason, [bool]$ExactDebugId) {
+    if (-not $Observe -or -not $Actions -or @('rolling','underground') -notcontains $Reason) { return 'none' }
+    $Policy = if ($Reason -eq 'rolling') { $RollingPolicy } else { $UndergroundPolicy }
     if ($Policy -eq 'held_first') { return 'held_first' }
     if ($Policy -eq 'debug_teleport' -and $ExactDebugId) { return 'debug_teleport' }
     return 'none'
 }
 
-Assert-True ((Resolve-RescuePolicy $true $true 'held_first' 'rolling' $false) -eq 'held_first') 'production rolling policy still depends on exact debug ID'
-Assert-True ((Resolve-RescuePolicy $true $false 'held_first' 'rolling' $false) -eq 'none') 'production master gate default is not safe'
-Assert-True ((Resolve-RescuePolicy $true $true 'held_first' 'underground' $false) -eq 'none') 'production policy leaked into underground'
-Assert-True ((Resolve-RescuePolicy $true $true 'debug_teleport' 'rolling' $false) -eq 'none') 'debug policy ignored exact-ID gate'
+Assert-True ((Resolve-RescuePolicy $true $true 'held_first' 'held_first' 'rolling' $false) -eq 'held_first') 'production rolling policy still depends on exact debug ID'
+Assert-True ((Resolve-RescuePolicy $true $true 'held_first' 'held_first' 'underground' $false) -eq 'held_first') 'production underground policy still depends on exact debug ID'
+Assert-True ((Resolve-RescuePolicy $true $false 'held_first' 'held_first' 'underground' $false) -eq 'none') 'production master gate default is not safe'
+Assert-True ((Resolve-RescuePolicy $true $true 'held_first' 'off' 'underground' $false) -eq 'none') 'underground policy off still authorized an action'
+Assert-True ((Resolve-RescuePolicy $true $true 'held_first' 'held_first' 'origin_mismatch' $false) -eq 'none') 'production policy leaked into origin rescue'
+Assert-True ((Resolve-RescuePolicy $true $true 'debug_teleport' 'held_first' 'rolling' $false) -eq 'none') 'debug policy ignored exact-ID gate'
 
 # Journal ownership: only elements observed unfixed and successfully fixed by
 # this action enter the persistent release list.
@@ -116,6 +119,7 @@ foreach ($needle in @(
     'or stabilization_mode == "held" and held_after_verified or 2',
     'local function artifact_rescue_action_policy(record, persisted_reason)',
     'if policy == "held_first" then return policy end',
+    'or "artifact_rescue_underground_policy"',
     'rescue_policy = rescue_policy',
     'local production_held = action.rescue_policy == "held_first"',
     'local configured_timeout = production_held and 0',
@@ -146,6 +150,7 @@ Assert-True ($main.Contains('if timeout > 0 and held.duration_ms >= timeout then
 foreach ($needle in @(
     'artifact_rescue_debug_same_frame_stabilization = false',
     'artifact_rescue_rolling_policy = held_first',
+    'artifact_rescue_underground_policy = held_first',
     'artifact_rescue_debug_held_after_verified_actions = 2',
     'artifact_rescue_debug_held_stabilization = false',
     'artifact_rescue_debug_held_timeout_ms = 120000'

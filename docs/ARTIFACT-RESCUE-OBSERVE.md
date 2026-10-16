@@ -53,6 +53,14 @@ Rolling начинается, когда свободный предмет да�
 
 Production policy не использует exact-ID allowlist и debug stabilization gates. Её выбирает `artifact_rescue_rolling_policy=held_first`; общий `artifact_rescue_actions=false` остаётся безопасным default до ограниченного multi-artifact smoke-test.
 
+## Production policy настоящего underground
+
+`artifact_rescue_underground_policy=held_first` маршрутизирует только подтверждённый vertical underground в тот же исполнитель. Истинный образец — `af_signet#6740` на `y04_pole`: исходный `y=0.3`, X/Z и distance оставались внутри linked radius, затем online `y=-20.5`, confirmation примерно через `2.023 s` при `y=-58.1`, позднее `-77.7`. Это не rolling. Напротив, уже подтверждённый rolling при низком Y/invalid nav остаётся rolling и не попадает в underground policy.
+
+Rescue target вычисляется только из captured `spawn_input_pos`, `zone_size` и сохранённой linked-zone provenance: кандидаты проходят nav vertex, downward static-ray support и максимальную дистанцию от исходного поля. Текущая провалившаяся позиция не является входом target-builder. Исполнитель сохраняет original server ID и не делает recreate/offline-cycle.
+
+Минимальный полевой тест использует известный save до confirmation `af_signet#6740`: временно выставить `artifact_rescue_actions=true`, `artifact_rescue_rolling_policy=off`, `artifact_rescue_underground_policy=held_first`, оставить все debug action gates выключенными. Первый post-load snapshot только снимает fresh guard; после настоящих `3 samples / 2000 ms` ожидается `confirmed reason=underground action=held_first` → `action_dispatched dispatch=1 maximum=1` → три `position_verified` checks → `held_attempt` → `held`. Затем проверить pickup/release/closed и вернуть `artifact_rescue_actions=false`, `artifact_rescue_rolling_policy=held_first`.
+
 ## Лабораторный same-ID prototype
 
 Prototype по умолчанию полностью выключен. Закрытый allowlist содержит только exact original IDs `1407` и `6362` с причиной rolling; section-only fallback отсутствует. Каждый ID имеет независимый предел в два same-ID `alife():teleport_object`, без recreate/offline-cycle/physics. Schema-1 сейв принятого теста мигрирует в schema 2 и восстанавливает первичную rolling-причину даже после старой ложной переклассификации.

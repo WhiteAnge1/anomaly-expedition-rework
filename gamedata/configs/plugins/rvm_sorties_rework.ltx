@@ -128,6 +128,9 @@ artifact_rescue_actions = false
 ; первый rescue делает same-ID teleport, три fresh snapshots, reacquire и held.
 ; Значение debug_teleport возвращает закрытый exact-ID лабораторный сценарий.
 artifact_rescue_rolling_policy = held_first
+; Отдельная production policy только для настоящего vertical underground.
+; Она использует captured field provenance и не меняет rolling/origin priority.
+artifact_rescue_underground_policy = held_first
 ; Узкий laboratory fallback при artifact_rescue_rolling_policy=debug_teleport:
 ; same-ID teleport только для exact original IDs 1407 и 6362 и причины rolling.
 ; Section fallback запрещён.

@@ -53,6 +53,7 @@ function Confirm-Underground {
 
 Assert-True (Confirm-Underground @(12,13,14) @(4,5,6) @(0,1000,2000) $false) 'underground 3-sample/2-second confirmation failed'
 Assert-True (-not (Confirm-Underground @(12,13) @(4,5) @(0,2000) $false)) 'underground confirmed with fewer than 3 samples'
+Assert-True (-not (Confirm-Underground @(12,3,14,15) @(4,1,5,6) @(0,1000,2000,3000) $false)) 'transient/invalid underground sample did not reset the episode'
 Assert-True (-not (Confirm-Underground @(12,13,14) @(4,5,6) @(0,1000,2000) $true)) 'underground ignored ownership guard'
 
 function Confirm-Rolling {
@@ -145,6 +146,13 @@ if (-not $loadedPending.awaiting_fresh_snapshot -and $loadedPending.state -eq 'r
     $loadedPending.dispatched = $true
 }
 Assert-True ($loadedPending.dispatched) 'persisted rolling pending was not eligible after a fresh snapshot'
+$loadedUnderground = @{ state = 'rescue_pending'; primary_reason = 'underground'; awaiting_fresh_snapshot = $true; dispatched = $false }
+if ($loadedUnderground.awaiting_fresh_snapshot) { $loadedUnderground.awaiting_fresh_snapshot = $false }
+Assert-True (-not $loadedUnderground.dispatched) 'underground action dispatched directly from load_restore/first snapshot'
+if (-not $loadedUnderground.awaiting_fresh_snapshot -and $loadedUnderground.state -eq 'rescue_pending' -and $loadedUnderground.primary_reason -eq 'underground') {
+    $loadedUnderground.dispatched = $true
+}
+Assert-True ($loadedUnderground.dispatched) 'persisted underground pending was not eligible after a fresh snapshot'
 $loadedRecovered = @{ state = 'observing_online'; primary_reason = $null; awaiting_fresh_snapshot = $true; dispatched = $false }
 if ($loadedRecovered.awaiting_fresh_snapshot) { $loadedRecovered.awaiting_fresh_snapshot = $false }
 Assert-True (-not $loadedRecovered.dispatched -and $null -eq $loadedRecovered.primary_reason) 'inside-tether load incorrectly dispatched rescue'
@@ -190,6 +198,15 @@ foreach ($needle in @(
     'record.awaiting_fresh_snapshot = true', 'post_load_snapshot', 'action_deferred=true',
     'local function update_debug_same_id_rescue(record, snapshot, now)',
     'record.state == "rescue_pending" and record.primary_reason == "rolling"',
+    'rescue_reason == "underground" and record.underground and record.underground.confirmed',
+    'underground_rescue_count',
+    'x = record.spawn_input_pos.x + offset.x',
+    'z = record.spawn_input_pos.z + offset.z',
+    'distance_xz(target.pos, record.spawn_input_pos) <= maximum',
+    'target.source ~= "field_candidate" or target.support ~= "static_ray"',
+    'production_target_provenance_invalid',
+    'source = target.source, support = target.support',
+    'production_same_id_teleport',
     'alife():teleport_object(record.artifact_id, target.gvid, target.lvid, pos_vector(target.pos))',
     'record.state = "verifying"', 'record.state = "monitoring"', 'action.status = "position_verified"',
     'action_monitor', 'rolling_reconfirmed', 'action_monitor_complete', 'action_limit_reached',
@@ -210,6 +227,7 @@ foreach ($needle in @(
 foreach ($needle in @(
     'artifact_rescue_observe_only = true', 'artifact_rescue_actions = false',
     'artifact_rescue_rolling_policy = held_first',
+    'artifact_rescue_underground_policy = held_first',
     'artifact_rescue_debug_same_id_teleport = false', 'artifact_rescue_debug_artifact_ids = 1407,6362',
     'artifact_rescue_debug_reason = rolling',
     'artifact_rescue_debug_monitor_ms = 30000', 'artifact_rescue_debug_monitor_log_ms = 5000',
@@ -230,6 +248,8 @@ foreach ($forbidden in @('physics_element:fix', 'physics_element:release_fixed')
 }
 Assert-True (-not $main.Contains('action_stable')) 'three-frame action_stable criterion must not return'
 Assert-True (([regex]::Matches($main, [regex]::Escape('alife():teleport_object('))).Count -eq 1) 'same-ID teleport must have exactly one narrow call site'
+$targetBlock = [regex]::Match($main, '(?s)local function compute_observe_target\(record\).*?\nend\n\s*local function provenance_log').Value
+Assert-True ($targetBlock.Contains('record.spawn_input_pos') -and -not $targetBlock.Contains('snapshot.online_pos')) 'rescue target is not isolated from the failed current position'
 foreach ($gate in @('artifact_rescue_actions', 'artifact_rescue_debug_same_id_teleport', 'artifact_rescue_debug_artifact_ids', 'artifact_rescue_debug_reason')) {
     Assert-True ($main.Contains($gate)) "same-ID teleport gate missing: $gate"
 }

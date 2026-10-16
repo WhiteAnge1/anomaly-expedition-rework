@@ -474,12 +474,15 @@ local function artifact_rescue_debug_action_enabled(record, persisted_reason)
 end
 
 local function artifact_rescue_action_policy(record, persisted_reason)
+    local reason = tostring(persisted_reason or record.primary_reason or record.reason)
     if not artifact_rescue_observe_enabled()
     or not C.get_bool("global", "artifact_rescue_actions", false)
-    or tostring(persisted_reason or record.primary_reason or record.reason) ~= "rolling" then
+    or (reason ~= "rolling" and reason ~= "underground") then
         return nil
     end
-    local policy = string.lower(C.get_string("global", "artifact_rescue_rolling_policy", "held_first"))
+    local policy_key = reason == "rolling" and "artifact_rescue_rolling_policy"
+        or "artifact_rescue_underground_policy"
+    local policy = string.lower(C.get_string("global", policy_key, "held_first"))
     if policy == "held_first" then return policy end
     if policy == "debug_teleport" and artifact_rescue_debug_action_enabled(record, persisted_reason) then
         return policy
@@ -670,6 +673,7 @@ local function capture_artifact_provenance(artifact_id, anom_zone, pos, level_ti
         target = nil,
         rescue_count = 0,
         rolling_rescue_count = 0,
+        underground_rescue_count = 0,
         cooldown_until = 0,
         cooldown_remaining_ms = 0,
         cooldown_last_sample_at = nil,
@@ -1120,6 +1124,11 @@ local function validate_same_id_action_context(record, snapshot, action, context
         local target = action.target
         if not (target and target.pos and valid_vertex_id(target.lvid) and valid_vertex_id(target.gvid)) then
             disable_provenance(record, context .. "_target", "saved_target_invalid")
+            return false
+        end
+        if action.rescue_policy == "held_first"
+        and (target.source ~= "field_candidate" or target.support ~= "static_ray") then
+            disable_provenance(record, context .. "_target", "production_target_provenance_invalid")
             return false
         end
         if action.artifact_id ~= record.artifact_id or action.section ~= record.section then
@@ -1583,8 +1592,10 @@ local function update_debug_same_id_rescue(record, snapshot, now)
                 record.primary_reason = nil
                 reset_rolling_for_monitor(record)
                 record.timestamps.position_verified_at = now
+                local verified_kind = action.rescue_policy == "debug_teleport"
+                    and "debug_same_id_teleport" or "production_same_id_teleport"
                 provenance_log("position_verified", record, snapshot, record.reason,
-                    "kind=debug_same_id_teleport,same_id=true,checks=" .. tostring(action.verification_checks)
+                    "kind=" .. verified_kind .. ",same_id=true,checks=" .. tostring(action.verification_checks)
                     .. ",monitor_ms=" .. tostring(math.max(30000, C.get_number("global", "artifact_rescue_debug_monitor_ms", 30000))))
                 if action.held_pending then
                     local held_mode = artifact_rescue_stabilization_mode(
@@ -1702,10 +1713,13 @@ local function update_debug_same_id_rescue(record, snapshot, now)
     end
 
     local rescue_policy = artifact_rescue_action_policy(record)
+    local rescue_reason = record.primary_reason
+    local rescue_reason_confirmed = rescue_reason == "rolling"
+        and record.rolling and record.rolling.confirmed
+        or rescue_reason == "underground" and record.underground and record.underground.confirmed
     if not rescue_policy
     or record.state ~= "rescue_pending"
-    or record.primary_reason ~= "rolling"
-    or not (record.rolling and record.rolling.confirmed) then return end
+    or not rescue_reason_confirmed then return end
 
     local action_count = artifact_action_count(record)
     local ordinary_max_dispatches = math.min(2, math.max(1, math.floor(
@@ -1756,6 +1770,11 @@ local function update_debug_same_id_rescue(record, snapshot, now)
         disable_provenance(record, "same_id_teleport_target", "valid_target_unavailable")
         return
     end
+    if rescue_policy == "held_first"
+    and (target.source ~= "field_candidate" or target.support ~= "static_ray") then
+        disable_provenance(record, "same_id_teleport_target", "production_target_provenance_invalid")
+        return
+    end
     local server_ok, server = pcall(alife_object, record.artifact_id)
     server = server_ok and server or nil
     if not server or object_section(server) ~= record.section then
@@ -1769,7 +1788,10 @@ local function update_debug_same_id_rescue(record, snapshot, now)
         reason = record.primary_reason,
         artifact_id = record.artifact_id,
         section = record.section,
-        target = { pos = pos_table(target.pos), lvid = target.lvid, gvid = target.gvid },
+        target = {
+            pos = pos_table(target.pos), lvid = target.lvid, gvid = target.gvid,
+            source = target.source, support = target.support,
+        },
         requested_at = now,
         verification_checks = 0,
         verification_samples = 0,
@@ -1804,21 +1826,29 @@ local function update_debug_same_id_rescue(record, snapshot, now)
     action.status = "verifying"
     action.dispatched_at = now
     record.rescue_count = (record.rescue_count or 0) + 1
-    record.rolling_rescue_count = (record.rolling_rescue_count or 0) + 1
+    if action.reason == "rolling" then
+        record.rolling_rescue_count = (record.rolling_rescue_count or 0) + 1
+    elseif action.reason == "underground" then
+        record.underground_rescue_count = (record.underground_rescue_count or 0) + 1
+    end
     record.state = "verifying"
     record.timestamps.verifying_at = now
     local physics_mode = "none"
     if stabilization_requested then
         physics_mode = stabilization_mode == "held" and "held_pending" or "same_frame_fix_release"
     end
+    local action_log_kind = rescue_policy == "debug_teleport"
+        and "debug_same_id_teleport" or "production_same_id_teleport"
     provenance_log("action_dispatched", record, snapshot, record.primary_reason,
-        "kind=debug_same_id_teleport,same_id=true,physics=" .. physics_mode
+        "kind=" .. action_log_kind .. ",same_id=true,physics=" .. physics_mode
         .. ",dispatch=" .. tostring(action.dispatch_index)
         .. ",maximum=" .. tostring(effective_max_dispatches)
         .. ",policy=" .. tostring(rescue_policy)
         .. ",stabilization_after_verified=" .. tostring(stabilization_after_verified)
         .. ",stabilization_requested=" .. tostring(stabilization_requested)
         .. ",stabilization_status=" .. tostring(action.stabilization and action.stabilization.status or "none")
+        .. ",target_source=" .. tostring(action.target.source)
+        .. ",target_support=" .. tostring(action.target.support)
         .. ",target=" .. fmt_position(target.pos))
 end
 
@@ -3725,6 +3755,7 @@ local function legacy_disabled_provenance(artifact_id, zone, reason)
         target = nil,
         rescue_count = 0,
         rolling_rescue_count = 0,
+        underground_rescue_count = 0,
         cooldown_until = 0,
         actions = {},
         disabled = true,
@@ -3792,6 +3823,7 @@ local function migrate_artifact_provenance(previous_schema)
             record.rolling.last_sample_at = nil
             record.rescue_count = tonumber(record.rescue_count) or 0
             record.rolling_rescue_count = tonumber(record.rolling_rescue_count) or 0
+            record.underground_rescue_count = tonumber(record.underground_rescue_count) or 0
             record.cooldown_until = tonumber(record.cooldown_until) or 0
             record.cooldown_remaining_ms = math.max(0, tonumber(record.cooldown_remaining_ms) or 0)
             record.cooldown_last_sample_at = nil
