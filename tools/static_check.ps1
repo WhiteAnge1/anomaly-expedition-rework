@@ -8,6 +8,7 @@
 )
 
 $ErrorActionPreference = 'Stop'
+$ModRoot = (Resolve-Path -LiteralPath $ModRoot).Path
 $failures = [System.Collections.Generic.List[string]]::new()
 
 $required = @(

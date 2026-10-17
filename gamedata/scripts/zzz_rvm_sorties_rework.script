@@ -825,6 +825,12 @@ function ORIGIN.server_switch_flag(server, name)
     return called and type(value) == "boolean" and value or nil
 end
 
+function ORIGIN.server_online_state(server)
+    if not server then return nil end
+    local ok, value = pcall(function() return server.online end)
+    return ok and type(value) == "boolean" and value or nil
+end
+
 function ORIGIN.restore_switch_flags(record, context)
     local transition = record and record.origin_relocation
     if not (transition and transition.flags_forced and not transition.flags_restored) then return true end
@@ -1467,24 +1473,63 @@ end
 
 -- teleport_object is safe for the already-tested rolling/underground paths,
 -- but a broken world-origin object can still own an online CGameObject shell.
--- Teleporting that state makes X-Ray attempt net_spawn for the same ID.  For
--- origin recovery only, request a normal ALife offline transition, wait until
--- the exact online object is gone, then teleport and restore the original
--- switch policy.  No object is released or recreated.
+-- Teleporting that state makes X-Ray attempt net_spawn for the same ID.
+-- set_switch_online/offline only changes policy flags; online objects are not
+-- traversed by the offline ALife level registry, so those setters cannot force
+-- the transition.  The stock xr_effects/safe_release paths call the exported
+-- server:switch_offline() directly.  Origin recovery does the same only after
+-- proving server.online=true, then waits for the exact client shell to vanish.
+-- No object is released or recreated.
 function ORIGIN.prepare_offline_transition(record, snapshot)
-    if not snapshot.online_exists then return true end
     local transition = record.origin_relocation
     if transition and transition.flags_forced then
+        local server_ok, server = pcall(alife_object, record.artifact_id)
+        server = server_ok and server or nil
+        if not server or object_section(server) ~= record.section then
+            ORIGIN.restore_switch_flags(record, "origin_offline_identity_lost")
+            disable_provenance(record, "origin_offline_transition", "server_or_section_mismatch")
+            return false
+        end
+        local server_online = ORIGIN.server_online_state(server)
+        if server_online == nil then
+            ORIGIN.restore_switch_flags(record, "origin_offline_state_unreadable")
+            disable_provenance(record, "origin_offline_transition", "server_online_state_unreadable")
+            return false
+        end
+        if not snapshot.online_exists and not server_online then
+            transition.stage = "offline_confirmed"
+            transition.confirmed_at = time_global()
+            provenance_log("origin_offline_confirmed", record, snapshot, record.primary_reason,
+                "same_id=true,release=false,recreate=false,direct_switch=true")
+            return true
+        end
         transition.wait_checks = (transition.wait_checks or 0) + 1
         if transition.wait_checks >= 10 then
+            local persisted = snapshot.online_exists and "online_shell" or "server_online_state"
             ORIGIN.restore_switch_flags(record, "origin_offline_timeout")
-            disable_provenance(record, "origin_offline_transition", "online_shell_persisted_after_10_checks")
+            disable_provenance(record, "origin_offline_transition",
+                persisted .. "_persisted_after_10_checks")
         end
         return false
     end
 
+    if not snapshot.online_exists then return true end
+
     local server_ok, server = pcall(alife_object, record.artifact_id)
     server = server_ok and server or nil
+    if not server or object_section(server) ~= record.section then
+        disable_provenance(record, "origin_offline_transition", "server_or_section_mismatch")
+        return false
+    end
+    local server_online = ORIGIN.server_online_state(server)
+    if server_online == nil then
+        disable_provenance(record, "origin_offline_transition", "server_online_state_unreadable")
+        return false
+    end
+    if not server_online then
+        disable_provenance(record, "origin_offline_transition", "live_shell_with_server_offline")
+        return false
+    end
     local original_online = ORIGIN.server_switch_flag(server, "can_switch_online")
     local original_offline = ORIGIN.server_switch_flag(server, "can_switch_offline")
     if type(original_online) ~= "boolean" or type(original_offline) ~= "boolean" then
@@ -1515,9 +1560,22 @@ function ORIGIN.prepare_offline_transition(record, snapshot)
             .. ",offline_error=" .. tostring(offline_error))
         return false
     end
+    local switched, switch_error = pcall(function() server:switch_offline() end)
+    local switched_state = ORIGIN.server_online_state(server)
+    if not switched or switched_state ~= false then
+        ORIGIN.restore_switch_flags(record, "origin_direct_offline_failed")
+        disable_provenance(record, "origin_offline_transition",
+            "direct_switch_failed,error=" .. tostring(switch_error)
+            .. ",server_online=" .. tostring(switched_state))
+        return false
+    end
+    transition.stage = "offline_dispatched"
+    transition.direct_switch = true
+    transition.dispatched_at = time_global()
     provenance_log("origin_offline_requested", record, snapshot, record.primary_reason,
         "same_id=true,release=false,recreate=false,original_online=" .. tostring(original_online)
-        .. ",original_offline=" .. tostring(original_offline))
+        .. ",original_offline=" .. tostring(original_offline)
+        .. ",server_online=true,direct_switch=true")
     return false
 end
 
