@@ -20,7 +20,7 @@ local census_error_reported = false
 local next_artifact_diagnostic = 0
 local reported_artifact_overlaps = {}
 local safe_alive = nil
-local ARTIFACT_PROVENANCE_SCHEMA = 4
+local ARTIFACT_PROVENANCE_SCHEMA = 5
 local INVALID_VERTEX_ID = 4294967295
 local ARTIFACT_RESCUE_DEBUG_IDS = { [1407] = true, [6362] = true }
 local release_held_stabilization = nil
@@ -626,6 +626,88 @@ end
 -- than guessing from our yellow search area: the latter was generated from the
 -- broken artifact position and may itself be stale.  Exact artifact ID plus
 -- the saved field vertex, template, center and size identifies one RVM field.
+-- ORIGIN_REGISTRY_MATCH_BEGIN
+function ORIGIN.registry_match(record, registry)
+    local match_lvid, match = nil, nil
+    local matches = 0
+    for lvid, field in pairs(registry or {}) do
+        if type(field) == "table" and tonumber(field.artefact_id) == tonumber(record.artifact_id) then
+            matches = matches + 1
+            match_lvid = tonumber(lvid)
+            match = field
+        end
+    end
+    if matches ~= 1 then return nil, nil, "rvm_field_match_count:" .. tostring(matches) end
+    if not valid_vertex_id(match_lvid) or not match.pos then
+        return nil, nil, "rvm_field_identity_invalid"
+    end
+    return match_lvid, match, nil
+end
+-- ORIGIN_REGISTRY_MATCH_END
+
+-- ORIGIN_REGISTRY_EVIDENCE_BEGIN
+function ORIGIN.registry_evidence(record, match_lvid, match, field_pos, field_schema, current_level)
+    if tostring(current_level) ~= tostring(record.level) then
+        return nil, nil, "rvm_field_level_mismatch:" .. tostring(current_level) .. ":" .. tostring(record.level)
+    end
+    if tostring(match.anom_zone) ~= tostring(record.anom_zone) then
+        return nil, nil, "rvm_field_template_mismatch:" .. tostring(match.anom_zone)
+            .. ":" .. tostring(record.anom_zone)
+    end
+    local field_size = tonumber(match.size_zone)
+    local expected_size = tonumber(record.zone_size)
+    if not field_size or not expected_size then return nil, nil, "rvm_field_size_missing" end
+    if math.abs(field_size - expected_size) > 0.1 then
+        return nil, nil, "rvm_field_size_mismatch:" .. tostring(field_size) .. ":" .. tostring(expected_size)
+    end
+
+    -- RVM saves engine vectors directly. Stock marshal applies the shared
+    -- game.CTime __persist hook and restores a get()-based userdata whose
+    -- components are all zero; the registry key LVID survives intact. A live
+    -- keyed/array center can be checked directly. A marshaled center requires
+    -- independent saved LVID evidence and must never be compared as (0,0,0).
+    if field_schema ~= "marshal_get_xyz" then
+        local provenance_distance, provenance_distance_error = distance_xz(field_pos, record.spawn_input_pos)
+        if provenance_distance_error then
+            return nil, nil, "rvm_field_position_compare_invalid:" .. tostring(provenance_distance_error)
+        end
+        if provenance_distance > 0.5 then
+            return nil, nil, "rvm_field_center_mismatch:" .. fmt_number(provenance_distance)
+        end
+        return "live_registry_center", field_pos, nil
+    end
+    if record.rvm_field and valid_vertex_id(record.rvm_field.lvid) then
+        if tonumber(record.rvm_field.lvid) ~= match_lvid then
+            return nil, nil, "rvm_field_saved_lvid_mismatch:" .. tostring(record.rvm_field.lvid)
+                .. ":" .. tostring(match_lvid)
+        end
+        if tostring(record.rvm_field.anom_zone) ~= tostring(record.anom_zone)
+        or math.abs((tonumber(record.rvm_field.size) or -9999) - expected_size) > 0.1 then
+            return nil, nil, "rvm_field_saved_identity_mismatch"
+        end
+        local saved_distance, saved_distance_error = distance_xz(record.rvm_field.pos, record.spawn_input_pos)
+        if saved_distance_error or saved_distance > 0.5 then
+            return nil, nil, "rvm_field_saved_center_mismatch:"
+                .. tostring(saved_distance_error or fmt_number(saved_distance))
+        end
+        return "saved_exact_registry", pos_table(record.rvm_field.pos), nil
+    end
+    if record.legacy_origin_registry and valid_vertex_id(record.legacy_origin_registry.field_lvid) then
+        if tonumber(record.legacy_origin_registry.field_lvid) ~= match_lvid then
+            return nil, nil, "rvm_field_legacy_lvid_mismatch:"
+                .. tostring(record.legacy_origin_registry.field_lvid) .. ":" .. tostring(match_lvid)
+        end
+        if valid_vertex_id(record.legacy_origin_registry.gvid)
+        and record.first_server and valid_vertex_id(record.first_server.gvid)
+        and tonumber(record.legacy_origin_registry.gvid) ~= tonumber(record.first_server.gvid) then
+            return nil, nil, "rvm_field_legacy_gvid_mismatch"
+        end
+        return "legacy_exact_registry_lvid", pos_table(record.spawn_input_pos), nil
+    end
+    return nil, nil, "rvm_field_marshaled_center_without_lvid_evidence"
+end
+-- ORIGIN_REGISTRY_EVIDENCE_END
+
 function ORIGIN.field_target(record)
     if not (record and raid_anomalys and type(raid_anomalys.save_state) == "function") then
         return nil, "rvm_field_registry_unavailable"
@@ -636,40 +718,27 @@ function ORIGIN.field_target(record)
     local registry = payload.raid_current_anomaly_zones
     if type(registry) ~= "table" then return nil, "rvm_field_registry_missing" end
 
-    local match_lvid, match = nil, nil
-    local matches = 0
-    for lvid, field in pairs(registry) do
-        if type(field) == "table" and tonumber(field.artefact_id) == tonumber(record.artifact_id) then
-            matches = matches + 1
-            match_lvid = tonumber(lvid)
-            match = field
-        end
-    end
-    if matches ~= 1 then return nil, "rvm_field_match_count:" .. tostring(matches) end
-    if not valid_vertex_id(match_lvid) or not match.pos then return nil, "rvm_field_identity_invalid" end
+    local match_lvid, match, match_error = ORIGIN.registry_match(record, registry)
+    if not match_lvid then return nil, match_error end
+
+    local current_level_ok, current_level = pcall(function() return level and level.name() end)
+    if not current_level_ok then return nil, "rvm_field_level_unavailable" end
 
     local field_pos, field_schema, field_pos_error = ORIGIN.normalize_position(match.pos)
     ORIGIN.log_registry_position_shape(match.pos, field_schema, field_pos_error)
     if not field_pos then
         return nil, "rvm_field_position_invalid:" .. tostring(field_pos_error)
     end
-    local field_size = tonumber(match.size_zone)
-    local expected_size = tonumber(record.zone_size)
-    local provenance_distance, provenance_distance_error = distance_xz(field_pos, record.spawn_input_pos)
-    if provenance_distance_error then
-        return nil, "rvm_field_position_compare_invalid:" .. tostring(provenance_distance_error)
-    end
-    if tostring(match.anom_zone) ~= tostring(record.anom_zone)
-    or not field_size or not expected_size or math.abs(field_size - expected_size) > 0.1
-    or provenance_distance > 0.5 then
-        return nil, "rvm_field_provenance_mismatch"
-    end
+
+    local proof, proven_field_pos, evidence_error = ORIGIN.registry_evidence(
+        record, match_lvid, match, field_pos, field_schema, current_level)
+    if not proof then return nil, evidence_error end
 
     local nav_ok, nav = pcall(level.vertex_position, match_lvid)
     if not nav_ok or not nav then return nil, "rvm_field_vertex_position_missing" end
     local target, target_error = artifact_static_target(pos_table(nav))
     if not target then return nil, "rvm_field_target_" .. tostring(target_error) end
-    local target_distance, target_distance_error = distance_xz(target.pos, field_pos)
+    local target_distance, target_distance_error = distance_xz(target.pos, pos_table(nav))
     if target_distance_error then
         return nil, "rvm_field_target_position_invalid:" .. tostring(target_distance_error)
     end
@@ -684,10 +753,12 @@ function ORIGIN.field_target(record)
     target.field_lvid = match_lvid
     record.rvm_field = {
         lvid = match_lvid,
-        pos = field_pos,
+        pos = proven_field_pos,
         nav_pos = pos_table(nav),
-        size = field_size,
+        size = tonumber(match.size_zone),
         anom_zone = tostring(match.anom_zone),
+        proof = proof,
+        registry_position_schema = field_schema,
         matched_at = time_global(),
     }
     record.origin_target = target
@@ -1086,7 +1157,11 @@ local function observe_origin_candidate(record, snapshot)
     local target_ok = target.valid == true and target.source == "rvm_field_center"
         and target.support == "stock_lvid_static_ray" and valid_vertex_id(target.lvid)
         and valid_vertex_id(target.gvid)
+    local persisted_origin_lineage = record.causal_origin == "origin_mismatch"
+        and record.legacy_origin_registry
+        and valid_vertex_id(record.legacy_origin_registry.field_lvid)
     record.origin.checked = true
+    record.origin.proof_pending = false
     record.origin.near_origin = origin_distance <= origin_radius
     record.origin.initial_near_origin = initial_origin_distance <= origin_radius
     record.origin.field_distance = field_distance
@@ -1095,7 +1170,7 @@ local function observe_origin_candidate(record, snapshot)
     record.origin.nav_bad = nav_bad
     record.origin.identity_ok = identity_ok
     record.origin.target_valid = target_ok
-    if record.origin.near_origin and record.origin.initial_near_origin
+    if (record.origin.near_origin or persisted_origin_lineage) and record.origin.initial_near_origin
     and field_distance > field_limit and initial_field_distance > field_limit
     and nav_bad and identity_ok and target_ok then
         record.target = target
@@ -1106,9 +1181,11 @@ local function observe_origin_candidate(record, snapshot)
             .. ",initial_field_distance=" .. fmt_number(initial_field_distance)
             .. ",field_limit=" .. fmt_number(field_limit)
             .. ",nav_bad=" .. tostring(nav_bad) .. ",identity_ok=" .. tostring(identity_ok)
+            .. ",persisted_origin_lineage=" .. tostring(persisted_origin_lineage and true or false)
             .. ",target_source=" .. tostring(target.source)
             .. ",target_support=" .. tostring(target.support)
             .. ",field_lvid=" .. tostring(target.field_lvid)
+            .. ",registry_proof=" .. tostring(record.rvm_field and record.rvm_field.proof)
         begin_artifact_suspect(record, "origin_mismatch", snapshot, extra)
         record.active_samples = 1
         record.active_duration_ms = 0
@@ -1193,6 +1270,14 @@ local function observe_rolling_candidate(record, snapshot, now)
     end
 end
 
+-- ORIGIN_SECONDARY_RESCUE_GUARD_BEGIN
+function ORIGIN.secondary_rescue_blocked(record)
+    return record and (record.primary_reason == "origin_mismatch"
+        or record.causal_origin == "origin_mismatch"
+        or record.origin and record.origin.proof_pending == true) or false
+end
+-- ORIGIN_SECONDARY_RESCUE_GUARD_END
+
 local function observe_artifact_provenance_impl(record, zone, snapshot, now)
     if record.disabled or record.state == "closed" or record.state == "released" or record.state == "owned" then return end
     record.timestamps.updated_at = now
@@ -1228,7 +1313,12 @@ local function observe_artifact_provenance_impl(record, zone, snapshot, now)
     end
 
     observe_origin_candidate(record, snapshot)
-    if record.state == "rescue_pending" and record.primary_reason == "origin_mismatch" then return end
+    -- Persisted origin lineage is never reclassified from the displaced current
+    -- shell. A player may have physically pushed a world-origin artifact before
+    -- saving (#6910); rolling observations then describe the workaround, not
+    -- the original spawn defect. Missing/ambiguous registry proof remains a
+    -- deferred origin decision instead of opening a different rescue route.
+    if ORIGIN.secondary_rescue_blocked(record) then return end
     -- A confirmed rolling incident remains rolling while the same object keeps
     -- travelling outside its tether.  Low world Y or missing nav far beyond the
     -- playable slope is not independent proof that it crossed below geometry.
@@ -2131,7 +2221,10 @@ local function update_debug_same_id_rescue(record, snapshot, now)
         local origin_distance = math.sqrt(current.x * current.x
             + current.y * current.y + current.z * current.z)
         local field_distance = distance_xz(current, record.spawn_input_pos)
-        if not saved_origin_evidence_valid(record) or origin_distance > origin_radius
+        local persisted_origin_lineage = record.causal_origin == "origin_mismatch"
+            and record.rvm_field and record.rvm_field.proof == "legacy_exact_registry_lvid"
+        if not saved_origin_evidence_valid(record)
+        or (not persisted_origin_lineage and origin_distance > origin_radius)
         or field_distance <= field_limit then
             disable_provenance(record, "same_id_origin_dispatch_evidence",
                 "fresh_origin_evidence_mismatch,origin_distance=" .. fmt_number(origin_distance)
@@ -4404,7 +4497,9 @@ saved_origin_evidence_valid = function(record)
         + C.get_number("global", "artifact_rescue_origin_field_margin", 2)
     return initial_origin_distance <= origin_radius
         and distance_xz(initial_pos, field_pos) > field_limit
-        and origin.near_origin == true
+        and (origin.near_origin == true
+            or record.causal_origin == "origin_mismatch"
+                and record.rvm_field and record.rvm_field.proof == "legacy_exact_registry_lvid")
         and origin.nav_bad == true
         and record.section ~= nil and record.level ~= nil
         and valid_vertex_id(first.gvid)
@@ -4467,21 +4562,6 @@ local function migrate_artifact_provenance(previous_schema)
                     record.reason = record.primary_reason
                 end
             end
-            if saved_provenance_schema < 3
-            and record.state == "rescue_pending"
-            and (record.primary_reason == "origin_mismatch" or record.reason == "origin_mismatch") then
-                if saved_origin_evidence_valid(record) then
-                    record.primary_reason = "origin_mismatch"
-                    record.reason = "origin_mismatch"
-                    record.causal_origin = "origin_mismatch"
-                    record.origin.confirmed = true
-                else
-                    record.disabled = true
-                    record.state = "disabled"
-                    record.reason = "saved_origin_evidence_incomplete"
-                    record.origin.confirmed = false
-                end
-            end
             if saved_provenance_schema > 0 and saved_provenance_schema < 4
             and (record.primary_reason == "origin_mismatch" or record.reason == "origin_mismatch"
                 or record.causal_origin == "origin_mismatch")
@@ -4489,7 +4569,16 @@ local function migrate_artifact_provenance(previous_schema)
                 -- Schema 3 guessed a surface from X/Z and could select another
                 -- vertical layer. Preserve its audit trail, but require a fresh
                 -- exact match against RVM's own field registry before acting.
+                local legacy_target = record.target
                 record.legacy_origin_actions = record.actions
+                if legacy_target and valid_vertex_id(legacy_target.lvid) then
+                    record.legacy_origin_registry = {
+                        field_lvid = legacy_target.lvid,
+                        gvid = legacy_target.gvid,
+                        source = tostring(legacy_target.source or "unknown"),
+                        captured_schema = saved_provenance_schema,
+                    }
+                end
                 record.actions = {}
                 record.target = nil
                 record.origin_target = nil
@@ -4498,10 +4587,12 @@ local function migrate_artifact_provenance(previous_schema)
                 record.origin.checked = false
                 record.origin.confirmed = false
                 record.origin.registry_error = nil
-                record.primary_reason = nil
+                record.primary_reason = "origin_mismatch"
+                record.causal_origin = "origin_mismatch"
                 record.reason = "origin_rvm_field_revalidation_required"
                 record.state = "observing_server"
                 record.disabled = false
+                record.origin.proof_pending = true
             end
             if saved_provenance_schema > 0 and saved_provenance_schema < ARTIFACT_PROVENANCE_SCHEMA then
                 record.provenance_schema = ARTIFACT_PROVENANCE_SCHEMA

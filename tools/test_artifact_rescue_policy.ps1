@@ -197,9 +197,9 @@ $schema1 = @{ provenance_schema = 1; state = 'rescue_pending'; reason = 'undergr
 if ($schema1.provenance_schema -eq 1 -and $schema1.rolling.confirmed) {
     $schema1.primary_reason = 'rolling'
     $schema1.reason = 'rolling'
-    $schema1.provenance_schema = 4
+    $schema1.provenance_schema = 5
 }
-Assert-True ($schema1.provenance_schema -eq 4 -and $schema1.primary_reason -eq 'rolling' -and $schema1.reason -eq 'rolling') 'schema-1 causal migration failed'
+Assert-True ($schema1.provenance_schema -eq 5 -and $schema1.primary_reason -eq 'rolling' -and $schema1.reason -eq 'rolling') 'schema-1 causal migration failed'
 
 # Schema-3 origin saves used a guessed X/Z target. They retain their audit trail
 # but are reset to observation until the live RVM field registry proves exactly
@@ -216,16 +216,23 @@ $originSave = @{
 }
 $originRestored = $originSave | ConvertTo-Json -Depth 8 | ConvertFrom-Json
 $originRestored | Add-Member -NotePropertyName legacy_origin_actions -NotePropertyValue $originRestored.actions
+$originRestored | Add-Member -NotePropertyName legacy_origin_registry -NotePropertyValue @{
+    field_lvid = $originRestored.target.lvid; gvid = $originRestored.target.gvid; captured_schema = 3
+}
 $originRestored.actions = @()
 $originRestored.target = $null
 $originRestored.origin.checked = $false
 $originRestored.origin.confirmed = $false
-$originRestored.primary_reason = $null
+$originRestored.origin | Add-Member -NotePropertyName proof_pending -NotePropertyValue $true
+$originRestored.primary_reason = 'origin_mismatch'
+$originRestored | Add-Member -NotePropertyName causal_origin -NotePropertyValue 'origin_mismatch'
 $originRestored.reason = 'origin_rvm_field_revalidation_required'
 $originRestored.state = 'observing_server'
-$originRestored.provenance_schema = 4
+$originRestored.provenance_schema = 5
 Assert-True ($originRestored.state -eq 'observing_server' -and -not $originRestored.origin.checked `
-    -and $null -eq $originRestored.target -and $originRestored.legacy_origin_actions.Count -eq 1) 'legacy origin save did not reset to exact-field revalidation'
+    -and $originRestored.origin.proof_pending -and $originRestored.primary_reason -eq 'origin_mismatch' `
+    -and $originRestored.legacy_origin_registry.field_lvid -eq 123 `
+    -and $null -eq $originRestored.target -and $originRestored.legacy_origin_actions.Count -eq 1) 'legacy origin save did not preserve exact-field revalidation evidence'
 
 $rvmField = @{ artefact_id=6910; anom_zone='electr_1_1'; size_zone=10; lvid=123; pos=@{x=40;y=0;z=0} }
 $exactTarget = @{ valid=$true; source='rvm_field_center'; support='stock_lvid_static_ray'; field_lvid=123; lvid=123; gvid=5337 }
@@ -380,7 +387,7 @@ Assert-True ($runtimeLog -eq 'check=1,accepted=true,mode=held_envelope,target_dx
 Assert-True (-not $verificationLogBlock.Contains('round1(')) 'verification logging regressed to undeclared round1 helper'
 
 foreach ($needle in @(
-    'schema = 4', 'artifact_provenance = {}', 'local ARTIFACT_PROVENANCE_SCHEMA = 4',
+    'schema = 4', 'artifact_provenance = {}', 'local ARTIFACT_PROVENANCE_SCHEMA = 5',
     'local ARTIFACT_RESCUE_DEBUG_IDS = { [1407] = true, [6362] = true }',
     'spawn_input_pos', 'first_server', 'last_good_server', 'last_good_online',
     'linked_anchor_id', 'linked_radius', 'ownership', 'lineage_ids', 'cooldown_remaining_ms',
@@ -393,7 +400,7 @@ foreach ($needle in @(
     'record.state == "rescue_pending" and record.primary_reason == "rolling"',
     'rescue_reason == "underground" and record.underground and record.underground.confirmed',
     'rescue_reason == "origin_mismatch" and record.origin and record.origin.confirmed',
-    'saved_origin_evidence_valid = function(record)', 'saved_origin_evidence_incomplete',
+    'saved_origin_evidence_valid = function(record)',
     'same_id_origin_dispatch_evidence', 'fresh_origin_evidence_mismatch',
     'origin_rescue_count', 'underground_rescue_count',
     'x = record.spawn_input_pos.x + offset.x',
@@ -408,7 +415,15 @@ foreach ($needle in @(
     'rvm_field_position_invalid:', 'rvm_field_position_compare_invalid:',
     'if not left then return 999999, "left_" .. tostring(left_error) end',
     'if not right then return 999999, "right_" .. tostring(right_error) end',
-    'rvm_field_match_count:', 'rvm_field_provenance_mismatch', 'rvm_field_target_layer_mismatch',
+    'function ORIGIN.registry_match(record, registry)',
+    'function ORIGIN.registry_evidence(record, match_lvid, match, field_pos, field_schema, current_level)',
+    'rvm_field_match_count:', 'rvm_field_legacy_lvid_mismatch:', 'rvm_field_target_layer_mismatch',
+    'legacy_exact_registry_lvid', 'saved_exact_registry', 'live_registry_center',
+    'function ORIGIN.secondary_rescue_blocked(record)',
+    'record.legacy_origin_registry = {', 'record.origin.proof_pending = true',
+    'record.rvm_field.proof == "legacy_exact_registry_lvid"',
+    '(not persisted_origin_lineage and origin_distance > origin_radius)',
+    'registry_proof=" .. tostring(record.rvm_field and record.rvm_field.proof)',
     'function ORIGIN.prepare_offline_transition(record, snapshot)',
     'origin_offline_requested', 'online_shell_persisted_after_10_checks',
     'flags_restored = ORIGIN.restore_switch_flags(record,',
