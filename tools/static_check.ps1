@@ -275,6 +275,8 @@ foreach ($needle in @(
     '[double]$ShutdownGraceSeconds = 20','watcher exited before game was ever detected','game start was not recorded',
     'watcher stopped before grace elapsed','injected grace elapsed','Get-RunningGameProcess','AnomalyDX11AVX','VerifiedDX11',
     'game_closed_after_grace','finally {','Saved session:','latest.log','test-artifacts\live-logs','saved watcher output missing',
+    'function Disable-LatestWriter','function Publish-LatestCopy','authoritative session file','latest lock warning was not recorded',
+    '[IO.File]::Replace','locked latest unexpectedly accepted final replacement','authoritative session was lost while latest locked',
     'TreatControlCAsInput','Test-ControlCKey','Ctrl+C key recognition failed','terminationReason = ''ctrl_c'''
 )) {
     if (-not $watcher.Contains($needle)) { $failures.Add("live log reopen support missing: $needle") }

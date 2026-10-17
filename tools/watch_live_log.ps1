@@ -151,15 +151,52 @@ function New-SessionArchive([string]$Directory) {
     $path = Join-Path $Directory ("aer-live-$stamp-$PID.log")
     if (Test-Path -LiteralPath $path) { $path = Join-Path $Directory ("aer-live-$stamp-$PID-$([Guid]::NewGuid().ToString('N')).log") }
     $latestPath = Join-Path $Directory 'latest.log'
-    $writer = New-Object IO.StreamWriter($path, $false, $archiveEncoding)
-    $writer.AutoFlush = $true
-    $latestWriter = New-Object IO.StreamWriter($latestPath, $false, $archiveEncoding)
-    $latestWriter.AutoFlush = $true
-    return [pscustomobject]@{
+    $writer = $null
+    try {
+        $stream = New-Object IO.FileStream($path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write,
+            ([IO.FileShare]::Read -bor [IO.FileShare]::Delete))
+        $writer = New-Object IO.StreamWriter($stream, $archiveEncoding)
+        $writer.AutoFlush = $true
+    }
+    catch {
+        if ($writer) { try { $writer.Dispose() } catch { } }
+        if (Test-Path -LiteralPath $path) {
+            try { Remove-Item -LiteralPath $path -Force } catch { }
+        }
+        throw
+    }
+    $archive = [pscustomobject]@{
         Path = $path
         LatestPath = $latestPath
         Writer = $writer
-        LatestWriter = $latestWriter
+        LatestWriter = $null
+        LatestWarningIssued = $false
+        LatestError = $null
+    }
+    try {
+        $latestStream = New-Object IO.FileStream($latestPath, [IO.FileMode]::Create, [IO.FileAccess]::Write,
+            ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+        $archive.LatestWriter = New-Object IO.StreamWriter($latestStream, $archiveEncoding)
+        $archive.LatestWriter.AutoFlush = $true
+    }
+    catch [IO.IOException] {
+        $archive.LatestError = $_.Exception.Message
+        $archive.LatestWarningIssued = $true
+        Write-Warning "latest.log is busy; continuing with authoritative session file '$path': $($archive.LatestError)"
+    }
+    return $archive
+}
+
+function Disable-LatestWriter([object]$Archive, [string]$Reason) {
+    if (-not $Archive) { return }
+    if ($Archive.LatestWriter) {
+        try { $Archive.LatestWriter.Dispose() } catch { }
+        $Archive.LatestWriter = $null
+    }
+    $Archive.LatestError = $Reason
+    if (-not $Archive.LatestWarningIssued) {
+        $Archive.LatestWarningIssued = $true
+        Write-Warning "latest.log disabled; authoritative session continues at '$($Archive.Path)': $Reason"
     }
 }
 
@@ -167,7 +204,11 @@ function Write-WatcherLine {
     param([object]$Archive, [string]$Text, [ConsoleColor]$Color = [ConsoleColor]::Gray, [switch]$Quiet)
     if (-not $Quiet) { Write-Host $Text -ForegroundColor $Color }
     if ($Archive -and $Archive.Writer) { $Archive.Writer.WriteLine($Text) }
-    if ($Archive -and $Archive.LatestWriter) { $Archive.LatestWriter.WriteLine($Text) }
+    if ($Archive -and $Archive.LatestWriter) {
+        try { $Archive.LatestWriter.WriteLine($Text) }
+        catch [IO.IOException] { Disable-LatestWriter $Archive $_.Exception.Message }
+        catch [ObjectDisposedException] { Disable-LatestWriter $Archive $_.Exception.Message }
+    }
 }
 
 function Write-MatchingLine {
@@ -182,14 +223,53 @@ function Write-MatchingLine {
 function Close-SessionArchive([object]$Archive) {
     if (-not $Archive) { return }
     if ($Archive.Writer) {
-        $Archive.Writer.Flush()
-        $Archive.Writer.Dispose()
-        $Archive.Writer = $null
+        try { $Archive.Writer.Flush() }
+        finally {
+            $Archive.Writer.Dispose()
+            $Archive.Writer = $null
+        }
     }
     if ($Archive.LatestWriter) {
-        $Archive.LatestWriter.Flush()
-        $Archive.LatestWriter.Dispose()
-        $Archive.LatestWriter = $null
+        try { $Archive.LatestWriter.Flush() }
+        finally {
+            $Archive.LatestWriter.Dispose()
+            $Archive.LatestWriter = $null
+        }
+    }
+}
+
+function Publish-LatestCopy([object]$Archive) {
+    if (-not $Archive -or -not (Test-Path -LiteralPath $Archive.Path)) { return $false }
+    $latestDirectory = Split-Path -Parent $Archive.LatestPath
+    $nonce = [Guid]::NewGuid().ToString('N')
+    $temporary = Join-Path $latestDirectory ('.latest-' + $nonce + '.tmp')
+    $backup = Join-Path $latestDirectory ('.latest-' + $nonce + '.bak')
+    try {
+        [IO.File]::Copy($Archive.Path, $temporary, $false)
+        if (Test-Path -LiteralPath $Archive.LatestPath) {
+            [IO.File]::Replace($temporary, $Archive.LatestPath, $backup, $true)
+        }
+        else {
+            [IO.File]::Move($temporary, $Archive.LatestPath)
+        }
+        $Archive.LatestError = $null
+        return $true
+    }
+    catch [IO.IOException] {
+        $Archive.LatestError = $_.Exception.Message
+        if (-not $Archive.LatestWarningIssued) {
+            $Archive.LatestWarningIssued = $true
+            Write-Warning "Could not publish latest.log; authoritative session is preserved at '$($Archive.Path)': $($Archive.LatestError)"
+        }
+        return $false
+    }
+    finally {
+        if (Test-Path -LiteralPath $temporary) {
+            try { Remove-Item -LiteralPath $temporary -Force } catch { }
+        }
+        if (Test-Path -LiteralPath $backup) {
+            try { Remove-Item -LiteralPath $backup -Force } catch { }
+        }
     }
 }
 
@@ -309,12 +389,40 @@ function Invoke-WatcherSelfTest {
         if (-not (Test-ControlCKey $ctrlC)) { throw 'Ctrl+C key recognition failed' }
 
         Close-SessionArchive $archive
+        if (-not (Publish-LatestCopy $archive)) { throw 'normal final latest publish failed' }
         $archiveText = Get-Content -LiteralPath $archive.Path -Raw -Encoding UTF8
         foreach ($needle in @('# self-test session metadata','appended','partial','after truncate','after recreate')) {
             if (-not $archiveText.Contains($needle)) { throw "saved watcher output missing: $needle" }
         }
         if ($archiveText.Contains("noise`r`n")) { throw 'unfiltered line was saved' }
         if (-not (Test-Path -LiteralPath $archive.LatestPath)) { throw 'latest watcher copy was not saved' }
+
+        $lockedRoot = Join-Path $testRoot 'locked-latest'
+        [void](New-Item -ItemType Directory -Path $lockedRoot)
+        $lockedLatest = Join-Path $lockedRoot 'latest.log'
+        [IO.File]::WriteAllText($lockedLatest, 'locked', $archiveEncoding)
+        $exclusive = [IO.File]::Open($lockedLatest, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+        $lockedArchive = $null
+        $savedWarningPreference = $WarningPreference
+        try {
+            $WarningPreference = 'SilentlyContinue'
+            $lockedArchive = New-SessionArchive $lockedRoot
+            if (-not $lockedArchive.Writer -or $lockedArchive.LatestWriter) { throw 'latest lock prevented authoritative session startup' }
+            if (-not $lockedArchive.LatestWarningIssued) { throw 'latest lock warning was not recorded' }
+            Write-WatcherLine $lockedArchive '# authoritative while latest locked' ([ConsoleColor]::Gray) -Quiet
+            Close-SessionArchive $lockedArchive
+            if (Publish-LatestCopy $lockedArchive) { throw 'locked latest unexpectedly accepted final replacement' }
+            $lockedText = Get-Content -LiteralPath $lockedArchive.Path -Raw -Encoding UTF8
+            if (-not $lockedText.Contains('authoritative while latest locked')) { throw 'authoritative session was lost while latest locked' }
+        }
+        finally {
+            $WarningPreference = $savedWarningPreference
+            if ($lockedArchive) { Close-SessionArchive $lockedArchive }
+            $exclusive.Dispose()
+        }
+        if (-not (Publish-LatestCopy $lockedArchive)) { throw 'latest publish did not recover after sharing lock release' }
+        $publishedText = Get-Content -LiteralPath $lockedArchive.LatestPath -Raw -Encoding UTF8
+        if (-not $publishedText.Contains('authoritative while latest locked')) { throw 'recovered latest copy does not match authoritative session' }
         Write-Output 'Live log watcher self-test: OK'
     }
     finally {
@@ -412,11 +520,19 @@ finally {
         }
         Write-WatcherLine $archive "Session ending: $terminationReason at $((Get-Date).ToString('o'))"
         Write-WatcherLine $archive "Saved session: $($archive.Path)" ([ConsoleColor]::Cyan)
-        Write-WatcherLine $archive "Latest copy: $($archive.LatestPath)" ([ConsoleColor]::Cyan)
     }
     catch { Write-Warning "Final watcher drain failed: $($_.Exception.Message)" }
     try { Close-SessionArchive $archive }
     catch { Write-Warning "Watcher archive close failed: $($_.Exception.Message)" }
+    try {
+        if (Publish-LatestCopy $archive) {
+            Write-Host "Latest copy: $($archive.LatestPath)" -ForegroundColor Cyan
+        }
+        else {
+            Write-Host "Latest copy unavailable; authoritative session preserved: $($archive.Path)" -ForegroundColor Yellow
+        }
+    }
+    catch { Write-Warning "Final latest publish failed; session preserved at '$($archive.Path)': $($_.Exception.Message)" }
     if ($controlCAsInput) {
         try { [Console]::TreatControlCAsInput = $previousTreatControlCAsInput } catch { }
     }
