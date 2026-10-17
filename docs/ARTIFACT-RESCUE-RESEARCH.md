@@ -170,11 +170,11 @@
 
 1. Provenance/observe-only принят полем на T1/T2/T3: origin, чистый underground, rolling, save/load и NPC lineage подтверждены. Полевой T1 также выявил и закрыл ложную переклассификацию rolling→underground на реальном склоне.
 2. Первый default-off прогон exact ID `1407` подтвердил свежий post-load snapshot, один same-ID teleport, сохранение ID/section и достижение target; контрольный `6362` не перемещался. Repeat-rescue подтвердил два verified обычных dispatch `6362`. Same-frame third stage успешно обнулил скорости, но постоянный склон снова увёл предмет за tether; hard maximum=3 сработал. Следующий узкий этап — held third dispatch только для `6362`, 30–60 секунд наблюдения и обязательная попытка actor pickup. Если fixed pickup невозможен, held timeout освобождает только собственный element, а результат направляет разработку к proximity-release.
-3. Проверить три искусственных случая: origin mismatch, underground, уход за tether. Доступный склон не должен срабатывать.
-4. Включить только initial-origin correction; затем отдельными этапами underground и rolling.
+3. Origin mismatch, настоящий underground и уход за tether полево проверены; доступный склон не считается underground.
+4. Production recovery поэтапно принят для rolling, underground и двух независимых legacy origin ID.
 5. Проверить NPC pickup, смерть NPC, `actor_pickup_recreated_id`, exact marker, Rojok queue ровно один раз и штатный cleanup.
 6. Boundary оставить observe-only до ручного сбора координат через map callback.
-7. Только после полевого подтверждения rescue обсуждать изменение `4/8/6` и проводить normal-player рейды с debug off.
+7. Следующий разумный этап — normal-player рейды с debug off и общий smoke-test; изменение `4/8/6` обсуждать отдельно как баланс, а не как продолжение rescue-отладки.
 
 ## Аудит зависимостей LTX
 
@@ -197,4 +197,4 @@
 - Открытая просьба о поведении движущихся артефактов подтверждает, что движение после появления online является отдельной физической механикой: https://github.com/themrdemonized/xray-monolith/issues/647
 - Обсуждение гравитационных аномалий подтверждает возможность выброса физического артефакта далеко от поля: https://github.com/themrdemonized/xray-monolith/issues/602
 
-До отдельного разрешения runtime реворка продолжает только диагностировать позиции и ничего не перемещает.
+Активные rescue policy реализованы и по отдельности полево приняты; общий `artifact_rescue_actions=false` остаётся безопасным default до отдельного решения о включении для обычной игры.
