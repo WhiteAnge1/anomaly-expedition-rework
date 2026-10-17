@@ -533,6 +533,7 @@ foreach ($needle in @(
     'inner_env ~= raid_anomalys', 'stock_inner_environment_unverified; spawn deferred',
     'rejection = "invalid_second_vertex"', 'artifact_static_target(pos_table(spawn_pos))',
     'candidate_outside_captured_field', 'created_guarded', 'retry_exhausted',
+    'type(engine_level.name) ~= "function"', 'return engine_level[key]',
     'rawset(raid_anomalys, "level", saved_level)',
     'rawset(raid_anomalys, "alife_create_item", saved_create)',
     'alife():teleport_object(record.artifact_id, target.gvid, target.lvid, pos_vector(target.pos))',

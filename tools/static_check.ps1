@@ -32,6 +32,7 @@ $required = @(
     'tools\test_artifact_stabilization_policy.ps1',
     'tools\test_artifact_held_stabilization_policy.ps1',
     'tools\test_lua51_compile.py',
+    'tools\test_artifact_spawn_level_proxy.py',
     'tools\test_origin_position_normalization.py',
     'docs\ARTIFACT-RESCUE-DESIGN.md',
     'docs\ARTIFACT-RESCUE-RESEARCH.md',
@@ -353,6 +354,8 @@ if ($Profile -eq 'full' -or $Profile -eq 'fast') {
             $env:PYTHONPATH = $LuaRuntimeDeps
             python (Join-Path $ModRoot 'tools\test_lua51_compile.py') $ModRoot
             if ($LASTEXITCODE -ne 0) { $failures.Add('Lua 5.1/LuaJIT compile failed') }
+            python (Join-Path $ModRoot 'tools\test_artifact_spawn_level_proxy.py') $ModRoot
+            if ($LASTEXITCODE -ne 0) { $failures.Add('artifact spawn level proxy regression failed') }
             python (Join-Path $ModRoot 'tools\test_origin_position_normalization.py') $ModRoot
             if ($LASTEXITCODE -ne 0) { $failures.Add('origin position normalization failed') }
         } finally {

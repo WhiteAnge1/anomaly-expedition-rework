@@ -4085,6 +4085,7 @@ local function guarded_rvm_artifact_spawn(base_spawn, anom_zone, field_pos, leve
     local create_delegate = rawget(raid_anomalys, "alife_create_item") or alife_create_item
     local engine_level = level
     if type(create_delegate) ~= "function" or not engine_level
+    or type(engine_level.name) ~= "function"
     or type(engine_level.vertex_id) ~= "function" or type(engine_level.vertex_position) ~= "function" then
         printf(PREFIX .. " ERROR artifact spawn prevention unavailable zone=%s field=(%s) reason=engine_spawn_api_unavailable; spawn deferred",
             tostring(anom_zone), fmt_position(field_pos))
@@ -4121,6 +4122,15 @@ local function guarded_rvm_artifact_spawn(base_spawn, anom_zone, field_pos, leve
                 return engine_level.vertex_position(lvid)
             end,
         }
+        -- Preserve the complete stock engine-level read interface, including
+        -- level.name() used by is_in_ter_zones(), while overriding only the two
+        -- vertex functions above. A function __index works for either a table
+        -- or userdata-backed X-Ray namespace under Lua 5.1/LuaJIT.
+        setmetatable(level_proxy, {
+            __index = function(_, key)
+                return engine_level[key]
+            end,
+        })
         rawset(raid_anomalys, "level", level_proxy)
         rawset(raid_anomalys, "alife_create_item", function(section, spawn, properties)
             local spawn_pos = type(spawn) == "table" and spawn[1] or nil
