@@ -392,25 +392,28 @@ Assert-True (-not $verificationLogBlock.Contains('round1(')) 'verification loggi
 # server.online is true, then the client shell gets a bounded drain window.
 function Invoke-OriginOfflineModel {
     param(
-        [bool]$ServerOnline,
+        [bool]$InitialServerOnline,
         [bool]$OriginalOnline,
         [bool]$OriginalOffline,
         [bool[]]$ShellAfterDispatch,
-        [switch]$DirectSwitchFails,
+        [string[]]$FreshServerState,
+        [switch]$DirectSwitchThrows,
+        [string]$ReturnType = 'nil',
         [string]$InterruptContext = ''
     )
     $state = @{
-        status = 'new'; server_online = $ServerOnline; shell_online = $true
+        status = 'new'; server_online = $InitialServerOnline; shell_online = $true
         switch_online = $OriginalOnline; switch_offline = $OriginalOffline
         original_online = $OriginalOnline; original_offline = $OriginalOffline
         flags_forced = $false; flags_restored = $false; direct_calls = 0; wait_checks = 0
+        method_exists = $true; pcall_ok = $false; return_type = $null
     }
     if (-not $state.server_online) { $state.status = 'disabled_live_shell_with_server_offline'; return $state }
     $state.switch_online = $false
     $state.switch_offline = $true
     $state.flags_forced = $true
     $state.direct_calls++
-    if ($DirectSwitchFails) {
+    if ($DirectSwitchThrows) {
         $state.switch_online = $state.original_online
         $state.switch_offline = $state.original_offline
         $state.flags_restored = $true
@@ -418,7 +421,8 @@ function Invoke-OriginOfflineModel {
         $state.status = 'disabled_direct_switch_failed'
         return $state
     }
-    $state.server_online = $false
+    $state.pcall_ok = $true
+    $state.return_type = $ReturnType
     $state.status = 'offline_dispatched'
     if ($InterruptContext) {
         $state.switch_online = $state.original_online
@@ -428,9 +432,20 @@ function Invoke-OriginOfflineModel {
         $state.status = 'interrupted_' + $InterruptContext
         return $state
     }
-    foreach ($shell in $ShellAfterDispatch) {
+    for ($index = 0; $index -lt $ShellAfterDispatch.Count; $index++) {
+        $shell = $ShellAfterDispatch[$index]
         $state.shell_online = $shell
-        if (-not $state.shell_online -and -not $state.server_online) { $state.status = 'offline_confirmed'; return $state }
+        $fresh = if ($index -lt $FreshServerState.Count) { $FreshServerState[$index] } else { $FreshServerState[-1] }
+        if ($fresh -eq 'missing' -or $fresh -eq 'mismatch') {
+            $state.switch_online = $state.original_online
+            $state.switch_offline = $state.original_offline
+            $state.flags_restored = $true
+            $state.flags_forced = $false
+            $state.status = 'disabled_fresh_identity_' + $fresh
+            return $state
+        }
+        $state.server_online = if ($fresh -eq 'true') { $true } elseif ($fresh -eq 'false') { $false } else { $null }
+        if (-not $state.shell_online -and $state.server_online -ne $true) { $state.status = 'offline_confirmed'; return $state }
         $state.wait_checks++
         if ($state.wait_checks -ge 10) {
             $state.switch_online = $state.original_online
@@ -444,18 +459,21 @@ function Invoke-OriginOfflineModel {
     return $state
 }
 
-$originBothTrue = Invoke-OriginOfflineModel $true $true $true @($true,$false)
+$originBothTrue = Invoke-OriginOfflineModel $true $true $true @($true,$false) @('nil','nil')
 Assert-True ($originBothTrue.status -eq 'offline_confirmed' -and $originBothTrue.direct_calls -eq 1 `
-    -and -not $originBothTrue.server_online -and $originBothTrue.flags_forced) 'origin direct-offline rejected original flags both true or duplicated dispatch'
-$originSplitState = Invoke-OriginOfflineModel $false $true $true @($false)
+    -and $originBothTrue.pcall_ok -and $originBothTrue.return_type -eq 'nil' `
+    -and $null -eq $originBothTrue.server_online -and $originBothTrue.flags_forced) 'origin nil-return direct-offline did not accept exact shell disappearance with fresh identity'
+$originSplitState = Invoke-OriginOfflineModel $false $true $true @($false) @('false')
 Assert-True ($originSplitState.status -eq 'disabled_live_shell_with_server_offline' -and $originSplitState.direct_calls -eq 0) 'origin live-shell/server-offline split state did not fail closed'
-$originTimeout = Invoke-OriginOfflineModel $true $true $true @($true,$true,$true,$true,$true,$true,$true,$true,$true,$true)
+$originTimeout = Invoke-OriginOfflineModel $true $true $true @($true,$true,$true,$true,$true,$true,$true,$true,$true,$true) @('true','true','true','true','true','true','true','true','true','true')
 Assert-True ($originTimeout.status -eq 'disabled_online_shell_persisted_after_10_checks' `
     -and $originTimeout.flags_restored -and $originTimeout.switch_online -and $originTimeout.switch_offline) 'origin shell persistence did not bounded-timeout and restore both true flags'
-$originDirectFailure = Invoke-OriginOfflineModel $true $true $true @($false) -DirectSwitchFails
+$originDirectFailure = Invoke-OriginOfflineModel $true $true $true @($false) @('nil') -DirectSwitchThrows
 Assert-True ($originDirectFailure.status -eq 'disabled_direct_switch_failed' -and $originDirectFailure.flags_restored) 'origin direct-switch failure did not restore flags'
+$originIdentityMissing = Invoke-OriginOfflineModel $true $true $true @($false) @('missing')
+Assert-True ($originIdentityMissing.status -eq 'disabled_fresh_identity_missing' -and $originIdentityMissing.flags_restored) 'origin missing fresh identity did not fail closed and restore flags'
 foreach ($interrupt in @('pre_save','before_level_changing')) {
-    $originInterrupted = Invoke-OriginOfflineModel $true $true $true @($true) -InterruptContext $interrupt
+    $originInterrupted = Invoke-OriginOfflineModel $true $true $true @($true) @('true') -InterruptContext $interrupt
     Assert-True ($originInterrupted.flags_restored -and $originInterrupted.switch_online -and $originInterrupted.switch_offline) "origin $interrupt did not restore original flags"
 }
 
@@ -499,7 +517,9 @@ foreach ($needle in @(
     'registry_proof=" .. tostring(record.rvm_field and record.rvm_field.proof)',
     'function ORIGIN.server_online_state(server)',
     'function ORIGIN.prepare_offline_transition(record, snapshot)',
-    'server:switch_offline()', 'live_shell_with_server_offline',
+    'safe_object_id_any(server) ~= record.artifact_id',
+    'pcall(switch_method, server)', 'method_exists=true,pcall_ok=true',
+    'transition.direct_return_type = type(switch_result)', 'live_shell_with_server_offline',
     'origin_offline_requested', 'origin_offline_confirmed', 'online_shell" or "server_online_state',
     'flags_restored = ORIGIN.restore_switch_flags(record,',
     'ORIGIN.restore_switch_flags(record, "first_update_actions_disabled")',

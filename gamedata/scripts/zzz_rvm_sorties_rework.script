@@ -1485,22 +1485,25 @@ function ORIGIN.prepare_offline_transition(record, snapshot)
     if transition and transition.flags_forced then
         local server_ok, server = pcall(alife_object, record.artifact_id)
         server = server_ok and server or nil
-        if not server or object_section(server) ~= record.section then
+        if not server or safe_object_id_any(server) ~= record.artifact_id
+        or object_section(server) ~= record.section then
             ORIGIN.restore_switch_flags(record, "origin_offline_identity_lost")
             disable_provenance(record, "origin_offline_transition", "server_or_section_mismatch")
             return false
         end
         local server_online = ORIGIN.server_online_state(server)
-        if server_online == nil then
-            ORIGIN.restore_switch_flags(record, "origin_offline_state_unreadable")
-            disable_provenance(record, "origin_offline_transition", "server_online_state_unreadable")
-            return false
-        end
-        if not snapshot.online_exists and not server_online then
+        -- A direct void Lua binding legitimately returns nil, and its original
+        -- userdata may become unreadable while X-Ray removes the client shell.
+        -- Reacquired exact identity plus shell disappearance is authoritative;
+        -- an explicit true state still blocks teleport until it changes.
+        if not snapshot.online_exists and server_online ~= true then
             transition.stage = "offline_confirmed"
             transition.confirmed_at = time_global()
             provenance_log("origin_offline_confirmed", record, snapshot, record.primary_reason,
-                "same_id=true,release=false,recreate=false,direct_switch=true")
+                "same_id=true,release=false,recreate=false,direct_switch=true"
+                .. ",pcall_ok=" .. tostring(transition.direct_pcall_ok)
+                .. ",return_type=" .. tostring(transition.direct_return_type)
+                .. ",server_online=" .. tostring(server_online))
             return true
         end
         transition.wait_checks = (transition.wait_checks or 0) + 1
@@ -1517,7 +1520,8 @@ function ORIGIN.prepare_offline_transition(record, snapshot)
 
     local server_ok, server = pcall(alife_object, record.artifact_id)
     server = server_ok and server or nil
-    if not server or object_section(server) ~= record.section then
+    if not server or safe_object_id_any(server) ~= record.artifact_id
+    or object_section(server) ~= record.section then
         disable_provenance(record, "origin_offline_transition", "server_or_section_mismatch")
         return false
     end
@@ -1528,6 +1532,12 @@ function ORIGIN.prepare_offline_transition(record, snapshot)
     end
     if not server_online then
         disable_provenance(record, "origin_offline_transition", "live_shell_with_server_offline")
+        return false
+    end
+    local method_ok, switch_method = pcall(function() return server.switch_offline end)
+    if not method_ok or type(switch_method) ~= "function" then
+        disable_provenance(record, "origin_offline_transition",
+            "switch_offline_method_unavailable,type=" .. tostring(type(switch_method)))
         return false
     end
     local original_online = ORIGIN.server_switch_flag(server, "can_switch_online")
@@ -1560,22 +1570,23 @@ function ORIGIN.prepare_offline_transition(record, snapshot)
             .. ",offline_error=" .. tostring(offline_error))
         return false
     end
-    local switched, switch_error = pcall(function() server:switch_offline() end)
-    local switched_state = ORIGIN.server_online_state(server)
-    if not switched or switched_state ~= false then
+    local switched, switch_result = pcall(switch_method, server)
+    if not switched then
         ORIGIN.restore_switch_flags(record, "origin_direct_offline_failed")
         disable_provenance(record, "origin_offline_transition",
-            "direct_switch_failed,error=" .. tostring(switch_error)
-            .. ",server_online=" .. tostring(switched_state))
+            "direct_switch_failed,error=" .. tostring(switch_result))
         return false
     end
     transition.stage = "offline_dispatched"
     transition.direct_switch = true
+    transition.direct_pcall_ok = true
+    transition.direct_return_type = type(switch_result)
     transition.dispatched_at = time_global()
     provenance_log("origin_offline_requested", record, snapshot, record.primary_reason,
         "same_id=true,release=false,recreate=false,original_online=" .. tostring(original_online)
         .. ",original_offline=" .. tostring(original_offline)
-        .. ",server_online=true,direct_switch=true")
+        .. ",server_online=true,method_exists=true,pcall_ok=true"
+        .. ",return_type=" .. tostring(type(switch_result)))
     return false
 end
 
