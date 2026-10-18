@@ -24,6 +24,7 @@ $required = @(
     '.gitignore',
     'docs\CONFIG.md',
     'docs\DEBUG-GUIDE.md',
+    'docs\ARTIFACT-COUNT-OPTIONS.md',
     'docs\RELEASE-CHECKLIST.md',
     'docs\ROADMAP-TO-RELEASE.md',
     'tools\watch_live_log.ps1',
