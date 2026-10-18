@@ -17,14 +17,14 @@
 
   Пункт закрыт самим руководством; этот checklist его не заменяет.
 
-- [ ] Проверить пользовательские exact-маркеры в игре: три независимых переключателя, отсутствие технического текста при debug-off, восстановление без дублей после save/load и удаление при pickup/open/death/cleanup.
+- [x] Пользовательские exact-маркеры проверены в игре: три независимых категории, локализованный нетехнический tooltip при debug-off, восстановление без дублей после load и удаление при pickup/open/death/cleanup.
 
-  Loot lifecycle полево принят: отдельный переключатель сохраняет красную метку после debug-off, reload восстанавливает пять зон без новых create/дублей, open удаляет loot marker/zone. Буквальный `no hint` выявлен и исправлен локализованной нетехнической строкой; hotfix, artifact и enemy user-mode ещё требуют одного комбинированного визуального подтверждения.
+  Loot lifecycle принят отдельным прогоном; последующий combined artifact/enemy прогон визуально подтвердил общий `no hint` hotfix, русские casual hints, reload, artifact pickup и commander handoff/final death.
 
 - [x] Подтверждены T2/T3 artifact-профили `0.10..0.20`/`0.06..0.12`, обычный tooltip круга, save/load и artifact/loot exact-иконки `14 px`.
 - [ ] В финальных обычных рейдах оценить новые loot-пределы T2 `radius/5` и T3 `radius/10`.
-- [ ] После forced-enemy тестов пройти по одному forced-empty рейду T1/T2/T3 до artifact rescue.
-- [ ] В forced-empty T1/T2/T3 подтвердить совпадение captured/created artifact count и допустимое перекрытие истинных областей; при отказе приложить position/near-origin/reject counters.
+- [x] Forced-empty рейды T1/T2/T3 пройдены до artifact rescue: T1 `4/4+1`, T2 `8/8+2`, T3 `6/6+2`.
+- [x] В forced-empty T1/T2/T3 подтверждены captured/created counts и допустимое перекрытие истинных областей; отдельный T2 `7/8+2` документирован как доказанный world-origin `invalid_vertex:60`, а не потеря callback.
 
 ## Уже подтверждено полем
 
@@ -33,4 +33,4 @@
 - Save/load контейнера до/после открытия и закрытие loot-зоны.
 - Live watcher при обязательном порядке «watcher → X-Ray», автоматическое завершение `game_closed_after_grace` с 20-секундным хвостом и публикация уникального session-файла/`latest.log` подтверждены полем 18 октября.
 
-Финальные normal-player рейды с debug off и пользовательскими `show_exact_*` остаются отложены до отдельной реализации artifact rescue и балансировки `4/8/6`.
+Остались обычные debug-off визуальные loot-проверки T2/T3, решение о публичном default `artifact_rescue_actions`, release-candidate install/upgrade smoke и упаковка. Полный порядок: `docs/ROADMAP-TO-RELEASE.md`.

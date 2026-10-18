@@ -25,6 +25,7 @@ $required = @(
     'docs\CONFIG.md',
     'docs\DEBUG-GUIDE.md',
     'docs\RELEASE-CHECKLIST.md',
+    'docs\ROADMAP-TO-RELEASE.md',
     'tools\watch_live_log.ps1',
     'tools\watch_live_log.cmd',
     'tools\test_loot_policy.ps1',
@@ -296,6 +297,11 @@ foreach ($needle in @('Необязательный казуальный реж�
 $debugGuide = Get-Content -LiteralPath (Join-Path $ModRoot 'docs\DEBUG-GUIDE.md') -Raw -Encoding UTF8
 foreach ($needle in @('Обычному пользователю','debug_mode = auto','DEV_DEBUG','DEV_DEBUG_DEV','rvm_rework_debug_auto','rvm_rework_debug_on','rvm_rework_debug_off','rvm_rework_census','debug_force_decoy_type = off','debug_force_tier = 0','debug_cleanup_current_sortie = false','show_exact_artifact_markers = false','show_exact_loot_markers = false','show_exact_enemy_markers = false','owned_by_rework','ERROR census disabled','watch_live_log.cmd','Session file','artifact_rescue_actions')) {
     if (-not $debugGuide.Contains($needle)) { $failures.Add("debug guide missing: $needle") }
+}
+
+$releaseRoadmap = Get-Content -LiteralPath (Join-Path $ModRoot 'docs\ROADMAP-TO-RELEASE.md') -Raw -Encoding UTF8
+foreach ($needle in @('T2','radius/5','T3','radius/10','artifact_rescue_actions = false','clean-install','обновление','MO2/FOMOD','SHA-256','GitHub release','Google Drive')) {
+    if (-not $releaseRoadmap.Contains($needle)) { $failures.Add("release roadmap missing: $needle") }
 }
 
 if ($BuildModsRoot) {
