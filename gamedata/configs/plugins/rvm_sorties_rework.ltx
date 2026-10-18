@@ -282,6 +282,13 @@ loot_rare_non_artifact = raid_intelligence_note
 ; Локальные значения перекрывают tier_1 и global.
 ; При изменении также проверь: start-каскад, стартовую дистанцию и южный склон.
 tier = 1
+; Настоящие артефакты: значения и целочисленные веса должны иметь одинаковую
+; длину, значения строго возрастать, а сумма весов быть ровно 100.
+; Невалидный/отсутствующий профиль безопасно возвращает штатные 4 артефакта.
+; Связано с: числом истинных кругов, независимым decoy count и экономикой rescue.
+artifact_count_profile = pole_35_60_5
+artifact_count_values = 3,4,5
+artifact_count_weights = 35,60,5
 ambush_spawn_timing = start
 zone_radius_min = 55
 zone_radius_max = 85
@@ -294,6 +301,12 @@ enemy_spawn_distance_max = 150
 ; Локальные значения перекрывают tier_2 и global.
 ; При изменении также проверь: proximity camera-check и hidden-ступени.
 tier = 2
+; Невалидный/отсутствующий профиль безопасно возвращает штатные 8 артефактов.
+; При изменении сохрани сумму весов 100 и отдельно перепроверь 2..4 ложные зоны:
+; их бросок не зависит от этого распределения настоящих артефактов.
+artifact_count_profile = darkscape_5_20_47_26_2
+artifact_count_values = 5,6,7,8,9
+artifact_count_weights = 5,20,47,26,2
 ambush_spawn_timing = proximity
 zone_radius_min = 150
 zone_radius_max = 240
@@ -306,6 +319,12 @@ enemy_spawn_distance_max = 170
 ; Локальные значения перекрывают tier_3 и global.
 ; При изменении также проверь: start-каскад и проходимость городской геометрии.
 tier = 3
+; Невалидный/отсутствующий профиль безопасно возвращает штатные 6 артефактов.
+; При изменении сохрани сумму весов 100 и учти дорогой T2/T3 пул, rescue и
+; независимый бросок 1/2/3 ложных зон с весами 20/60/20.
+artifact_count_profile = deadcity_11_80_7_2
+artifact_count_values = 4,5,6,7
+artifact_count_weights = 11,80,7,2
 ambush_spawn_timing = start
 zone_radius_min = 140
 zone_radius_max = 220

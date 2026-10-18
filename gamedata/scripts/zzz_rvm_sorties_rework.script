@@ -91,7 +91,7 @@ local ENEMY_SQUAD_PRESETS = {
 
 local function fresh_state()
     return {
-        schema = 4,
+        schema = 5,
         level_name = nil,
         sortie_type = nil,
         pending_transition = false,
@@ -101,6 +101,7 @@ local function fresh_state()
         artifact_zone = {},
         pending_artifacts = {},
         artifact_provenance = {},
+        artifact_count = nil,
         stash_ids = {},
         suppress_stash_calls = 0,
         decoys_created = false,
@@ -151,12 +152,195 @@ local function log(fmt, ...)
 end
 
 local SUPPORTED_LEVELS = { y04_pole = true, k01_darkscape = true, l09_deadcity = true }
+ARTIFACT_COUNT = {
+    stock = { y04_pole = 4, k01_darkscape = 8, l09_deadcity = 6 },
+    hook = { stock_table = nil, error = "not_inspected" },
+}
 
 local function release_log(fmt, ...)
     if state and state.level_name and SUPPORTED_LEVELS[state.level_name]
     and (state.sortie_type == "infected" or state.sortie_type == "scouting") then
         printf(PREFIX .. " " .. fmt, ...)
     end
+end
+
+-- The stock count table is a local upvalue of raid_anomalys.spawner_anomals_zones.
+-- Keep all parsing, rolling and temporary mutation small and independently
+-- executable by the Lua 5.1/LuaJIT regression fixture.
+-- ARTIFACT_COUNT_POLICY_BEGIN
+function ARTIFACT_COUNT.integer_list(tokens, minimum, maximum)
+    if type(tokens) ~= "table" or #tokens < 1 then return nil, "missing_list" end
+    local values, previous = {}, nil
+    for index, token in ipairs(tokens) do
+        local value = tonumber(token)
+        if not value or value ~= math.floor(value) or value < minimum or value > maximum then
+            return nil, "invalid_integer_at_" .. tostring(index)
+        end
+        if previous and value <= previous then return nil, "values_not_strictly_increasing" end
+        values[index], previous = value, value
+    end
+    return values, nil
+end
+
+function ARTIFACT_COUNT.validate(value_tokens, weight_tokens, stock_count, maximum_count, profile_name)
+    local values, values_error = ARTIFACT_COUNT.integer_list(value_tokens, 1, maximum_count)
+    if not values then return nil, values_error end
+    if type(weight_tokens) ~= "table" or #weight_tokens ~= #values then
+        return nil, "weights_length_mismatch"
+    end
+    local weights, total = {}, 0
+    for index, token in ipairs(weight_tokens) do
+        local weight = tonumber(token)
+        if not weight or weight ~= math.floor(weight) or weight <= 0 or weight > 100 then
+            return nil, "invalid_weight_at_" .. tostring(index)
+        end
+        weights[index] = weight
+        total = total + weight
+    end
+    if total ~= 100 then return nil, "weights_sum_" .. tostring(total) end
+    if not stock_count or stock_count < 1 then return nil, "invalid_stock_count" end
+    return {
+        values = values,
+        weights = weights,
+        total = total,
+        stock = stock_count,
+        name = tostring(profile_name or "configured"),
+    }, nil
+end
+
+function ARTIFACT_COUNT.roll(profile, random_integer)
+    local roll = random_integer(1, profile.total)
+    local cumulative = 0
+    for index, weight in ipairs(profile.weights) do
+        cumulative = cumulative + weight
+        if roll <= cumulative then return profile.values[index], roll end
+    end
+    return profile.values[#profile.values], roll
+end
+
+function ARTIFACT_COUNT.ensure(existing, level_name, stock_count, profile, random_integer, fallback_reason)
+    if type(existing) == "table" and existing.level == level_name
+    and tonumber(existing.rolled) and existing.rolled == math.floor(existing.rolled) then
+        return existing, false
+    end
+    local rolled, raw_roll = stock_count, nil
+    local profile_name, status = "stock_fallback", "fallback"
+    if profile then
+        rolled, raw_roll = ARTIFACT_COUNT.roll(profile, random_integer)
+        profile_name, status = profile.name, "configured"
+    end
+    return {
+        level = level_name,
+        stock = stock_count,
+        rolled = rolled,
+        raw_roll = raw_roll,
+        profile = profile_name,
+        status = status,
+        fallback_reason = profile and nil or tostring(fallback_reason or "profile_unavailable"),
+        spawn_invoked = false,
+        spawn_complete = false,
+        callbacks = 0,
+        created = 0,
+        captured = 0,
+        linked = 0,
+        created_ids = {},
+        captured_ids = {},
+        linked_ids = {},
+        errors = {},
+    }, true
+end
+
+function ARTIFACT_COUNT.begin_spawn(plan)
+    if type(plan) ~= "table" or plan.spawn_invoked then return false end
+    plan.spawn_invoked = true
+    return true
+end
+
+function ARTIFACT_COUNT.find_stock_table(fn)
+    if type(fn) ~= "function" or type(debug) ~= "table" or type(debug.getupvalue) ~= "function" then
+        return nil, "debug_getupvalue_unavailable"
+    end
+    for index = 1, 64 do
+        local ok, name, value = pcall(debug.getupvalue, fn, index)
+        if not ok then return nil, "getupvalue_error" end
+        if name == nil then break end
+        if name == "raid_distribution_anom_zones" then
+            if type(value) ~= "table" then return nil, "distribution_upvalue_not_table" end
+            return value, nil
+        end
+    end
+    return nil, "distribution_upvalue_not_found"
+end
+
+function ARTIFACT_COUNT.call_with_temporary_count(entry, rolled, callback, ...)
+    if type(entry) ~= "table" or type(callback) ~= "function" then
+        return false, "invalid_temporary_count_arguments", false, nil
+    end
+    local original = rawget(entry, "count_artefacts")
+    local set_ok, set_error = pcall(rawset, entry, "count_artefacts", rolled)
+    if not set_ok then return false, set_error, false, original end
+    local call_results = { pcall(callback, ...) }
+    local restore_ok, restore_result = pcall(rawset, entry, "count_artefacts", original)
+    local restore_error = nil
+    if not restore_ok then restore_error = restore_result end
+    return call_results[1], call_results[2], restore_ok, restore_error, original
+end
+-- ARTIFACT_COUNT_POLICY_END
+
+function ARTIFACT_COUNT.configured_profile(level_name, stock_count, maximum_count)
+    local section = "level_" .. tostring(level_name)
+    local profile, profile_error = ARTIFACT_COUNT.validate(
+        C.get_list(section, "artifact_count_values"),
+        C.get_list(section, "artifact_count_weights"),
+        stock_count,
+        maximum_count,
+        C.get_string(section, "artifact_count_profile", level_name))
+    return profile, profile_error
+end
+
+function ARTIFACT_COUNT.ensure_plan(level_name, entry)
+    local stock_count = ARTIFACT_COUNT.stock[level_name]
+    if not stock_count then return nil end
+    if state.artifact_count and state.artifact_count.level == level_name then return state.artifact_count end
+
+    local maximum_count = type(entry) == "table" and tonumber(rawget(entry, "count_zones")) or nil
+    local original_count = type(entry) == "table" and tonumber(rawget(entry, "count_artefacts")) or nil
+    local profile, fallback_reason = nil, ARTIFACT_COUNT.hook.error
+    if ARTIFACT_COUNT.hook.stock_table and type(entry) == "table" and original_count == stock_count
+    and maximum_count and maximum_count >= stock_count then
+        profile, fallback_reason = ARTIFACT_COUNT.configured_profile(level_name, stock_count, maximum_count)
+    elseif ARTIFACT_COUNT.hook.stock_table and type(entry) == "table" then
+        fallback_reason = "stock_entry_mismatch:expected=" .. tostring(stock_count)
+            .. ",actual=" .. tostring(original_count) .. ",max=" .. tostring(maximum_count)
+    end
+
+    local created_new
+    state.artifact_count, created_new = ARTIFACT_COUNT.ensure(
+        state.artifact_count, level_name, stock_count, profile, math.random, fallback_reason)
+    if created_new then
+        release_log("artifact_count rolled=%s profile=%s stock=%s status=%s raw_roll=%s reason=%s",
+            tostring(state.artifact_count.rolled), tostring(state.artifact_count.profile), tostring(stock_count),
+            tostring(state.artifact_count.status), tostring(state.artifact_count.raw_roll or "none"),
+            tostring(state.artifact_count.fallback_reason or "none"))
+    end
+    return state.artifact_count
+end
+
+function ARTIFACT_COUNT.diagnostic(stage, require_linked)
+    local plan = state.artifact_count
+    if not plan then return true end
+    release_log("artifact_count summary stage=%s requested=%s callbacks=%s created=%s captured=%s linked=%s",
+        tostring(stage), tostring(plan.rolled), tostring(plan.callbacks or 0), tostring(plan.created or 0),
+        tostring(plan.captured or 0), tostring(plan.linked or 0))
+    local mismatch = (plan.created or 0) ~= plan.rolled or (plan.captured or 0) ~= plan.rolled
+        or (require_linked and (plan.linked or 0) ~= plan.rolled)
+    if mismatch and not plan.errors[tostring(stage)] then
+        plan.errors[tostring(stage)] = true
+        printf(PREFIX .. " ERROR artifact_count mismatch stage=%s requested=%s callbacks=%s created=%s captured=%s linked=%s fail_closed=true",
+            tostring(stage), tostring(plan.rolled), tostring(plan.callbacks or 0), tostring(plan.created or 0),
+            tostring(plan.captured or 0), tostring(plan.linked or 0))
+    end
+    return not mismatch
 end
 
 -- Marshal persists the stock RVM field center through the engine userdata
@@ -2902,6 +3086,13 @@ local function create_artifact_zone(artifact_id)
             if zone then
                 state.artifact_zone[tostring(artifact_id)] = tostring(anchor_id)
                 link_artifact_provenance(zone)
+                local plan = state.artifact_count
+                local artifact_key = tostring(artifact_id)
+                if plan and plan.level == level.name() and not plan.linked_ids[artifact_key] then
+                    plan.linked_ids[artifact_key] = true
+                    plan.linked = (plan.linked or 0) + 1
+                    if plan.linked == plan.rolled then ARTIFACT_COUNT.diagnostic("linked_complete", true) end
+                end
                 artifact_center_failures[tostring(artifact_id)] = nil
                 release_log("artifact placement tier=%s level=%s offset=%s fraction=%s limit=%s range=%s..%s",
                     tostring(current_tier()), tostring(level.name()), fmt_number(snapped_offset),
@@ -3378,6 +3569,7 @@ end
 local function create_decoys()
     if state.decoys_created then return end
     state.decoys_created = true
+    ARTIFACT_COUNT.diagnostic("before_decoys", true)
     local true_count = state.counters.artifact or 0
     local weights = enabled_weights()
     if true_count < 1 then return end
@@ -4208,11 +4400,63 @@ local function install_hooks()
     if hooks_installed then return end
     hooks_installed = true
 
+    if raid_anomalys and type(raid_anomalys.spawner_anomals_zones) == "function" then
+        local base_spawner = raid_anomalys.spawner_anomals_zones
+        ARTIFACT_COUNT.hook.stock_table, ARTIFACT_COUNT.hook.error = ARTIFACT_COUNT.find_stock_table(base_spawner)
+        if not ARTIFACT_COUNT.hook.stock_table then
+            printf(PREFIX .. " ERROR artifact count hook unavailable reason=%s; stock counts preserved",
+                tostring(ARTIFACT_COUNT.hook.error))
+        end
+        raid_anomalys.spawner_anomals_zones = function(level_name)
+            local active = enabled() and state.sortie_type == "infected"
+                and state.level_name == level.name() and state.level_name == level_name
+                and ARTIFACT_COUNT.stock[level_name] ~= nil
+            if not active then return base_spawner(level_name) end
+
+            local entry = ARTIFACT_COUNT.hook.stock_table and rawget(ARTIFACT_COUNT.hook.stock_table, level_name) or nil
+            local plan = ARTIFACT_COUNT.ensure_plan(level_name, entry)
+            if not ARTIFACT_COUNT.begin_spawn(plan) then
+                release_log("artifact_count duplicate spawn suppressed level=%s rolled=%s complete=%s",
+                    tostring(level_name), tostring(plan and plan.rolled or "none"),
+                    tostring(plan and plan.spawn_complete == true))
+                return nil
+            end
+            if not plan or plan.status ~= "configured" then
+                local result = base_spawner(level_name)
+                if plan then plan.spawn_complete = true end
+                ARTIFACT_COUNT.diagnostic("stock_fallback_spawn_complete", false)
+                return result
+            end
+
+            local call_ok, call_result, restore_ok, restore_error, original =
+                ARTIFACT_COUNT.call_with_temporary_count(entry, plan.rolled, base_spawner, level_name)
+            if not restore_ok then
+                printf(PREFIX .. " ERROR artifact count stock restoration failed level=%s original=%s error=%s; aborting",
+                    tostring(level_name), tostring(original), tostring(restore_error))
+                error("artifact count stock restoration failed: " .. tostring(restore_error), 0)
+            end
+            if not call_ok then
+                printf(PREFIX .. " ERROR artifact count wrapped stock call failed level=%s rolled=%s restored=true error=%s",
+                    tostring(level_name), tostring(plan.rolled), tostring(call_result))
+                error(call_result, 0)
+            end
+            plan.spawn_complete = true
+            ARTIFACT_COUNT.diagnostic("spawn_complete", false)
+            return call_result
+        end
+    else
+        ARTIFACT_COUNT.hook.error = "spawner_anomals_zones_missing"
+        printf(PREFIX .. " ERROR artifact count hook unavailable reason=%s; stock counts preserved",
+            ARTIFACT_COUNT.hook.error)
+    end
+
     if raid_anomalys and raid_anomalys.spawn_artefact_in_zone then
         local base_spawn_artifact = raid_anomalys.spawn_artefact_in_zone
         raid_anomalys.spawn_artefact_in_zone = function(anom_zone, pos, level_tier)
             local guard_active = enabled() and state.sortie_type == "infected"
                 and state.level_name == level.name()
+            local plan = guard_active and state.artifact_count or nil
+            if plan then plan.callbacks = (plan.callbacks or 0) + 1 end
             local artifact_id, spawn_guard = nil, nil
             if guard_active then
                 artifact_id, spawn_guard = guarded_rvm_artifact_spawn(
@@ -4221,11 +4465,20 @@ local function install_hooks()
                 artifact_id = base_spawn_artifact(anom_zone, pos, level_tier)
             end
             if enabled() and artifact_id and state.sortie_type == "infected" and state.level_name == level.name() then
+                local artifact_key = tostring(artifact_id)
+                if plan and not plan.created_ids[artifact_key] then
+                    plan.created_ids[artifact_key] = true
+                    plan.created = (plan.created or 0) + 1
+                end
                 local capture_ok, capture_error = pcall(capture_artifact_provenance,
                     artifact_id, anom_zone, pos, level_tier, spawn_guard)
                 if not capture_ok then
                     printf(PREFIX .. " ERROR artifact provenance capture failed id=%s zone=%s error=%s; observer skipped, base artifact preserved",
                         tostring(artifact_id), tostring(anom_zone), tostring(capture_error))
+                end
+                if plan and capture_ok and not plan.captured_ids[artifact_key] then
+                    plan.captured_ids[artifact_key] = true
+                    plan.captured = (plan.captured or 0) + 1
                 end
                 state.pending_artifacts[tostring(artifact_id)] = artifact_id
                 artifact_center_failures[tostring(artifact_id)] = nil
@@ -4594,6 +4847,44 @@ end
 
 local function migrate_artifact_provenance(previous_schema)
     state.artifact_provenance = state.artifact_provenance or {}
+    state.artifact_count = state.artifact_count or nil
+    if state.artifact_count then
+        local plan = state.artifact_count
+        plan.callbacks = tonumber(plan.callbacks) or 0
+        plan.created = tonumber(plan.created) or 0
+        plan.captured = tonumber(plan.captured) or 0
+        plan.linked = tonumber(plan.linked) or 0
+        plan.created_ids = plan.created_ids or {}
+        plan.captured_ids = plan.captured_ids or {}
+        plan.linked_ids = plan.linked_ids or {}
+        plan.errors = plan.errors or {}
+        plan.spawn_invoked = plan.spawn_invoked == true
+        plan.spawn_complete = plan.spawn_complete == true
+    elseif previous_schema < 5 and state.sortie_type == "infected" and state.level_name
+    and (size_table(state.artifact_provenance) > 0 or size_table(state.pending_artifacts) > 0
+        or (state.counters.artifact or 0) > 0) then
+        local legacy_count = size_table(state.artifact_provenance)
+        if legacy_count < 1 then legacy_count = size_table(state.pending_artifacts) end
+        if legacy_count < 1 then legacy_count = state.counters.artifact or 0 end
+        state.artifact_count = {
+            level = state.level_name,
+            stock = ARTIFACT_COUNT.stock[state.level_name],
+            rolled = legacy_count,
+            raw_roll = nil,
+            profile = "legacy_preserved",
+            status = "legacy",
+            fallback_reason = "schema_pre_5_active_sortie",
+            spawn_invoked = true,
+            spawn_complete = true,
+            callbacks = legacy_count,
+            created = legacy_count,
+            captured = legacy_count,
+            linked = state.counters.artifact or 0,
+            created_ids = {}, captured_ids = {}, linked_ids = {}, errors = {},
+        }
+        release_log("artifact_count legacy state preserved rolled=%s linked=%s; reroll suppressed",
+            tostring(legacy_count), tostring(state.artifact_count.linked))
+    end
     for _, zone in pairs(state.zones or {}) do
         if zone.kind == "artifact" and zone.artifact_id
         and not state.artifact_provenance[tostring(zone.artifact_id)] then
@@ -4773,7 +5064,7 @@ local function load_state(m_data)
         end
     end
     migrate_artifact_provenance(previous_schema)
-    state.schema = 4
+    state.schema = 5
 end
 
 local function find_debug_ui(...)

@@ -478,7 +478,7 @@ foreach ($interrupt in @('pre_save','before_level_changing')) {
 }
 
 foreach ($needle in @(
-    'schema = 4', 'artifact_provenance = {}', 'local ARTIFACT_PROVENANCE_SCHEMA = 5',
+    'schema = 5', 'artifact_provenance = {}', 'local ARTIFACT_PROVENANCE_SCHEMA = 5',
     'local ARTIFACT_RESCUE_DEBUG_IDS = { [1407] = true, [6362] = true }',
     'spawn_input_pos', 'first_server', 'last_good_server', 'last_good_online',
     'linked_anchor_id', 'linked_radius', 'ownership', 'lineage_ids', 'cooldown_remaining_ms',

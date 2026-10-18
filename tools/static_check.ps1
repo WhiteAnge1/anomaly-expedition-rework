@@ -34,6 +34,7 @@ $required = @(
     'tools\test_artifact_rescue_policy.ps1',
     'tools\test_artifact_stabilization_policy.ps1',
     'tools\test_artifact_held_stabilization_policy.ps1',
+    'tools\test_artifact_count_policy.py',
     'tools\test_lua51_compile.py',
     'tools\test_artifact_spawn_level_proxy.py',
     'tools\test_origin_position_normalization.py',
@@ -372,6 +373,8 @@ if ($Profile -eq 'full' -or $Profile -eq 'fast') {
             if ($LASTEXITCODE -ne 0) { $failures.Add('artifact spawn level proxy regression failed') }
             python (Join-Path $ModRoot 'tools\test_origin_position_normalization.py') $ModRoot
             if ($LASTEXITCODE -ne 0) { $failures.Add('origin position normalization failed') }
+            python (Join-Path $ModRoot 'tools\test_artifact_count_policy.py') $ModRoot
+            if ($LASTEXITCODE -ne 0) { $failures.Add('artifact count policy regression failed') }
         } finally {
             $env:PYTHONPATH = $savedPythonPath
         }

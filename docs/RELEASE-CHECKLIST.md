@@ -25,7 +25,8 @@
 - [ ] В финальных обычных рейдах оценить новые loot-пределы T2 `radius/5` и T3 `radius/10`.
 - [x] Forced-empty рейды T1/T2/T3 пройдены до artifact rescue: T1 `4/4+1`, T2 `8/8+2`, T3 `6/6+2`.
 - [x] В forced-empty T1/T2/T3 подтверждены captured/created counts и допустимое перекрытие истинных областей; отдельный T2 `7/8+2` документирован как доказанный world-origin `invalid_vertex:60`, а не потеря callback.
-- [ ] До следующего normal-рейда согласовать и реализовать переменные локационные распределения настоящих артефактов. Текущие фиксированные `4/8/6` — только подтверждённый stock baseline; ранее предложенный каскад `3..5 / 5..9 / 4..7` не утверждён. После реализации проверить roll/count отдельно от числа ложных областей.
+- [x] Утверждены и реализованы переменные локационные распределения настоящих артефактов: Поляна `3/4/5 = 35/60/5%`, Лощина `5/6/7/8/9 = 5/20/47/26/2%`, Мёртвый город `4/5/6/7 = 11/80/7/2%`. Lua 5.1/LuaJIT regression проверяет support/веса/средние, один сохранённый roll, stock fallback, восстановление upvalue при success/error, unique IDs и независимость decoys.
+- [ ] Полевым normal debug-off прогоном подтвердить новый roll, `requested=created=captured=linked`, отсутствие повторного spawn после save/load/same-level и независимый decoy count.
 - [x] Зафиксировано продуктовое решение не добавлять координатные границы карты в artifact rescue. Известное редкое ограничение описано: пока физически недоступный артефакт остаётся внутри связанного круга, rescue не срабатывает; обычный rolling-path применим после устойчивого выхода за `radius + 5 м`.
 
 ## Уже подтверждено полем
@@ -35,4 +36,4 @@
 - Save/load контейнера до/после открытия и закрытие loot-зоны.
 - Live watcher при обязательном порядке «watcher → X-Ray», автоматическое завершение `game_closed_after_grace` с 20-секундным хвостом и публикация уникального session-файла/`latest.log` подтверждены полем 18 октября.
 
-Остались решение и реализация переменных true-artifact counts, обычные debug-off проверки counts/radii и loot T2/T3, решение о публичном default `artifact_rescue_actions`, release-candidate install/upgrade smoke и упаковка. Полный порядок: `docs/ROADMAP-TO-RELEASE.md`.
+Остались полевые debug-off проверки новых counts/radii и loot T2/T3, решение о публичном default `artifact_rescue_actions`, release-candidate install/upgrade smoke и упаковка. Полный порядок: `docs/ROADMAP-TO-RELEASE.md`.
