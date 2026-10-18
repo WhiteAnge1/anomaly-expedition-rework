@@ -23,6 +23,7 @@ $required = @(
     'meta.ini',
     '.gitignore',
     'docs\CONFIG.md',
+    'docs\DEBUG-GUIDE.md',
     'docs\RELEASE-CHECKLIST.md',
     'tools\watch_live_log.ps1',
     'tools\watch_live_log.cmd',
@@ -289,6 +290,11 @@ if (-not $gitIgnore.Contains('/test-artifacts/live-logs/')) { $failures.Add('gen
 $configReference = Get-Content -LiteralPath (Join-Path $ModRoot 'docs\CONFIG.md') -Raw -Encoding UTF8
 foreach ($needle in @('Необязательный казуальный режим точных меток','show_exact_artifact_markers','show_exact_loot_markers','show_exact_enemy_markers','enemy_spawn_distance_min/max','90..150','120..170','80..120','система аномалий Arrival')) {
     if (-not $configReference.Contains($needle)) { $failures.Add("config reference missing: $needle") }
+}
+
+$debugGuide = Get-Content -LiteralPath (Join-Path $ModRoot 'docs\DEBUG-GUIDE.md') -Raw -Encoding UTF8
+foreach ($needle in @('Обычному пользователю','debug_mode = auto','DEV_DEBUG','DEV_DEBUG_DEV','rvm_rework_debug_auto','rvm_rework_debug_on','rvm_rework_debug_off','rvm_rework_census','debug_force_decoy_type = off','debug_force_tier = 0','debug_cleanup_current_sortie = false','show_exact_artifact_markers = false','show_exact_loot_markers = false','show_exact_enemy_markers = false','owned_by_rework','ERROR census disabled','watch_live_log.cmd','Session file','artifact_rescue_actions')) {
+    if (-not $debugGuide.Contains($needle)) { $failures.Add("debug guide missing: $needle") }
 }
 
 if ($BuildModsRoot) {
