@@ -2515,7 +2515,9 @@ end
 
 local function exact_marker_hint(string_id, debug_text)
     if debug_enabled() then return debug_text end
-    return ""
+    -- X-Ray renders an empty serialized spot hint as the literal UI fallback
+    -- "no hint". Use the localized non-technical text in casual mode instead.
+    return game.translate_string(string_id)
 end
 
 local function sync_artifact_exact_spot(zone, snapshot, force_refresh)

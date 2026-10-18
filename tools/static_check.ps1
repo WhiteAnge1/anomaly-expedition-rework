@@ -126,11 +126,12 @@ foreach ($needle in @(
     'return debug_enabled() or C.get_bool("global", "show_exact_loot_markers", false)',
     'return debug_enabled() or C.get_bool("global", "show_exact_enemy_markers", false)',
     'if debug_enabled() then return debug_text end',
-    'if debug_enabled() then return debug_text end',
+    'return game.translate_string(string_id)',
     'local hint = game.translate_string("st_rvm_sorties_area_hint") .. zone_debug_text(zone, false)'
 )) {
     if (-not $main.Contains($needle)) { $failures.Add("casual/debug exact marker separation missing: $needle") }
 }
+if ($main -match 'local function exact_marker_hint[\s\S]*?return\s+""') { $failures.Add('casual exact marker must not serialize an empty no-hint tooltip') }
 if ($main.Contains('user_exact_overlaps_zone')) { $failures.Add('user exact mode must not suppress the normal circle tooltip') }
 if ($main.Contains('crlc_squad_red')) { $failures.Add('quest-pointer crlc_squad_red must not be used for enemy debug markers') }
 if ($main.Contains('census skipped: diagnostics disabled')) { $failures.Add('debug-off/casual markers must not emit census diagnostics') }
