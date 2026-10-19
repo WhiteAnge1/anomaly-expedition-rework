@@ -2079,10 +2079,14 @@ local function attempt_held_stabilization(record, action, snapshot)
         last_sample_at = nil,
     }
     local held = action.stabilization
+    local early_production = action.rescue_policy == "held_first"
+        and action.status == "verifying" and (action.verification_samples or 0) >= 1
+    local fully_verified = action.status == "position_verified"
+        and action.verified_at and (action.verification_samples or 0) >= 3
     provenance_log("action_stabilization_held_attempt", record, snapshot, record.primary_reason,
-        "dispatch=" .. tostring(action.dispatch_index))
-    if not action.held_pending or action.status ~= "position_verified"
-    or not action.verified_at or (action.verification_samples or 0) < 3 then
+        "dispatch=" .. tostring(action.dispatch_index)
+        .. ",phase=" .. (early_production and "first_verified_sample" or "position_verified"))
+    if not action.held_pending or not (early_production or fully_verified) then
         held.status = "held_failed"
         held.errors[#held.errors + 1] = "post_teleport_position_not_verified"
         provenance_log("stabilization_failed", record, snapshot, record.primary_reason,
@@ -2245,6 +2249,23 @@ local function update_debug_same_id_rescue(record, snapshot, now)
             .. ",tether_limit=" .. tostring(tether_limit and fmt_number(tether_limit) or "none"))
         if good then
             action.verification_samples = (action.verification_samples or 0) + 1
+            -- Production held_first must stop the fresh online shell as soon as
+            -- one post-teleport snapshot proves exact identity and target
+            -- envelope.  Waiting for three unfixed snapshots lets light
+            -- artifacts cross the floor again before held can run.
+            if action.held_pending and action.rescue_policy == "held_first"
+            and action.verification_samples == 1 then
+                local held_ok = attempt_held_stabilization(record, action, snapshot)
+                local held_error = action.stabilization and action.stabilization.status
+                    or "held_attempt_status_missing"
+                action.held_pending = false
+                if not held_ok then
+                    action.status = "stabilization_failed"
+                    disable_provenance(record, "post_teleport_held_stabilization",
+                        held_error)
+                    return
+                end
+            end
             if action.verification_samples >= 3 then
                 if origin_action and not action.area_rebuilt then
                     action.area_rebuild_attempts = (action.area_rebuild_attempts or 0) + 1

@@ -40,6 +40,22 @@ function Resolve-PostTeleportHeld([string]$RecordReason, [string]$PersistedActio
 Assert-True ((Resolve-PostTeleportHeld 'post_rescue_monitor' 'rolling' $true) -eq 'held') 'held_pending was rejected after position_verified changed record.reason'
 Assert-True ((Resolve-PostTeleportHeld 'post_rescue_monitor' 'rolling' $false) -eq 'record_disabled_fix') 'real post-teleport reacquire/fix failure did not fail closed'
 
+function Resolve-EarlyProductionHeld([double[]]$FreshVerticalDelta) {
+    $held = $false
+    $accepted = 0
+    foreach ($delta in $FreshVerticalDelta) {
+        $effective = if ($held) { $FreshVerticalDelta[0] } else { $delta }
+        if ($effective -le 16) {
+            $accepted++
+            if ($accepted -eq 1) { $held = $true }
+        } else { $accepted = 0 }
+    }
+    return @{ held = $held; accepted = $accepted }
+}
+
+$fastFaller = Resolve-EarlyProductionHeld @(2.8, 15.5, 32.9)
+Assert-True ($fastFaller.held -and $fastFaller.accepted -eq 3) 'first verified sample did not hold a fast-falling online shell'
+
 function Resolve-StabilizationRequest([int]$ActionCount, [int]$VerifiedOrdinary, [string]$Mode, [int]$HeldAfterVerified) {
     $threshold = if ($Mode -eq 'held') { [Math]::Min(2, [Math]::Max(0, $HeldAfterVerified)) } else { 2 }
     return $ActionCount -eq $threshold -and $VerifiedOrdinary -ge $threshold -and @('held','same_frame').Contains($Mode)
@@ -97,7 +113,8 @@ foreach ($needle in @(
     'local function attempt_held_stabilization(record, action, snapshot)',
     'mode = "held"', 'status = "held_attempting"', 'active = false',
     'action.held_pending = true', 'status = "held_pending"',
-    'if action.held_pending then', 'action.status ~= "position_verified"',
+    'if action.held_pending then', 'local early_production = action.rescue_policy == "held_first"',
+    'action.status == "verifying" and (action.verification_samples or 0) >= 1',
     'record, action.reason, action.rescue_policy)',
     'local held_error = "held_gate_unavailable"',
     'post_teleport_position_not_verified', 'post_teleport_held_stabilization',
@@ -135,14 +152,21 @@ $dispatchStart = $main.IndexOf('local action = {', $updateStart)
 $teleport = $main.IndexOf('alife():teleport_object(', $dispatchStart)
 $pending = $main.IndexOf('action.held_pending = true', $teleport)
 $dispatchedLog = $main.IndexOf('provenance_log("action_dispatched"', $pending)
+$goodBranch = $main.IndexOf('if good then', $updateStart)
+$sampleIncrement = $main.IndexOf('action.verification_samples = (action.verification_samples or 0) + 1', $goodBranch)
+$earlyHeldGate = $main.IndexOf('action.held_pending and action.rescue_policy == "held_first"', $sampleIncrement)
+$heldAttemptCall = $main.IndexOf('attempt_held_stabilization(record, action, snapshot)', $earlyHeldGate)
+$verifiedThreshold = $main.IndexOf('if action.verification_samples >= 3 then', $heldAttemptCall)
 $verifiedLog = $main.IndexOf('provenance_log("position_verified"', $updateStart)
 $persistedMode = $main.IndexOf('record, action.reason, action.rescue_policy)', $verifiedLog)
-$heldAttemptCall = $main.IndexOf('attempt_held_stabilization(record, action, snapshot)', $verifiedLog)
 $pendingCleared = $main.IndexOf('action.held_pending = false', $heldAttemptCall)
 $failedGuard = $main.IndexOf('if not held_ok then', $pendingCleared)
 $failClosed = $main.IndexOf('disable_provenance(record, "post_teleport_held_stabilization"', $failedGuard)
 Assert-True ($teleport -gt $dispatchStart -and $pending -gt $teleport -and $dispatchedLog -gt $pending) 'held dispatch is not journaled as pending after teleport'
-Assert-True ($verifiedLog -gt $updateStart -and $persistedMode -gt $verifiedLog -and $heldAttemptCall -gt $persistedMode -and $heldAttemptCall -lt $dispatchStart) 'held fix is not deferred until post-teleport position verification with its persisted reason'
+Assert-True ($goodBranch -gt $updateStart -and $sampleIncrement -gt $goodBranch -and $earlyHeldGate -gt $sampleIncrement `
+    -and $heldAttemptCall -gt $earlyHeldGate -and $verifiedThreshold -gt $heldAttemptCall) `
+    'production held fix is not attempted after the first accepted fresh snapshot and before three-sample verification'
+Assert-True ($verifiedLog -gt $verifiedThreshold -and $persistedMode -gt $verifiedLog) 'position_verified path lost its persisted action reason'
 Assert-True ($main.IndexOf('attempt_held_stabilization(record, action, snapshot)', $teleport) -eq -1) 'held fix is still attempted in the dispatch callback'
 Assert-True ($pendingCleared -gt $heldAttemptCall -and $failedGuard -gt $pendingCleared -and $failClosed -gt $failedGuard) 'real post-teleport held failure is not fail closed after the attempt'
 Assert-True ($main.Contains('local timeout = configured_timeout > 0 and math.max(30000, configured_timeout) or 0')) 'held timeout zero-disable semantics missing'
