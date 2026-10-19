@@ -557,8 +557,19 @@ foreach ($needle in @(
     Assert-True ($main.Contains($needle)) "runtime provenance invariant missing: $needle"
 }
 
+$runtimeGateBlock = [regex]::Match($main, '(?s)local function artifact_rescue_observe_enabled\(\).*?\nend').Value
+Assert-True ($runtimeGateBlock.Contains('artifact_rescue_observe_only') `
+    -and $runtimeGateBlock.Contains('or C.get_bool("global", "artifact_rescue_actions", false)')) `
+    'active rescue does not keep provenance enabled when observe_only=false'
+function Test-RescueRuntimeGate([bool]$ObserveOnly, [bool]$Actions) {
+    return $ObserveOnly -or $Actions
+}
+Assert-True (Test-RescueRuntimeGate $true $false) 'observe-only mode disabled provenance'
+Assert-True (Test-RescueRuntimeGate $false $true) 'active mode disabled provenance'
+Assert-True (-not (Test-RescueRuntimeGate $false $false)) 'fully disabled mode still enabled provenance'
+
 foreach ($needle in @(
-    'artifact_rescue_observe_only = true', 'artifact_rescue_actions = false',
+    'artifact_rescue_observe_only = false', 'artifact_rescue_actions = true',
     'artifact_rescue_rolling_policy = held_first',
     'artifact_rescue_underground_policy = held_first',
     'artifact_rescue_origin_policy = held_first', 'artifact_spawn_guard_attempts = 8',
@@ -574,7 +585,7 @@ foreach ($needle in @(
     'artifact_rescue_underground_duration_ms = 2000', 'artifact_rescue_rolling_edge_margin = 5',
     'artifact_rescue_rolling_confirm_ms = 15000', 'artifact_rescue_log_repeat_ms = 60000'
 )) {
-    Assert-True ($config.Contains($needle)) "observe-only config invariant missing: $needle"
+    Assert-True ($config.Contains($needle)) "active rescue config invariant missing: $needle"
 }
 
 foreach ($forbidden in @('physics_element:fix', 'physics_element:release_fixed')) {

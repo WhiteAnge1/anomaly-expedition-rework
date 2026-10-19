@@ -706,11 +706,12 @@ local function fmt_position(pos)
     return fmt_number(pos.x) .. "," .. fmt_number(pos.y) .. "," .. fmt_number(pos.z)
 end
 
--- Artifact rescue phase 1 is deliberately observe-only.  The provenance
--- record is persisted now so later same-ID experiments can be made without
--- guessing where an item came from or repeating an action after save/load.
+-- Provenance must run both in diagnostic-only mode and when active rescue is
+-- enabled.  `observe_only` selects diagnostics without actions; it is not a
+-- master disable for the action pipeline.
 local function artifact_rescue_observe_enabled()
     return C.get_bool("global", "artifact_rescue_observe_only", false)
+        or C.get_bool("global", "artifact_rescue_actions", false)
 end
 
 local function artifact_rescue_debug_action_enabled(record, persisted_reason)

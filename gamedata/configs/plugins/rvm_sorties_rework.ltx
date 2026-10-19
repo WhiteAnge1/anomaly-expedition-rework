@@ -121,9 +121,9 @@ update_interval_ms = 1000
 ; --------------------------------------------------------------------------
 ; Спасение рейдовых артефактов. Классификаторы включены по умолчанию, но сами
 ; действия требуют отдельного master gate ниже.
-artifact_rescue_observe_only = true
+artifact_rescue_observe_only = false
 ; Общий предохранитель активных действий. Безопасный default false.
-artifact_rescue_actions = false
+artifact_rescue_actions = true
 ; Production policy: held_first. После штатных 15 секунд подтверждённого rolling
 ; первый rescue делает same-ID teleport, три fresh snapshots, reacquire и held.
 ; Значение debug_teleport возвращает закрытый exact-ID лабораторный сценарий.
@@ -200,7 +200,7 @@ show_exact_enemy_markers = false
 
 ; Диагностика: auto следует глобальным DEV_DEBUG/DEV_DEBUG_DEV, on/off задают
 ; явное поведение. Публичный default не включает debug без debug-запуска игры.
-debug_mode = auto
+debug_mode = on
 ; Совместимость со старыми конфигами: используется только если debug_mode отсутствует.
 debug_log = false
 ; off, artifact, enemy, loot, empty — принудительный тип ложных областей для теста.
