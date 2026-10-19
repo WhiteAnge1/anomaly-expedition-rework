@@ -349,11 +349,15 @@ Assert-True (-not (Test-VerificationEnvelope 72 40 9 22 $true)) 'held verifier a
 Assert-True (-not (Test-VerificationEnvelope 72 26 9 78 $true)) 'held verifier accepted object outside linked field tether'
 Assert-True (-not (Test-VerificationEnvelope 72 220 40 220 $true)) 'held verifier masked a teleport that did not reach the field'
 Assert-True (-not (Test-VerificationEnvelope 72 4.1 0 1 $false)) 'non-held verifier lost strict target window'
-function Test-ProductionHeldSurface([double]$TargetDxz, [double]$TargetDy, [double]$VertexDy, [double]$AnchorDxz, [double]$Radius) {
-    return $TargetDxz -le 2 -and $TargetDy -le 2 -and [Math]::Abs($VertexDy) -le 2 -and $AnchorDxz -le ($Radius + 5)
+function Test-ProductionHeldSurface([double]$TargetDxz, [double]$TargetDeltaY, [double]$VertexDy, [double]$AnchorDxz, [double]$Radius) {
+    return $TargetDxz -le 2 -and $TargetDeltaY -ge -0.25 -and $TargetDeltaY -le 2 `
+        -and [Math]::Abs($VertexDy) -le 2 -and $AnchorDxz -le ($Radius + 5)
 }
 Assert-True (-not (Test-ProductionHeldSurface 0 3.9 -3.9 42 191)) 'exact #1405 delayed underground sample was accepted'
-Assert-True (Test-ProductionHeldSurface 0.1 0.2 0.1 42 191) 'fresh exact #1405 surface sample was rejected'
+Assert-True (-not (Test-ProductionHeldSurface 0 -1.9 -1.9 42 191)) 'held fix can still accept an artifact centre 1.9 m below target'
+Assert-True (-not (Test-ProductionHeldSurface 0 -0.26 -0.26 42 191)) 'held fix exceeded the bounded below-target physics-step allowance'
+Assert-True (Test-ProductionHeldSurface 0.1 -0.24 -0.14 42 191) 'safe slightly settled surface sample was rejected'
+Assert-True (Test-ProductionHeldSurface 0.1 1.9 2 42 191) 'safe above-surface artifact position was rejected'
 $outsideEnvelopeState = 'verifying'
 foreach ($check in 1..10) {
     if (-not (Test-VerificationEnvelope 72 40 9 22 $true) -and $check -ge 10) {
@@ -547,6 +551,8 @@ foreach ($needle in @(
     'target_limit = math.max(4, math.min(32, linked_radius * 0.5))',
     'vertical_limit = math.max(4, math.min(16, linked_radius * 0.25))',
     'local function held_target_snapshot_safe(record, action, snapshot)',
+    'target_delta_y >= -0.25',
+    'target_delta_y <= 2',
     'good = good and strict_held_safe',
     'dispatch_held_target_reposition(',
     'target_envelope_not_reached_after_10_checks',

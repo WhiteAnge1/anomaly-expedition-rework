@@ -11,6 +11,10 @@ local ENEMY_EXACT_SPOT = "rvm_exact_enemy_icon"
 -- Keep their truthful object positions and diagnose the overlap; inventing an
 -- offset would make an "exact" marker point away from its artifact.
 local ARTIFACT_EXACT_OVERLAP_DISTANCE = 2
+-- Static-ray rescue targets are already 0.1 m above their proven support.
+-- Object position is a model pivot, not a universal lower bound, and artifact
+-- meshes expose no common Lua collision radius.  Permit one short physics-step
+-- below the target, but never the old metre-scale burial before held fix().
 local callbacks_registered = false
 local hooks_installed = false
 local next_update = 0
@@ -2042,16 +2046,20 @@ local function held_target_snapshot_safe(record, action, snapshot)
     and snapshot.server_section == action.section and snapshot.server_gvid == action.target.gvid
     and snapshot.nearest_vertex and snapshot.vertex_delta_y
     and record.linked_center and linked_radius and linked_radius > 0) then
-        return false, 9999, 9999, 9999, 9999
+        return false, 9999, 9999, 9999, 9999, 9999
     end
     local target_dxz = distance_xz(pos, target)
-    local target_dy = math.abs(pos.y - target.y)
+    local target_delta_y = pos.y - target.y
+    local target_dy = math.abs(target_delta_y)
     local vertex_dy = math.abs(snapshot.vertex_delta_y)
     local anchor_dxz = distance_xz(pos, record.linked_center)
     local tether_limit = linked_radius
         + math.max(0, C.get_number("global", "artifact_rescue_rolling_edge_margin", 5))
-    return target_dxz <= 2 and target_dy <= 2 and vertex_dy <= 2 and anchor_dxz <= tether_limit,
-        target_dxz, target_dy, vertex_dy, anchor_dxz
+    return target_dxz <= 2
+        and target_delta_y >= -0.25
+        and target_delta_y <= 2
+        and vertex_dy <= 2 and anchor_dxz <= tether_limit,
+        target_dxz, target_dy, vertex_dy, anchor_dxz, target_delta_y
 end
 
 local function dispatch_held_target_reposition(record, action, snapshot, now, context, holder)
@@ -2372,7 +2380,7 @@ local function update_debug_same_id_rescue(record, snapshot, now)
             and snapshot.server_gvid == action.target.gvid and pos and target
             and target_dxz <= target_limit and target_dy <= vertical_limit
             and (not action.stabilization_requested or origin_action or anchor_dxz <= tether_limit)
-        local strict_held_safe, strict_dxz, strict_dy, strict_vertex_dy =
+        local strict_held_safe, strict_dxz, strict_dy, strict_vertex_dy, _, strict_delta_y =
             held_target_snapshot_safe(record, action, snapshot)
         if action.rescue_policy == "held_first" and action.stabilization_requested then
             good = good and strict_held_safe
@@ -2391,6 +2399,7 @@ local function update_debug_same_id_rescue(record, snapshot, now)
             .. ",strict_held_safe=" .. tostring(strict_held_safe)
             .. ",strict_dxz=" .. fmt_number(strict_dxz)
             .. ",strict_dy=" .. fmt_number(strict_dy)
+            .. ",strict_delta_y=" .. fmt_number(strict_delta_y)
             .. ",strict_vertex_dy=" .. fmt_number(strict_vertex_dy))
         if good then
             action.verification_samples = (action.verification_samples or 0) + 1

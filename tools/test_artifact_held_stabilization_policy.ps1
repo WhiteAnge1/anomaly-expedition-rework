@@ -152,6 +152,7 @@ foreach ($needle in @(
     'action_stabilization_held_attempt', 'action_stabilization_held',
     'action_stabilization_held_repositioned', 'action_stabilization_held_offline',
     'action_stabilization_held_reapply_dispatched', 'action_stabilization_held_reapplied',
+    'strict_delta_y=',
     'action_stabilization_held_released', 'action_stabilization_held_release_pending',
     '"held_gate_disabled"', '"owner_parent_changed"', '"current_level_changed"',
     '"held_timeout"', '"load_recovery"', '"pre_save"', '"before_level_changing"',
