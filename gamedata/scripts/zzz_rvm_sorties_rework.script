@@ -25,6 +25,7 @@ local INVALID_VERTEX_ID = 4294967295
 local ARTIFACT_RESCUE_DEBUG_IDS = { [1407] = true, [6362] = true }
 local release_held_stabilization = nil
 local release_all_held_stabilizations = nil
+local attempt_held_stabilization = nil
 local saved_origin_evidence_valid = nil
 local ORIGIN = {}
 
@@ -2033,6 +2034,73 @@ release_all_held_stabilizations = function(reason)
     return all_released
 end
 
+local function held_target_snapshot_safe(record, action, snapshot)
+    local target = action and action.target and action.target.pos
+    local pos = snapshot and snapshot.online_pos
+    local linked_radius = tonumber(record and record.linked_radius)
+    if not (target and pos and snapshot.online_exists and snapshot.server_exists
+    and snapshot.server_section == action.section and snapshot.server_gvid == action.target.gvid
+    and snapshot.nearest_vertex and snapshot.vertex_delta_y
+    and record.linked_center and linked_radius and linked_radius > 0) then
+        return false, 9999, 9999, 9999, 9999
+    end
+    local target_dxz = distance_xz(pos, target)
+    local target_dy = math.abs(pos.y - target.y)
+    local vertex_dy = math.abs(snapshot.vertex_delta_y)
+    local anchor_dxz = distance_xz(pos, record.linked_center)
+    local tether_limit = linked_radius
+        + math.max(0, C.get_number("global", "artifact_rescue_rolling_edge_margin", 5))
+    return target_dxz <= 2 and target_dy <= 2 and vertex_dy <= 2 and anchor_dxz <= tether_limit,
+        target_dxz, target_dy, vertex_dy, anchor_dxz
+end
+
+local function dispatch_held_target_reposition(record, action, snapshot, now, context, holder)
+    holder.reposition_attempts = (holder.reposition_attempts or 0) + 1
+    if holder.reposition_attempts > 3 then
+        return false, "safe_target_not_reached_after_3_repositions"
+    end
+    local target = action.target
+    local server_ok, server = pcall(alife_object, record.artifact_id)
+    if not (server_ok and server) or object_section(server) ~= record.section then
+        return false, "exact_server_identity_unavailable"
+    end
+    clear_artifact_position_caches(record.artifact_id)
+    local moved, move_error = pcall(function()
+        alife():teleport_object(record.artifact_id, target.gvid, target.lvid, pos_vector(target.pos))
+    end)
+    if not moved then return false, tostring(move_error) end
+    holder.lifecycle_busy = true
+    holder.reapply_pending = context == "online_reapply"
+    next_update = math.min(next_update, now + 100)
+    provenance_log("action_stabilization_held_repositioned", record, snapshot, record.primary_reason,
+        "dispatch=" .. tostring(action.dispatch_index) .. ",context=" .. tostring(context)
+        .. ",attempt=" .. tostring(holder.reposition_attempts)
+        .. ",target=" .. fmt_position(target.pos)
+        .. ",current=" .. fmt_position(snapshot.online_pos or snapshot.server_pos)
+        .. ",vertex_dy=" .. fmt_number(snapshot.vertex_delta_y or -9999))
+    return true, nil
+end
+
+local function held_shell_still_fixed(record, held)
+    local online_ok, online = pcall(function() return level.object_by_id(record.artifact_id) end)
+    if not (online_ok and online) or object_section(online) ~= record.section then
+        return false, "online_unavailable"
+    end
+    local shell_ok, shell = pcall(function() return online:get_physics_shell() end)
+    if not (shell_ok and shell) then return false, "physics_shell_unavailable" end
+    for _, element_index in ipairs(held.element_indices or {}) do
+        local element_ok, element = pcall(function() return shell:get_element_by_order(element_index) end)
+        local state_ok, fixed = false, false
+        if element_ok and element then
+            state_ok, fixed = pcall(function() return element:is_fixed() end)
+        end
+        if not (element_ok and element and state_ok and fixed) then
+            return false, "element_" .. tostring(element_index) .. "_not_fixed"
+        end
+    end
+    return #(held.element_indices or {}) > 0, "fixed"
+end
+
 local function maintain_held_stabilization(record, snapshot, now)
     local action, held = active_held_action(record)
     if not action then return true end
@@ -2064,10 +2132,73 @@ local function maintain_held_stabilization(record, snapshot, now)
     if timeout > 0 and held.duration_ms >= timeout then
         return release_held_stabilization(record, snapshot, "held_timeout")
     end
+    if not snapshot.online_exists then
+        held.awaiting_reapply = true
+        held.lifecycle_busy = true
+        held.status = "held_waiting_online"
+        if not held.offline_reported then
+            held.offline_reported = true
+            provenance_log("action_stabilization_held_offline", record, snapshot, record.primary_reason,
+                "dispatch=" .. tostring(action.dispatch_index) .. ",reapply=pending")
+        end
+        return true
+    end
+    local still_fixed, fixed_reason = held_shell_still_fixed(record, held)
+    if still_fixed and not held.awaiting_reapply and not held.reapply_pending then
+        held.lifecycle_busy = nil
+        return true
+    end
+    if still_fixed and held.awaiting_reapply and not held.reapply_pending then
+        held.awaiting_reapply = nil
+        held.lifecycle_busy = nil
+        held.offline_reported = nil
+        held.status = "held"
+        provenance_log("action_stabilization_held_reapplied", record, snapshot, record.primary_reason,
+            "dispatch=" .. tostring(action.dispatch_index) .. ",result=existing_shell_still_fixed")
+        return true
+    end
+    local safe = held_target_snapshot_safe(record, action, snapshot)
+    if not held.reapply_pending or not safe then
+        local moved, move_error = dispatch_held_target_reposition(
+            record, action, snapshot, now, "online_reapply", held)
+        if moved then
+            held.status = "held_reapply_pending"
+            provenance_log("action_stabilization_held_reapply_dispatched", record, snapshot, record.primary_reason,
+                "dispatch=" .. tostring(action.dispatch_index) .. ",reason=" .. tostring(fixed_reason)
+                .. ",attempt=" .. tostring(held.reposition_attempts))
+            return true
+        end
+        held.active = false
+        held.status = "held_reapply_failed"
+        disable_provenance(record, "held_online_reapply", move_error)
+        return false
+    end
+    local prior_reapply_count = tonumber(held.reapply_count) or 0
+    local prior_reposition_attempts = tonumber(held.reposition_attempts) or 0
+    local held_ok = attempt_held_stabilization(record, action, snapshot, "online_reapply")
+    local replacement = action.stabilization
+    if not held_ok then
+        disable_provenance(record, "held_online_reapply",
+            replacement and replacement.status or "held_attempt_status_missing")
+        return false
+    end
+    replacement.reapply_count = prior_reapply_count + 1
+    replacement.reposition_attempts = prior_reposition_attempts
+    replacement.lifecycle_busy = nil
+    replacement.awaiting_reapply = nil
+    replacement.reapply_pending = nil
+    provenance_log("action_stabilization_held_reapplied", record, snapshot, record.primary_reason,
+        "dispatch=" .. tostring(action.dispatch_index)
+        .. ",reapply_count=" .. tostring(replacement.reapply_count))
     return true
 end
 
-local function attempt_held_stabilization(record, action, snapshot)
+attempt_held_stabilization = function(record, action, snapshot, phase)
+    local previous = action.stabilization
+    local previous_indices = {}
+    if phase == "online_reapply" then
+        for _, index in ipairs(previous and previous.element_indices or {}) do previous_indices[index] = true end
+    end
     action.stabilization = {
         mode = "held",
         status = "held_attempting",
@@ -2079,14 +2210,15 @@ local function attempt_held_stabilization(record, action, snapshot)
         last_sample_at = nil,
     }
     local held = action.stabilization
+    local lifecycle_reapply = phase == "online_reapply"
     local early_production = action.rescue_policy == "held_first"
         and action.status == "verifying" and (action.verification_samples or 0) >= 1
     local fully_verified = action.status == "position_verified"
         and action.verified_at and (action.verification_samples or 0) >= 3
     provenance_log("action_stabilization_held_attempt", record, snapshot, record.primary_reason,
         "dispatch=" .. tostring(action.dispatch_index)
-        .. ",phase=" .. (early_production and "first_verified_sample" or "position_verified"))
-    if not action.held_pending or not (early_production or fully_verified) then
+        .. ",phase=" .. tostring(phase or (early_production and "first_verified_sample" or "position_verified")))
+    if not lifecycle_reapply and (not action.held_pending or not (early_production or fully_verified)) then
         held.status = "held_failed"
         held.errors[#held.errors + 1] = "post_teleport_position_not_verified"
         provenance_log("stabilization_failed", record, snapshot, record.primary_reason,
@@ -2131,6 +2263,9 @@ local function attempt_held_stabilization(record, action, snapshot)
                 held.errors[#held.errors + 1] = "element_" .. tostring(index) .. "_state_unavailable"
             elseif was_fixed then
                 pre_fixed = pre_fixed + 1
+                if previous_indices[index] then
+                    held.element_indices[#held.element_indices + 1] = index
+                end
             else
                 candidates[#candidates + 1] = { index = index, element = element }
             end
@@ -2138,7 +2273,7 @@ local function attempt_held_stabilization(record, action, snapshot)
     end
     held.pre_fixed_count = pre_fixed
     held.candidate_count = #candidates
-    if #held.errors > 0 or #candidates == 0 then
+    if #held.errors > 0 or (#candidates == 0 and #held.element_indices == 0) then
         held.status = "held_unavailable"
         provenance_log("stabilization_unavailable", record, snapshot, record.primary_reason,
             "dispatch=" .. tostring(action.dispatch_index) .. ",reason=unsafe_element_inventory,errors="
@@ -2156,7 +2291,8 @@ local function attempt_held_stabilization(record, action, snapshot)
                 .. tostring(fix_error or "fixed_state_not_confirmed")
         end
     end
-    if #held.errors > 0 or #held.element_indices ~= #candidates then
+    local expected_held = #candidates + (lifecycle_reapply and pre_fixed or 0)
+    if #held.errors > 0 or #held.element_indices ~= expected_held then
         held.active = #held.element_indices > 0
         if held.active then release_held_stabilization(record, snapshot, "held_setup_rollback") end
         held.status = "held_failed"
@@ -2236,6 +2372,11 @@ local function update_debug_same_id_rescue(record, snapshot, now)
             and snapshot.server_gvid == action.target.gvid and pos and target
             and target_dxz <= target_limit and target_dy <= vertical_limit
             and (not action.stabilization_requested or origin_action or anchor_dxz <= tether_limit)
+        local strict_held_safe, strict_dxz, strict_dy, strict_vertex_dy =
+            held_target_snapshot_safe(record, action, snapshot)
+        if action.rescue_policy == "held_first" and action.stabilization_requested then
+            good = good and strict_held_safe
+        end
         provenance_log("position_verification_sample", record, snapshot, record.primary_reason,
             "check=" .. tostring(action.verification_checks)
             .. ",accepted=" .. tostring(good)
@@ -2246,7 +2387,11 @@ local function update_debug_same_id_rescue(record, snapshot, now)
             .. ",target_limit=" .. fmt_number(target_limit)
             .. ",vertical_limit=" .. fmt_number(vertical_limit)
             .. ",anchor_dxz=" .. tostring(anchor_dxz and fmt_number(anchor_dxz) or "none")
-            .. ",tether_limit=" .. tostring(tether_limit and fmt_number(tether_limit) or "none"))
+            .. ",tether_limit=" .. tostring(tether_limit and fmt_number(tether_limit) or "none")
+            .. ",strict_held_safe=" .. tostring(strict_held_safe)
+            .. ",strict_dxz=" .. fmt_number(strict_dxz)
+            .. ",strict_dy=" .. fmt_number(strict_dy)
+            .. ",strict_vertex_dy=" .. fmt_number(strict_vertex_dy))
         if good then
             action.verification_samples = (action.verification_samples or 0) + 1
             -- Production held_first must stop the fresh online shell as soon as
@@ -2330,6 +2475,14 @@ local function update_debug_same_id_rescue(record, snapshot, now)
             end
         else
             action.verification_samples = 0
+            if action.held_pending and action.rescue_policy == "held_first" then
+                local moved, move_error = dispatch_held_target_reposition(
+                    record, action, snapshot, now, "initial_verification", action)
+                if moved then return end
+                action.status = "verification_failed"
+                disable_provenance(record, "held_safe_target_verification", move_error)
+                return
+            end
             if action.verification_checks >= 10 then
                 action.status = "verification_failed"
                 disable_provenance(record, "same_id_teleport_verify",
@@ -2586,6 +2739,7 @@ local function update_debug_same_id_rescue(record, snapshot, now)
                 status = "held_pending",
                 active = false,
             }
+            next_update = math.min(next_update, now + 100)
         else
             attempt_same_frame_stabilization(record, action, snapshot)
         end
@@ -4149,8 +4303,7 @@ local function update_artifact_zones(now)
                 local snapshot_ok, snapshot = pcall(artifact_snapshot, zone)
                 if snapshot_ok then
                     local latest_action = latest_artifact_action(record)
-                    if held_action and (record.state == "owned" or record.state == "closed"
-                    or record.state == "released" or record.state == "disabled" or record.state == "stable") then
+                    if held_action then
                         local action_ok, action_error = pcall(update_debug_same_id_rescue, record, snapshot, now)
                         if not action_ok then disable_provenance(record, "held_action_update", action_error) end
                     elseif record.state == "verifying" or (latest_action and latest_action.status == "position_verified") then

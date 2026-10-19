@@ -349,6 +349,11 @@ Assert-True (-not (Test-VerificationEnvelope 72 40 9 22 $true)) 'held verifier a
 Assert-True (-not (Test-VerificationEnvelope 72 26 9 78 $true)) 'held verifier accepted object outside linked field tether'
 Assert-True (-not (Test-VerificationEnvelope 72 220 40 220 $true)) 'held verifier masked a teleport that did not reach the field'
 Assert-True (-not (Test-VerificationEnvelope 72 4.1 0 1 $false)) 'non-held verifier lost strict target window'
+function Test-ProductionHeldSurface([double]$TargetDxz, [double]$TargetDy, [double]$VertexDy, [double]$AnchorDxz, [double]$Radius) {
+    return $TargetDxz -le 2 -and $TargetDy -le 2 -and [Math]::Abs($VertexDy) -le 2 -and $AnchorDxz -le ($Radius + 5)
+}
+Assert-True (-not (Test-ProductionHeldSurface 0 3.9 -3.9 42 191)) 'exact #1405 delayed underground sample was accepted'
+Assert-True (Test-ProductionHeldSurface 0.1 0.2 0.1 42 191) 'fresh exact #1405 surface sample was rejected'
 $outsideEnvelopeState = 'verifying'
 foreach ($check in 1..10) {
     if (-not (Test-VerificationEnvelope 72 40 9 22 $true) -and $check -ge 10) {
@@ -541,6 +546,9 @@ foreach ($needle in @(
     'position_verification_sample', 'origin_action and "origin_exact_field"',
     'target_limit = math.max(4, math.min(32, linked_radius * 0.5))',
     'vertical_limit = math.max(4, math.min(16, linked_radius * 0.25))',
+    'local function held_target_snapshot_safe(record, action, snapshot)',
+    'good = good and strict_held_safe',
+    'dispatch_held_target_reposition(',
     'target_envelope_not_reached_after_10_checks',
     'action_monitor', 'rolling_reconfirmed', 'action_monitor_complete', 'action_limit_reached',
     'legacy_three_frame_stable_migrated',
@@ -592,7 +600,8 @@ foreach ($forbidden in @('physics_element:fix', 'physics_element:release_fixed')
     Assert-True (-not $main.Contains($forbidden)) "active artifact rescue action is forbidden in phase 1: $forbidden"
 }
 Assert-True (-not $main.Contains('action_stable')) 'three-frame action_stable criterion must not return'
-Assert-True (([regex]::Matches($main, [regex]::Escape('alife():teleport_object('))).Count -eq 1) 'same-ID teleport must have exactly one narrow call site'
+Assert-True (([regex]::Matches($main, [regex]::Escape('alife():teleport_object('))).Count -eq 2) `
+    'same-ID teleport must have exactly the initial dispatch and bounded safe-target reposition call sites'
 $targetBlock = [regex]::Match($main, '(?s)local function compute_observe_target\(record\).*?\nend\n\s*local function provenance_log').Value
 Assert-True ($targetBlock.Contains('record.spawn_input_pos') -and -not $targetBlock.Contains('snapshot.online_pos')) 'rescue target is not isolated from the failed current position'
 foreach ($gate in @('artifact_rescue_actions', 'artifact_rescue_debug_same_id_teleport', 'artifact_rescue_debug_artifact_ids', 'artifact_rescue_debug_reason')) {

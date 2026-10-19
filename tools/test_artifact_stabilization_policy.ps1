@@ -102,7 +102,8 @@ $releaseCall = $main.IndexOf('pcall(candidate.release_method, candidate.element)
 Assert-True ($candidateBeforeFix -ge 0 -and $candidateBeforeFix -lt $fixCall) 'release cleanup candidate is not recorded before fix'
 Assert-True ($fixCall -ge 0 -and $releaseCall -gt $fixCall) 'same-callback release sweep does not follow fix sweep'
 
-Assert-True (([regex]::Matches($main, [regex]::Escape('alife():teleport_object('))).Count -eq 1) 'third stage introduced another teleport call site'
+Assert-True (([regex]::Matches($main, [regex]::Escape('alife():teleport_object('))).Count -eq 2) `
+    'teleport call sites are not limited to initial rescue plus bounded held safe-target reposition'
 $blockMatch = [regex]::Match($main, '(?s)local function attempt_same_frame_stabilization\(.*?\nend\n\s*local function active_held_action')
 Assert-True $blockMatch.Success 'stabilization helper block was not isolated'
 $stabilizationBlock = $blockMatch.Value

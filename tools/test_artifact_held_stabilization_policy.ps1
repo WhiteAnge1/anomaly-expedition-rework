@@ -43,18 +43,41 @@ Assert-True ((Resolve-PostTeleportHeld 'post_rescue_monitor' 'rolling' $false) -
 function Resolve-EarlyProductionHeld([double[]]$FreshVerticalDelta) {
     $held = $false
     $accepted = 0
+    $repositions = 0
     foreach ($delta in $FreshVerticalDelta) {
-        $effective = if ($held) { $FreshVerticalDelta[0] } else { $delta }
-        if ($effective -le 16) {
+        if ($held -or $delta -le 2) {
             $accepted++
             if ($accepted -eq 1) { $held = $true }
-        } else { $accepted = 0 }
+        } else {
+            $accepted = 0
+            $repositions++
+        }
     }
-    return @{ held = $held; accepted = $accepted }
+    return @{ held = $held; accepted = $accepted; repositions = $repositions }
 }
 
-$fastFaller = Resolve-EarlyProductionHeld @(2.8, 15.5, 32.9)
-Assert-True ($fastFaller.held -and $fastFaller.accepted -eq 3) 'first verified sample did not hold a fast-falling online shell'
+$fastFaller = Resolve-EarlyProductionHeld @(3.9, 0.2, 0.2, 0.2)
+Assert-True ($fastFaller.held -and $fastFaller.accepted -eq 3 -and $fastFaller.repositions -eq 1) `
+    'delayed underground sample was accepted instead of repositioning before held verification'
+
+function Resolve-HeldOnlineLifecycle([bool[]]$Online, [bool[]]$Fixed, [bool[]]$SafeAfterReposition) {
+    $awaiting = $false
+    $dispatches = 1
+    $reapply = 0
+    for ($i = 0; $i -lt $Online.Count; $i++) {
+        if (-not $Online[$i]) { $awaiting = $true; continue }
+        if ($Fixed[$i] -and -not $awaiting) { continue }
+        if ($Fixed[$i] -and $awaiting) { $awaiting = $false; continue }
+        if (-not $SafeAfterReposition[$i]) { continue }
+        $reapply++
+        $awaiting = $false
+    }
+    return @{ dispatches = $dispatches; reapply = $reapply; awaiting = $awaiting }
+}
+
+$offlineRecreate = Resolve-HeldOnlineLifecycle @($true,$false,$true,$true) @($true,$false,$false,$true) @($false,$false,$true,$true)
+Assert-True ($offlineRecreate.dispatches -eq 1 -and $offlineRecreate.reapply -eq 1 -and -not $offlineRecreate.awaiting) `
+    'offline/online shell recreation consumed another rescue or failed to reapply held state'
 
 function Resolve-StabilizationRequest([int]$ActionCount, [int]$VerifiedOrdinary, [string]$Mode, [int]$HeldAfterVerified) {
     $threshold = if ($Mode -eq 'held') { [Math]::Min(2, [Math]::Max(0, $HeldAfterVerified)) } else { 2 }
@@ -106,11 +129,15 @@ Assert-True ($releaseReasons.Count -eq 10) 'held release trigger model is incomp
 foreach ($needle in @(
     'local release_held_stabilization = nil',
     'local release_all_held_stabilizations = nil',
+    'local attempt_held_stabilization = nil',
     'local function active_held_action(record)',
     'release_held_stabilization = function(record, snapshot, reason)',
     'release_all_held_stabilizations = function(reason)',
+    'local function held_target_snapshot_safe(record, action, snapshot)',
+    'local function dispatch_held_target_reposition(record, action, snapshot, now, context, holder)',
+    'local function held_shell_still_fixed(record, held)',
     'local function maintain_held_stabilization(record, snapshot, now)',
-    'local function attempt_held_stabilization(record, action, snapshot)',
+    'attempt_held_stabilization = function(record, action, snapshot, phase)',
     'mode = "held"', 'status = "held_attempting"', 'active = false',
     'action.held_pending = true', 'status = "held_pending"',
     'if action.held_pending then', 'local early_production = action.rescue_policy == "held_first"',
@@ -123,6 +150,8 @@ foreach ($needle in @(
     'pcall(function() candidate.element:fix() end)',
     'pcall(function() element:release_fixed() end)',
     'action_stabilization_held_attempt', 'action_stabilization_held',
+    'action_stabilization_held_repositioned', 'action_stabilization_held_offline',
+    'action_stabilization_held_reapply_dispatched', 'action_stabilization_held_reapplied',
     'action_stabilization_held_released', 'action_stabilization_held_release_pending',
     '"held_gate_disabled"', '"owner_parent_changed"', '"current_level_changed"',
     '"held_timeout"', '"load_recovery"', '"pre_save"', '"before_level_changing"',
@@ -198,7 +227,7 @@ $maintain = $main.IndexOf('maintain_held_stabilization(record, snapshot, now)', 
 $terminalGuard = $main.IndexOf('if record.disabled or record.state == "owned"', $updateStart)
 Assert-True ($maintain -gt $updateStart -and $maintain -lt $terminalGuard) 'load/disabled held release is not processed before terminal guards'
 
-$heldBlock = [regex]::Match($main, '(?s)local function attempt_held_stabilization\(.*?\nend\n\s*local function update_debug_same_id_rescue').Value
+$heldBlock = [regex]::Match($main, '(?s)attempt_held_stabilization = function\(.*?\nend\n\s*local function update_debug_same_id_rescue').Value
 foreach ($forbidden in @('apply_force(', 'apply_torque(', 'set_switch_online', 'set_switch_offline', 'alife_create(')) {
     Assert-True (-not $heldBlock.Contains($forbidden)) "forbidden held mechanism detected: $forbidden"
 }
