@@ -79,6 +79,29 @@ $offlineRecreate = Resolve-HeldOnlineLifecycle @($true,$false,$true,$true) @($tr
 Assert-True ($offlineRecreate.dispatches -eq 1 -and $offlineRecreate.reapply -eq 1 -and -not $offlineRecreate.awaiting) `
     'offline/online shell recreation consumed another rescue or failed to reapply held state'
 
+function Test-NightStarStrictSample([bool]$ExactOnline, [bool]$ExactSection, [double]$Dxz, [double]$DeltaY, [double]$VertexDy, [double]$AnchorDxz, [double]$Tether, [bool]$ServerGvidMatches) {
+    # #5516/#6186 prove that an online teleport may reach the exact static-ray
+    # target while ALife gvid differs.  Position safety must not depend on it.
+    return $ExactOnline -and $ExactSection -and $Dxz -le 2 -and $DeltaY -ge -0.25 `
+        -and $DeltaY -le 2 -and [Math]::Abs($VertexDy) -le 2 -and $AnchorDxz -le $Tether
+}
+Assert-True (Test-NightStarStrictSample $true $true 0 0 0.2 46.6 193 $false) `
+    'night-star #5516 exact target was rejected solely by server gvid mismatch'
+Assert-True (-not (Test-NightStarStrictSample $true $true 0 -0.4 -0.3 23.3 219 $false)) `
+    'night-star #6186 first falling sample no longer requests reposition'
+Assert-True (Test-NightStarStrictSample $true $true 0 0 0.1 23.3 219 $false) `
+    'night-star #6186 exact reposition target was rejected solely by server gvid mismatch'
+
+function Resolve-PostFixAcceptance([bool]$FreshOnlineSafe, [bool]$ElementsFixed) {
+    if (-not $ElementsFixed) { return 'held_failed' }
+    if (-not $FreshOnlineSafe) { return 'held_unresolved_release' }
+    return 'held'
+}
+Assert-True ((Resolve-PostFixAcceptance $false $true) -eq 'held_unresolved_release') `
+    'buried post-fix online shell can still publish held success'
+Assert-True ((Resolve-PostFixAcceptance $true $true) -eq 'held') `
+    'safe post-fix online shell no longer publishes held success'
+
 function Resolve-StabilizationRequest([int]$ActionCount, [int]$VerifiedOrdinary, [string]$Mode, [int]$HeldAfterVerified) {
     $threshold = if ($Mode -eq 'held') { [Math]::Min(2, [Math]::Max(0, $HeldAfterVerified)) } else { 2 }
     return $ActionCount -eq $threshold -and $VerifiedOrdinary -ge $threshold -and @('held','same_frame').Contains($Mode)
@@ -152,6 +175,8 @@ foreach ($needle in @(
     'action_stabilization_held_attempt', 'action_stabilization_held',
     'action_stabilization_held_repositioned', 'action_stabilization_held_offline',
     'action_stabilization_held_reapply_dispatched', 'action_stabilization_held_reapplied',
+    'action_stabilization_held_unresolved', 'action_unresolved',
+    'held_post_fix_position_unresolved', 'post_fix_online_position_not_safe',
     'strict_delta_y=',
     'action_stabilization_held_released', 'action_stabilization_held_release_pending',
     '"held_gate_disabled"', '"owner_parent_changed"', '"current_level_changed"',

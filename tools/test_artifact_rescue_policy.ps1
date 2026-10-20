@@ -551,10 +551,14 @@ foreach ($needle in @(
     'target_limit = math.max(4, math.min(32, linked_radius * 0.5))',
     'vertical_limit = math.max(4, math.min(16, linked_radius * 0.25))',
     'local function held_target_snapshot_safe(record, action, snapshot)',
+    'snapshot.server_section == action.section',
     'target_delta_y >= -0.25',
     'target_delta_y <= 2',
+    'local production_held_verify = action.rescue_policy == "held_first"',
+    '(production_held_verify or snapshot.server_gvid == action.target.gvid)',
     'good = good and strict_held_safe',
     'dispatch_held_target_reposition(',
+    'action_stabilization_held_unresolved', 'action_unresolved',
     'target_envelope_not_reached_after_10_checks',
     'action_monitor', 'rolling_reconfirmed', 'action_monitor_complete', 'action_limit_reached',
     'legacy_three_frame_stable_migrated',
@@ -608,6 +612,9 @@ foreach ($forbidden in @('physics_element:fix', 'physics_element:release_fixed')
 Assert-True (-not $main.Contains('action_stable')) 'three-frame action_stable criterion must not return'
 Assert-True (([regex]::Matches($main, [regex]::Escape('alife():teleport_object('))).Count -eq 2) `
     'same-ID teleport must have exactly the initial dispatch and bounded safe-target reposition call sites'
+$strictHeldBlock = [regex]::Match($main, '(?s)local function held_target_snapshot_safe\(.*?\nend').Value
+Assert-True (-not $strictHeldBlock.Contains('snapshot.server_gvid == action.target.gvid')) `
+    'strict online surface acceptance still depends on unstable ALife gvid equality'
 $targetBlock = [regex]::Match($main, '(?s)local function compute_observe_target\(record\).*?\nend\n\s*local function provenance_log').Value
 Assert-True ($targetBlock.Contains('record.spawn_input_pos') -and -not $targetBlock.Contains('snapshot.online_pos')) 'rescue target is not isolated from the failed current position'
 foreach ($gate in @('artifact_rescue_actions', 'artifact_rescue_debug_same_id_teleport', 'artifact_rescue_debug_artifact_ids', 'artifact_rescue_debug_reason')) {

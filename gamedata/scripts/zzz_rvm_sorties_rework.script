@@ -2043,7 +2043,7 @@ local function held_target_snapshot_safe(record, action, snapshot)
     local pos = snapshot and snapshot.online_pos
     local linked_radius = tonumber(record and record.linked_radius)
     if not (target and pos and snapshot.online_exists and snapshot.server_exists
-    and snapshot.server_section == action.section and snapshot.server_gvid == action.target.gvid
+    and snapshot.server_section == action.section
     and snapshot.nearest_vertex and snapshot.vertex_delta_y
     and record.linked_center and linked_radius and linked_radius > 0) then
         return false, 9999, 9999, 9999, 9999, 9999
@@ -2309,6 +2309,48 @@ attempt_held_stabilization = function(record, action, snapshot, phase)
             .. table.concat(held.errors, "|"))
         return false
     end
+    -- teleport_object can leave the ALife game vertex different from the
+    -- requested graph vertex while the exact online object is already at the
+    -- proven static-ray target.  Safety is therefore established from exact
+    -- ID/section plus the current online transform and local nav/static
+    -- support, not from server_gvid equality.  Re-read the actual shell
+    -- position after fix() before publishing held success.
+    local post_ok, post_snapshot = pcall(artifact_snapshot, {
+        artifact_id = record.artifact_id,
+        center = record.linked_center,
+        radius = record.linked_radius,
+    })
+    local post_safe, post_dxz, post_dy, post_vertex_dy, post_anchor_dxz, post_delta_y =
+        false, 9999, 9999, 9999, 9999, 9999
+    if post_ok then
+        post_safe, post_dxz, post_dy, post_vertex_dy, post_anchor_dxz, post_delta_y =
+            held_target_snapshot_safe(record, action, post_snapshot)
+    end
+    if not post_safe then
+        held.active = #held.element_indices > 0
+        provenance_log("action_stabilization_held_unresolved", record,
+            post_ok and post_snapshot or snapshot, record.primary_reason,
+            "dispatch=" .. tostring(action.dispatch_index)
+            .. ",post_fix_online=" .. fmt_position(post_ok and post_snapshot.online_pos)
+            .. ",target=" .. fmt_position(action.target and action.target.pos)
+            .. ",target_dxz=" .. fmt_number(post_dxz)
+            .. ",target_dy=" .. fmt_number(post_dy)
+            .. ",target_delta_y=" .. fmt_number(post_delta_y)
+            .. ",vertex_dy=" .. fmt_number(post_vertex_dy)
+            .. ",server_gvid=" .. tostring(post_ok and post_snapshot.server_gvid)
+            .. ",target_gvid=" .. tostring(action.target and action.target.gvid))
+        if held.active then
+            release_held_stabilization(record, post_ok and post_snapshot or snapshot,
+                "held_post_fix_position_unresolved")
+        end
+        held.active = false
+        held.status = "held_unresolved"
+        held.errors[#held.errors + 1] = "post_fix_online_position_not_safe"
+        return false
+    end
+    held.post_fix_pos = pos_table(post_snapshot.online_pos)
+    held.post_fix_target_delta_y = post_delta_y
+    held.post_fix_vertex_delta_y = post_snapshot.vertex_delta_y
     held.active = true
     held.status = "held"
     held.held_at = time_global()
@@ -2321,7 +2363,10 @@ attempt_held_stabilization = function(record, action, snapshot, phase)
         .. ",linear_before=" .. fmt_position(held.linear_before)
         .. ",angular_before=" .. fmt_position(held.angular_before)
         .. ",linear_after=" .. fmt_position(held.linear_after)
-        .. ",angular_after=" .. fmt_position(held.angular_after))
+        .. ",angular_after=" .. fmt_position(held.angular_after)
+        .. ",post_fix=" .. fmt_position(held.post_fix_pos)
+        .. ",post_fix_target_delta_y=" .. fmt_number(held.post_fix_target_delta_y)
+        .. ",post_fix_vertex_delta_y=" .. fmt_number(held.post_fix_vertex_delta_y))
     return true
 end
 
@@ -2376,13 +2421,15 @@ local function update_debug_same_id_rescue(record, snapshot, now)
                 + math.max(0, C.get_number("global", "artifact_rescue_rolling_edge_margin", 5))
             anchor_dxz = pos and distance_xz(pos, record.linked_center) or 9999
         end
+        local production_held_verify = action.rescue_policy == "held_first"
+            and action.stabilization_requested and not origin_action
         local good = snapshot.server_exists and snapshot.server_section == action.section
-            and snapshot.server_gvid == action.target.gvid and pos and target
+            and (production_held_verify or snapshot.server_gvid == action.target.gvid) and pos and target
             and target_dxz <= target_limit and target_dy <= vertical_limit
             and (not action.stabilization_requested or origin_action or anchor_dxz <= tether_limit)
         local strict_held_safe, strict_dxz, strict_dy, strict_vertex_dy, _, strict_delta_y =
             held_target_snapshot_safe(record, action, snapshot)
-        if action.rescue_policy == "held_first" and action.stabilization_requested then
+        if production_held_verify then
             good = good and strict_held_safe
         end
         provenance_log("position_verification_sample", record, snapshot, record.primary_reason,
@@ -2414,7 +2461,7 @@ local function update_debug_same_id_rescue(record, snapshot, now)
                     or "held_attempt_status_missing"
                 action.held_pending = false
                 if not held_ok then
-                    action.status = "stabilization_failed"
+                    action.status = held_error == "held_unresolved" and "unresolved" or "stabilization_failed"
                     disable_provenance(record, "post_teleport_held_stabilization",
                         held_error)
                     return
@@ -2475,7 +2522,7 @@ local function update_debug_same_id_rescue(record, snapshot, now)
                     end
                     action.held_pending = false
                     if not held_ok then
-                        action.status = "stabilization_failed"
+                        action.status = held_error == "held_unresolved" and "unresolved" or "stabilization_failed"
                         disable_provenance(record, "post_teleport_held_stabilization",
                             held_error)
                         return
@@ -2488,7 +2535,14 @@ local function update_debug_same_id_rescue(record, snapshot, now)
                 local moved, move_error = dispatch_held_target_reposition(
                     record, action, snapshot, now, "initial_verification", action)
                 if moved then return end
-                action.status = "verification_failed"
+                action.status = "unresolved"
+                provenance_log("action_unresolved", record, snapshot, record.primary_reason,
+                    "dispatch=" .. tostring(action.dispatch_index)
+                    .. ",reason=" .. tostring(move_error)
+                    .. ",online=" .. fmt_position(snapshot.online_pos)
+                    .. ",target=" .. fmt_position(action.target and action.target.pos)
+                    .. ",server_gvid=" .. tostring(snapshot.server_gvid)
+                    .. ",target_gvid=" .. tostring(action.target and action.target.gvid))
                 disable_provenance(record, "held_safe_target_verification", move_error)
                 return
             end
