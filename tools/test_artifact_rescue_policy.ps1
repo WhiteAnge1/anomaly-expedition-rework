@@ -487,7 +487,7 @@ foreach ($interrupt in @('pre_save','before_level_changing')) {
 }
 
 foreach ($needle in @(
-    'schema = 5', 'artifact_provenance = {}', 'local ARTIFACT_PROVENANCE_SCHEMA = 5',
+    'schema = 6', 'artifact_provenance = {}', 'local ARTIFACT_PROVENANCE_SCHEMA = 6',
     'local ARTIFACT_RESCUE_DEBUG_IDS = { [1407] = true, [6362] = true }',
     'spawn_input_pos', 'first_server', 'last_good_server', 'last_good_online',
     'linked_anchor_id', 'linked_radius', 'ownership', 'lineage_ids', 'cooldown_remaining_ms',
@@ -540,7 +540,7 @@ foreach ($needle in @(
     'production_same_id_teleport',
     'local function guarded_rvm_artifact_spawn(base_spawn, anom_zone, field_pos, level_tier)',
     'inner_env ~= raid_anomalys', 'stock_inner_environment_unverified; spawn deferred',
-    'rejection = "invalid_second_vertex"', 'artifact_static_target(pos_table(spawn_pos))',
+    'rejection = "invalid_second_vertex"', 'artifact_static_target(pos_table(spawn_pos), proactive_clearance)',
     'candidate_outside_captured_field', 'created_guarded', 'retry_exhausted',
     'type(engine_level.name) ~= "function"', 'return engine_level[key]',
     'rawset(raid_anomalys, "level", saved_level)',

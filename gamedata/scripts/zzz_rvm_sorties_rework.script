@@ -24,12 +24,13 @@ local census_error_reported = false
 local next_artifact_diagnostic = 0
 local reported_artifact_overlaps = {}
 local safe_alive = nil
-local ARTIFACT_PROVENANCE_SCHEMA = 5
+local ARTIFACT_PROVENANCE_SCHEMA = 6
 local INVALID_VERTEX_ID = 4294967295
 local ARTIFACT_RESCUE_DEBUG_IDS = { [1407] = true, [6362] = true }
 local release_held_stabilization = nil
 local release_all_held_stabilizations = nil
 local attempt_held_stabilization = nil
+local PROACTIVE = {}
 local saved_origin_evidence_valid = nil
 local ORIGIN = {}
 
@@ -96,7 +97,7 @@ local ENEMY_SQUAD_PRESETS = {
 
 local function fresh_state()
     return {
-        schema = 5,
+        schema = 6,
         level_name = nil,
         sortie_type = nil,
         pending_transition = false,
@@ -738,6 +739,7 @@ local function artifact_rescue_debug_action_enabled(record, persisted_reason)
 end
 
 local function artifact_rescue_action_policy(record, persisted_reason)
+    if record and (record.lifecycle == "proactive" or record.legacy_observe_only == true) then return nil end
     local reason = tostring(persisted_reason or record.primary_reason or record.reason)
     if not artifact_rescue_observe_enabled()
     or not C.get_bool("global", "artifact_rescue_actions", false)
@@ -781,7 +783,7 @@ local function server_provenance_snapshot(obj)
     }
 end
 
-local function artifact_static_target(pos)
+local function artifact_static_target(pos, clearance)
     if not pos then return nil, "missing_position" end
     local ok, result, reason = pcall(function()
         local source = pos_vector(pos)
@@ -799,12 +801,16 @@ local function artifact_static_target(pos)
         ray:set_flags(2)
         ray:set_range(4)
         if not ray:query() then return nil, "static_support_missing" end
-        local supported = vector():set(start.x, start.y - ray:get_distance() + 0.1, start.z)
+        local surface_y = start.y - ray:get_distance()
+        local applied_clearance = tonumber(clearance) or 0.1
+        local supported = vector():set(start.x, surface_y + applied_clearance, start.z)
         return {
             pos = pos_table(supported),
             lvid = lvid,
             gvid = db.actor and db.actor:game_vertex_id() or nil,
             support = "static_ray",
+            surface_y = surface_y,
+            clearance = applied_clearance,
         }, nil
     end)
     if not ok then return nil, "target_error:" .. tostring(result) end
@@ -1065,6 +1071,14 @@ local function terminal_provenance(record, terminal, reason, snapshot)
                 tostring(record.artifact_id), tostring(terminal), tostring(released_error))
         end
     end
+    if record.lifecycle == "proactive" then
+        local released_ok, released_error = pcall(PROACTIVE.release,
+            record, nil, "terminal_" .. tostring(terminal) .. ":" .. tostring(reason))
+        if not released_ok then
+            printf(PREFIX .. " ERROR proactive hold terminal release failed id=%s terminal=%s error=%s",
+                tostring(record.artifact_id), tostring(terminal), tostring(released_error))
+        end
+    end
     record.state = terminal
     record.reason = reason
     record.timestamps = record.timestamps or {}
@@ -1105,6 +1119,32 @@ local function capture_artifact_provenance(artifact_id, anom_zone, pos, level_ti
     local server_ok, server = pcall(alife_object, artifact_id)
     server = server_ok and server or nil
     local first = server_provenance_snapshot(server)
+    local guarded_target = spawn_guard and spawn_guard.target or nil
+    local proactive = nil
+    if C.get_bool("global", "artifact_proactive_hold", true)
+    and spawn_guard and spawn_guard.status == "created_guarded"
+    and guarded_target and guarded_target.pos
+    and valid_vertex_id(guarded_target.lvid) and valid_vertex_id(guarded_target.gvid)
+    and guarded_target.support == "static_ray" then
+        proactive = {
+            schema = 1,
+            state = "target_ready",
+            hold_required = true,
+            target = {
+                pos = pos_table(guarded_target.pos),
+                lvid = guarded_target.lvid,
+                gvid = guarded_target.gvid,
+                source = "guarded_spawn_target",
+                support = guarded_target.support,
+                surface_y = guarded_target.surface_y,
+                clearance = guarded_target.clearance,
+            },
+            fixed_indices = {},
+            foreign_fixed_indices = {},
+            attempts = 0,
+            rehydrate_count = 0,
+        }
+    end
     local record = {
         provenance_schema = ARTIFACT_PROVENANCE_SCHEMA,
         artifact_id = artifact_id,
@@ -1140,6 +1180,8 @@ local function capture_artifact_provenance(artifact_id, anom_zone, pos, level_ti
         actions = {},
         disabled = false,
         error_once = {},
+        lifecycle = proactive and "proactive" or "legacy",
+        proactive = proactive,
         origin = { checked = false, confirmed = false },
         underground = { samples = 0, duration_ms = 0, last_sample_at = nil, confirmed = false },
         rolling = { samples = 0, duration_ms = 0, last_sample_at = nil, max_excess = 0, confirmed = false },
@@ -1148,16 +1190,35 @@ local function capture_artifact_provenance(artifact_id, anom_zone, pos, level_ti
         disable_provenance(record, "capture_missing_field_provenance", "zone_size_or_spawn_input_missing")
     end
     state.artifact_provenance[key] = record
-    if artifact_rescue_observe_enabled() then compute_observe_target(record) end
+    if proactive then
+        record.target = proactive.target
+        release_log("artifact proactive target id=%s section=%s source=%s target=(%s) surface_y=%s clearance=%s lvid=%s gvid=%s",
+            tostring(artifact_id), tostring(record.section), tostring(proactive.target.source),
+            fmt_position(proactive.target.pos), fmt_number(proactive.target.surface_y),
+            fmt_number(proactive.target.clearance), tostring(proactive.target.lvid), tostring(proactive.target.gvid))
+    elseif artifact_rescue_observe_enabled() then
+        compute_observe_target(record)
+    end
     provenance_log("captured", record, nil, record.reason,
         "field=" .. fmt_position(record.spawn_input_pos) .. ",zone_size=" .. tostring(record.zone_size)
         .. ",spawn_guard=" .. tostring(spawn_guard and spawn_guard.status or "legacy_base")
         .. ",spawn_attempts=" .. tostring(spawn_guard and spawn_guard.attempts or 0))
     if first and not record.disabled then
-        record.state = "observing_server"
-        record.reason = "first_server_captured"
+        record.state = proactive and "target_ready" or "observing_server"
+        record.reason = proactive and "proactive_target_ready" or "first_server_captured"
         record.timestamps.first_server_at = time_global()
         provenance_log("observing_server", record, nil, record.reason)
+    end
+    if proactive then
+        local hold_ok, hold_error = pcall(PROACTIVE.hold_attempt, record, "capture", nil, nil)
+        if not hold_ok then
+            proactive.state = "unresolved"
+            proactive.reason = "capture_exception:" .. tostring(hold_error)
+            record.state = "unresolved"
+            record.reason = proactive.reason
+            printf(PREFIX .. " ERROR artifact proactive hold exception id=%s source=capture error=%s; online teleport forbidden",
+                tostring(artifact_id), tostring(hold_error))
+        end
     end
     return record
 end
@@ -1791,6 +1852,335 @@ local function read_physics_velocity(shell, angular)
     end)
     return ok and pos_table(value) or nil, ok and nil or tostring(err)
 end
+
+-- PROACTIVE_HOLD_BEGIN
+function PROACTIVE.indices_text(indices)
+    local values = {}
+    for _, index in ipairs(indices or {}) do values[#values + 1] = tostring(index) end
+    return #values > 0 and table.concat(values, ",") or "none"
+end
+
+function PROACTIVE.position_safe(record, online)
+    local lifecycle = record and record.proactive
+    local target = lifecycle and lifecycle.target
+    local current = safe_object_position(online)
+    if not (target and target.pos and current) then
+        return false, "position_or_target_missing", current, nil, nil, nil, nil, nil
+    end
+    local tolerance = math.max(0.1, math.min(1,
+        C.get_number("global", "artifact_proactive_position_tolerance", 0.35)))
+    local dxz = distance_xz(current, target.pos)
+    local dy = current.y - target.pos.y
+    local fresh_surface, surface_error = artifact_static_target(current, 0)
+    if not fresh_surface then
+        return false, "fresh_static_support_" .. tostring(surface_error), current, dxz, dy, nil, nil, nil
+    end
+    local surface_y = fresh_surface.surface_y
+    local expected_surface = tonumber(target.surface_y)
+        or (target.pos.y - (tonumber(target.clearance) or 0.1))
+    local clearance = current.y - surface_y
+    local nav_ok, nav = pcall(level.vertex_position, fresh_surface.lvid)
+    local vertex_delta_y = nav_ok and nav and (current.y - nav.y) or nil
+    local required_clearance = math.max(0.05, (tonumber(target.clearance) or 0.1) - tolerance)
+    local safe = dxz <= tolerance and math.abs(dy) <= tolerance
+        and math.abs(surface_y - expected_surface) <= tolerance
+        and clearance >= required_clearance
+    local reason = safe and "safe" or ("envelope_mismatch:dxz=" .. fmt_number(dxz)
+        .. ",dy=" .. fmt_number(dy) .. ",surface_delta=" .. fmt_number(surface_y - expected_surface)
+        .. ",clearance=" .. fmt_number(clearance) .. ",required=" .. fmt_number(required_clearance))
+    return safe, reason, current, dxz, dy, clearance, fresh_surface.lvid, vertex_delta_y
+end
+
+function PROACTIVE.shell_still_fixed(record, online)
+    local lifecycle = record and record.proactive
+    if not (lifecycle and lifecycle.state == "held_accessible") then return false end
+    local shell_ok, shell = pcall(function() return online:get_physics_shell() end)
+    if not (shell_ok and shell) then return false end
+    for _, index in ipairs(lifecycle.fixed_indices or {}) do
+        local element_ok, element = pcall(function() return shell:get_element_by_order(index) end)
+        local state_ok, fixed = false, false
+        if element_ok then state_ok, fixed = pcall(function() return element:is_fixed() end) end
+        if not (element_ok and state_ok and fixed) then return false end
+    end
+    for _, index in ipairs(lifecycle.foreign_fixed_indices or {}) do
+        local element_ok, element = pcall(function() return shell:get_element_by_order(index) end)
+        local state_ok, fixed = false, false
+        if element_ok then state_ok, fixed = pcall(function() return element:is_fixed() end) end
+        if not (element_ok and state_ok and fixed) then return false end
+    end
+    return #(lifecycle.fixed_indices or {}) > 0 or #(lifecycle.foreign_fixed_indices or {}) > 0
+end
+
+function PROACTIVE.zero_velocity(shell)
+    local zero = vector():set(0, 0, 0)
+    local applied = {}
+    for _, name in ipairs({ "set_linear_vel", "set_angular_vel" }) do
+        local method_ok, method = pcall(function() return shell[name] end)
+        if method_ok and type(method) == "function" then
+            local call_ok = pcall(method, shell, zero)
+            if call_ok then applied[#applied + 1] = name end
+        end
+    end
+    return applied
+end
+
+function PROACTIVE.release(record, online, reason)
+    local lifecycle = record and record.proactive
+    if not lifecycle or lifecycle.hold_required == false then return true end
+    local owned = lifecycle.fixed_indices or {}
+    local released, failures = {}, {}
+    if #owned > 0 then
+        if not online then
+            local online_ok, value = pcall(function() return level and level.object_by_id(record.artifact_id) end)
+            online = online_ok and value or nil
+        end
+        if online and object_section(online) == record.section then
+            local shell_ok, shell = pcall(function() return online:get_physics_shell() end)
+            if shell_ok and shell then
+                for _, index in ipairs(owned) do
+                    local element_ok, element = pcall(function() return shell:get_element_by_order(index) end)
+                    if element_ok and element then
+                        local state_ok, fixed = pcall(function() return element:is_fixed() end)
+                        if state_ok and fixed then
+                            local release_ok, release_error = pcall(function() element:release_fixed() end)
+                            local verify_ok, still_fixed = pcall(function() return element:is_fixed() end)
+                            if release_ok and (not verify_ok or not still_fixed) then
+                                released[#released + 1] = index
+                            else
+                                failures[#failures + 1] = tostring(index) .. ":" .. tostring(release_error or "still_fixed")
+                            end
+                        else
+                            released[#released + 1] = index
+                        end
+                    else
+                        failures[#failures + 1] = tostring(index) .. ":element_unavailable"
+                    end
+                end
+            elseif not (reason and (string.find(reason, "ownership") or string.find(reason, "pickup")
+                or string.find(reason, "closed") or string.find(reason, "cleanup")
+                or string.find(reason, "terminal_released"))) then
+                failures[#failures + 1] = "shell_unavailable"
+            end
+        elseif not (reason and (string.find(reason, "ownership") or string.find(reason, "pickup")
+            or string.find(reason, "closed") or string.find(reason, "cleanup")
+            or string.find(reason, "terminal_released"))) then
+            failures[#failures + 1] = "online_unavailable"
+        end
+    end
+    release_log("artifact proactive release id=%s reason=%s owned_indices=%s released=%s foreign_preserved=%s failures=%s",
+        tostring(record.artifact_id), tostring(reason), PROACTIVE.indices_text(owned),
+        PROACTIVE.indices_text(released), PROACTIVE.indices_text(lifecycle.foreign_fixed_indices),
+        #failures > 0 and table.concat(failures, "|") or "none")
+    if #failures > 0 then
+        lifecycle.state = "unresolved"
+        lifecycle.reason = "release_failed:" .. table.concat(failures, "|")
+        record.state = "unresolved"
+        record.reason = lifecycle.reason
+        return false
+    end
+    lifecycle.fixed_indices = {}
+    lifecycle.foreign_fixed_indices = {}
+    lifecycle.hold_required = false
+    lifecycle.state = "released"
+    lifecycle.reason = reason
+    lifecycle.released_at = time_global()
+    return true
+end
+
+function PROACTIVE.hold_attempt(record, source, supplied_online, binder_token)
+    local lifecycle = record and record.proactive
+    if not (record and record.lifecycle == "proactive" and lifecycle and lifecycle.hold_required ~= false) then
+        return false, "not_proactive"
+    end
+    lifecycle.attempts = (lifecycle.attempts or 0) + 1
+    local attempt_log_key = tostring(source) .. ":" .. tostring(lifecycle.state)
+    if lifecycle.last_attempt_log_key ~= attempt_log_key then
+        lifecycle.last_attempt_log_key = attempt_log_key
+        release_log("artifact proactive hold attempt id=%s source=%s state=%s attempt=%s target=(%s)",
+            tostring(record.artifact_id), tostring(source), tostring(lifecycle.state),
+            tostring(lifecycle.attempts), fmt_position(lifecycle.target and lifecycle.target.pos))
+    end
+    local online = supplied_online
+    if not online then
+        local online_ok, value = pcall(function() return level and level.object_by_id(record.artifact_id) end)
+        online = online_ok and value or nil
+    end
+    if not online then
+        lifecycle.state = "awaiting_online"
+        lifecycle.reason = "exact_online_unavailable"
+        record.state = "awaiting_online"
+        record.reason = lifecycle.reason
+        return false, lifecycle.reason
+    end
+    if safe_object_id_any(online) ~= record.artifact_id or object_section(online) ~= record.section then
+        lifecycle.state = "unresolved"
+        lifecycle.reason = "exact_online_identity_mismatch"
+        record.state = "unresolved"
+        record.reason = lifecycle.reason
+        printf(PREFIX .. " ERROR artifact proactive unresolved id=%s source=%s reason=%s; online teleport forbidden",
+            tostring(record.artifact_id), tostring(source), lifecycle.reason)
+        return false, lifecycle.reason
+    end
+    local parent_ok, parent = pcall(function() return online:parent() end)
+    local parent_id = parent_ok and safe_object_id_any(parent) or nil
+    if parent_id ~= nil and parent_id ~= 65535 then
+        PROACTIVE.release(record, online, "ownership_before_hold")
+        record.state = "owned"
+        record.reason = "ownership_before_hold"
+        return true, "owned"
+    end
+    local position_ok, position_reason, current, dxz, dy, clearance = PROACTIVE.position_safe(record, online)
+    if not position_ok then
+        lifecycle.state = "unresolved"
+        lifecycle.reason = position_reason
+        record.state = "unresolved"
+        record.reason = lifecycle.reason
+        if lifecycle.last_unresolved ~= position_reason then
+            lifecycle.last_unresolved = position_reason
+            printf(PREFIX .. " ERROR artifact proactive unresolved id=%s source=%s reason=%s current=(%s) target=(%s); online teleport forbidden",
+                tostring(record.artifact_id), tostring(source), tostring(position_reason), fmt_position(current),
+                fmt_position(lifecycle.target and lifecycle.target.pos))
+        end
+        return false, position_reason
+    end
+    if PROACTIVE.shell_still_fixed(record, online) then
+        lifecycle.runtime_binder_token = binder_token or lifecycle.runtime_binder_token
+        return true, "already_held"
+    end
+    local shell_ok, shell = pcall(function() return online:get_physics_shell() end)
+    if not (shell_ok and shell) then
+        lifecycle.state = "awaiting_online"
+        lifecycle.reason = "physics_shell_unavailable"
+        record.state = "awaiting_online"
+        record.reason = lifecycle.reason
+        return false, lifecycle.reason
+    end
+    local before_linear = read_physics_velocity(shell, false)
+    local before_angular = read_physics_velocity(shell, true)
+    local count_ok, element_count = pcall(function() return shell:get_elements_number() end)
+    element_count = count_ok and math.floor(tonumber(element_count) or 0) or 0
+    if element_count < 1 then
+        lifecycle.state = "unresolved"
+        lifecycle.reason = "physics_elements_missing"
+        record.state = "unresolved"
+        record.reason = lifecycle.reason
+        return false, lifecycle.reason
+    end
+    lifecycle.fixed_indices = {}
+    lifecycle.foreign_fixed_indices = {}
+    local owned_elements = {}
+    for index = 0, element_count - 1 do
+        local element_ok, element = pcall(function() return shell:get_element_by_order(index) end)
+        if not (element_ok and element) then
+            lifecycle.state = "unresolved"
+            lifecycle.reason = "element_" .. tostring(index) .. "_unavailable"
+            record.state = "unresolved"
+            record.reason = lifecycle.reason
+            return false, lifecycle.reason
+        end
+        local fixed_ok, fixed = pcall(function() return element:is_fixed() end)
+        if not fixed_ok then
+            lifecycle.state = "unresolved"
+            lifecycle.reason = "element_" .. tostring(index) .. "_state_unavailable"
+            record.state = "unresolved"
+            record.reason = lifecycle.reason
+            return false, lifecycle.reason
+        elseif fixed then
+            lifecycle.foreign_fixed_indices[#lifecycle.foreign_fixed_indices + 1] = index
+        else
+            owned_elements[#owned_elements + 1] = { index = index, element = element }
+        end
+    end
+    local zero_methods = PROACTIVE.zero_velocity(shell)
+    local failures = {}
+    for _, candidate in ipairs(owned_elements) do
+        local fix_ok, fix_error = pcall(function() candidate.element:fix() end)
+        local verify_ok, fixed = pcall(function() return candidate.element:is_fixed() end)
+        if fix_ok and verify_ok and fixed then
+            lifecycle.fixed_indices[#lifecycle.fixed_indices + 1] = candidate.index
+        else
+            failures[#failures + 1] = tostring(candidate.index) .. ":" .. tostring(fix_error or "not_fixed")
+        end
+    end
+    if #failures > 0 then
+        for _, candidate in ipairs(owned_elements) do
+            pcall(function() candidate.element:release_fixed() end)
+        end
+        lifecycle.fixed_indices = {}
+        lifecycle.state = "unresolved"
+        lifecycle.reason = "fix_failed:" .. table.concat(failures, "|")
+        record.state = "unresolved"
+        record.reason = lifecycle.reason
+        return false, lifecycle.reason
+    end
+    local post_ok, post_reason, post, post_dxz, post_dy, post_clearance, post_lvid, post_vertex_dy =
+        PROACTIVE.position_safe(record, online)
+    if not post_ok then
+        for _, candidate in ipairs(owned_elements) do
+            pcall(function() candidate.element:release_fixed() end)
+        end
+        lifecycle.fixed_indices = {}
+        lifecycle.state = "unresolved"
+        lifecycle.reason = "post_fix_" .. tostring(post_reason)
+        record.state = "unresolved"
+        record.reason = lifecycle.reason
+        printf(PREFIX .. " ERROR artifact proactive unresolved id=%s source=%s reason=%s post=(%s) target=(%s); own fix rolled back",
+            tostring(record.artifact_id), tostring(source), tostring(lifecycle.reason),
+            fmt_position(post), fmt_position(lifecycle.target and lifecycle.target.pos))
+        return false, lifecycle.reason
+    end
+    lifecycle.state = "held_accessible"
+    lifecycle.reason = "held"
+    lifecycle.runtime_binder_token = binder_token or lifecycle.runtime_binder_token
+    lifecycle.held_at = time_global()
+    lifecycle.last_unresolved = nil
+    record.state = "held_accessible"
+    record.reason = "proactive_hold"
+    local after_linear = read_physics_velocity(shell, false)
+    local after_angular = read_physics_velocity(shell, true)
+    release_log("artifact proactive held id=%s source=%s elements=%s own_fixed=%s foreign_fixed=%s zero_methods=%s before_linear=(%s) before_angular=(%s) after_linear=(%s) after_angular=(%s) post=(%s) target=(%s) dxz=%s dy=%s clearance=%s vertex=%s vertex_dy=%s",
+        tostring(record.artifact_id), tostring(source), tostring(element_count),
+        PROACTIVE.indices_text(lifecycle.fixed_indices), PROACTIVE.indices_text(lifecycle.foreign_fixed_indices),
+        #zero_methods > 0 and table.concat(zero_methods, ",") or "fix_authoritative",
+        fmt_position(before_linear), fmt_position(before_angular), fmt_position(after_linear), fmt_position(after_angular),
+        fmt_position(post), fmt_position(lifecycle.target and lifecycle.target.pos), fmt_number(post_dxz),
+        fmt_number(post_dy), fmt_number(post_clearance), tostring(post_lvid), fmt_number(post_vertex_dy))
+    return true, "held_accessible"
+end
+
+function PROACTIVE.maintain(record, snapshot, now)
+    local lifecycle = record and record.proactive
+    if not (record and record.lifecycle == "proactive" and lifecycle) then return false end
+    if lifecycle.hold_required == false or record.state == "closed" or record.state == "released"
+    or record.state == "owned" then return true end
+    local parent_id = snapshot and (snapshot.online_parent_id or snapshot.parent_id) or nil
+    if parent_id ~= nil and parent_id ~= 65535 then
+        local online_ok, online = pcall(function() return level.object_by_id(record.artifact_id) end)
+        PROACTIVE.release(record, online_ok and online or nil, "ownership_transition")
+        record.state = "owned"
+        record.reason = snapshot and snapshot.ownership_source or "parent_changed"
+        return true
+    end
+    if not (snapshot and snapshot.online_exists) then
+        if lifecycle.state == "held_accessible" then
+            lifecycle.state = "awaiting_online"
+            lifecycle.reason = "online_shell_disappeared"
+            record.state = "awaiting_online"
+            record.reason = lifecycle.reason
+            lifecycle.fixed_indices = {}
+            lifecycle.foreign_fixed_indices = {}
+            lifecycle.rehydrate_count = (lifecycle.rehydrate_count or 0) + 1
+            release_log("artifact proactive rehydrate pending id=%s reason=online_shell_disappeared count=%s",
+                tostring(record.artifact_id), tostring(lifecycle.rehydrate_count))
+        end
+        return true
+    end
+    local online_ok, online = pcall(function() return level.object_by_id(record.artifact_id) end)
+    if not (online_ok and online) then return true end
+    local hold_ok, hold_reason = PROACTIVE.hold_attempt(record, "periodic_rehydrate", online, nil)
+    return hold_ok, hold_reason
+end
+-- PROACTIVE_HOLD_END
 
 local function attempt_same_frame_stabilization(record, action, snapshot)
     action.stabilization = {
@@ -4350,8 +4740,37 @@ local function refresh_zone_squad_members(zone)
 end
 
 local function update_artifact_zones(now)
-    if artifact_rescue_observe_enabled() then
-        for _, record in pairs(state.artifact_provenance or {}) do
+    for _, record in pairs(state.artifact_provenance or {}) do
+        if record.lifecycle == "proactive" and record.level == state.level_name
+        and record.state ~= "closed" and record.state ~= "released" and record.state ~= "owned" then
+            local zone = record.linked_anchor_id and state.zones[tostring(record.linked_anchor_id)] or nil
+            zone = zone or {
+                kind = "artifact",
+                artifact_id = record.artifact_id,
+                center = record.linked_center or record.spawn_input_pos,
+                radius = record.linked_radius or record.zone_size,
+                closed = false,
+            }
+            local snapshot_ok, snapshot = pcall(artifact_snapshot, zone)
+            if snapshot_ok then
+                local maintain_ok, maintain_error = pcall(PROACTIVE.maintain, record, snapshot, now)
+                if not maintain_ok then
+                    record.proactive.state = "unresolved"
+                    record.proactive.reason = "maintain_exception:" .. tostring(maintain_error)
+                    record.state = "unresolved"
+                    record.reason = record.proactive.reason
+                    printf(PREFIX .. " ERROR artifact proactive maintain exception id=%s error=%s; online teleport forbidden",
+                        tostring(record.artifact_id), tostring(maintain_error))
+                end
+            else
+                record.proactive.state = "unresolved"
+                record.proactive.reason = "snapshot_exception:" .. tostring(snapshot)
+                record.state = "unresolved"
+                record.reason = record.proactive.reason
+                printf(PREFIX .. " ERROR artifact proactive snapshot exception id=%s error=%s; online teleport forbidden",
+                    tostring(record.artifact_id), tostring(snapshot))
+            end
+        elseif artifact_rescue_observe_enabled() and record.lifecycle ~= "proactive" then
             local held_action = active_held_action(record)
             if record.level == state.level_name
             and (held_action or (record.state ~= "closed" and record.state ~= "released")) then
@@ -4534,6 +4953,8 @@ local function guarded_rvm_artifact_spawn(base_spawn, anom_zone, field_pos, leve
         + C.get_number("global", "artifact_rescue_origin_field_margin", 2)
     local maximum_attempts = math.min(20, math.max(1, math.floor(
         C.get_number("global", "artifact_spawn_guard_attempts", 8))))
+    local proactive_clearance = math.max(0.5, math.min(1,
+        C.get_number("global", "artifact_proactive_clearance", 0.75)))
     local saved_level = rawget(raid_anomalys, "level")
     local saved_create = rawget(raid_anomalys, "alife_create_item")
 
@@ -4571,7 +4992,7 @@ local function guarded_rvm_artifact_spawn(base_spawn, anom_zone, field_pos, leve
                 rejection = rejection or "invalid_create_input"
                 return {}
             end
-            local target, target_error = artifact_static_target(pos_table(spawn_pos))
+            local target, target_error = artifact_static_target(pos_table(spawn_pos), proactive_clearance)
             if not target then
                 rejection = "unsupported_candidate:" .. tostring(target_error)
                 return {}
@@ -4607,9 +5028,11 @@ local function guarded_rvm_artifact_spawn(base_spawn, anom_zone, field_pos, leve
                 printf(PREFIX .. " ERROR artifact spawn guard return mismatch created=%s returned=%s zone=%s; created ID preserved, no retry",
                     tostring(created_id), tostring(artifact_id_or_error), tostring(anom_zone))
             end
-            log("artifact spawn prevention accepted id=%s zone=%s attempt=%s/%s field=(%s) target=(%s) source=field_candidate support=static_ray",
+            log("artifact spawn prevention accepted id=%s zone=%s attempt=%s/%s field=(%s) target=(%s) source=field_candidate support=static_ray surface_y=%s clearance=%s",
                 tostring(created_id), tostring(anom_zone), tostring(attempt), tostring(maximum_attempts),
-                fmt_position(field_pos), fmt_position(accepted_target and accepted_target.pos))
+                fmt_position(field_pos), fmt_position(accepted_target and accepted_target.pos),
+                fmt_number(accepted_target and accepted_target.surface_y),
+                fmt_number(accepted_target and accepted_target.clearance))
             return created_id, result
         end
 
@@ -4634,9 +5057,46 @@ local function guarded_rvm_artifact_spawn(base_spawn, anom_zone, field_pos, leve
     return nil, result
 end
 
+function PROACTIVE.artifact_online(obj, binder, source)
+    if not obj then return false end
+    local artifact_id = safe_object_id_any(obj)
+    local record = artifact_id and state.artifact_provenance
+        and state.artifact_provenance[tostring(artifact_id)] or nil
+    if not (record and record.lifecycle == "proactive") then return false end
+    local token = binder and tostring(binder) or nil
+    release_log("artifact proactive online id=%s source=%s state=%s binder=%s",
+        tostring(artifact_id), tostring(source), tostring(record.proactive and record.proactive.state),
+        tostring(token or "none"))
+    local ok, result, reason = pcall(PROACTIVE.hold_attempt, record, source, obj, token)
+    if not ok then
+        record.proactive.state = "unresolved"
+        record.proactive.reason = "online_callback_exception:" .. tostring(result)
+        record.state = "unresolved"
+        record.reason = record.proactive.reason
+        printf(PREFIX .. " ERROR artifact proactive online exception id=%s source=%s error=%s; online teleport forbidden",
+            tostring(artifact_id), tostring(source), tostring(result))
+        return false
+    end
+    return result, reason
+end
+
 local function install_hooks()
     if hooks_installed then return end
     hooks_installed = true
+
+    if item_artefact and item_artefact.artefact_binder
+    and type(item_artefact.artefact_binder.net_spawn) == "function" then
+        local base_artifact_net_spawn = item_artefact.artefact_binder.net_spawn
+        item_artefact.artefact_binder.net_spawn = function(self, se_abstract)
+            local result = base_artifact_net_spawn(self, se_abstract)
+            if result and self and self.object then
+                PROACTIVE.artifact_online(self.object, self, "binder_net_spawn")
+            end
+            return result
+        end
+    else
+        printf(PREFIX .. " ERROR proactive artifact binder net_spawn unavailable; first-update fallback retained")
+    end
 
     artifact_pool_context = {
         profile = string.lower(C.get_string("artifact_pool", "profile", "weighted")),
@@ -4902,7 +5362,7 @@ local function remember_artifact_lineage(zone, item, owner, source)
 end
 
 local function release_zone_held_on_pickup(zone, item, owner, reason)
-    if not (zone and zone.artifact_id and release_held_stabilization) then return end
+    if not (zone and zone.artifact_id) then return end
     local record = state.artifact_provenance and state.artifact_provenance[tostring(zone.artifact_id)]
     if not record then return end
     local pickup_snapshot = {
@@ -4911,6 +5371,15 @@ local function release_zone_held_on_pickup(zone, item, owner, reason)
         online_pos = safe_object_position(item),
         online_parent_id = safe_object_id_any(owner),
     }
+    if record.lifecycle == "proactive" then
+        local ok, released = pcall(PROACTIVE.release, record, item, reason or "pickup")
+        if not ok or not released then
+            printf(PREFIX .. " ERROR proactive hold pickup release failed id=%s error=%s",
+                tostring(record.artifact_id), tostring(released))
+        end
+        return
+    end
+    if not release_held_stabilization then return end
     local ok, err = pcall(release_held_stabilization, record, pickup_snapshot, reason)
     if not ok then
         printf(PREFIX .. " ERROR held stabilization pickup release failed id=%s error=%s",
@@ -4973,6 +5442,10 @@ local function physic_object_on_use_callback(box, who)
     end
 end
 
+function PROACTIVE.artefact_on_first_update(obj, binder, config_changed)
+    PROACTIVE.artifact_online(obj, binder, "artefact_on_first_update")
+end
+
 local function actor_on_first_update()
     install_hooks()
     if not ORIGIN.startup_reported then
@@ -4981,6 +5454,19 @@ local function actor_on_first_update()
             tostring(ARTIFACT_PROVENANCE_SCHEMA))
     end
     for _, record in pairs(state.artifact_provenance or {}) do
+        if record.lifecycle == "proactive" and record.proactive
+        and record.proactive.hold_required ~= false then
+            local ok, hold_error = pcall(PROACTIVE.hold_attempt,
+                record, "actor_on_first_update_rehydrate", nil, nil)
+            if not ok then
+                record.proactive.state = "unresolved"
+                record.proactive.reason = "actor_first_update_exception:" .. tostring(hold_error)
+                record.state = "unresolved"
+                record.reason = record.proactive.reason
+                printf(PREFIX .. " ERROR artifact proactive first-update exception id=%s error=%s; online teleport forbidden",
+                    tostring(record.artifact_id), tostring(hold_error))
+            end
+        end
         local transition = record.origin_relocation
         if transition and transition.flags_forced
         and not artifact_rescue_action_policy(record, "origin_mismatch") then
@@ -5071,6 +5557,17 @@ local function save_state(m_data)
                 local _, held = active_held_action(record)
                 if held then held.release_required = true end
             end
+        end
+    end
+    for _, record in pairs(state.artifact_provenance or {}) do
+        if record.lifecycle == "proactive" and record.proactive
+        and record.proactive.hold_required ~= false then
+            record.proactive.runtime_binder_token = nil
+            release_log("artifact proactive save id=%s state=%s hold_required=true own_fixed=%s foreign_fixed=%s target=(%s); hold_preserved=true",
+                tostring(record.artifact_id), tostring(record.proactive.state),
+                PROACTIVE.indices_text(record.proactive.fixed_indices),
+                PROACTIVE.indices_text(record.proactive.foreign_fixed_indices),
+                fmt_position(record.proactive.target and record.proactive.target.pos))
         end
     end
     if artifact_rescue_observe_enabled() and debug_enabled() then
@@ -5337,6 +5834,78 @@ local function migrate_artifact_provenance(previous_schema)
                 .. ",fresh_snapshot_required=" .. tostring(record.awaiting_fresh_snapshot == true))
         end
     end
+    for key, record in pairs(state.artifact_provenance) do
+        if type(record) == "table" then
+            local terminal = record.state == "owned" or record.state == "closed" or record.state == "released"
+            if record.lifecycle == "proactive" and record.proactive and record.proactive.target then
+                record.proactive.runtime_binder_token = nil
+                record.proactive.fixed_indices = {}
+                record.proactive.foreign_fixed_indices = {}
+                if not terminal and record.proactive.hold_required ~= false then
+                    record.proactive.state = "rehydrate_pending"
+                    record.proactive.reason = "load_state"
+                    record.proactive.rehydrate_count = (record.proactive.rehydrate_count or 0) + 1
+                    record.state = "rehydrate_pending"
+                    record.disabled = false
+                    release_log("artifact proactive load id=%s migration=existing target=(%s) clearance=%s rehydrate=%s",
+                        tostring(record.artifact_id), fmt_position(record.proactive.target.pos),
+                        fmt_number(record.proactive.target.clearance), tostring(record.proactive.rehydrate_count))
+                end
+            elseif previous_schema < 6 and not terminal then
+                local guard_target = record.spawn_guard and record.spawn_guard.target or nil
+                local server_ok, server = pcall(alife_object, record.artifact_id)
+                server = server_ok and server or nil
+                local exact_identity = server and safe_object_id_any(server) == record.artifact_id
+                    and object_section(server) == record.section
+                if exact_identity and guard_target and guard_target.pos
+                and valid_vertex_id(guard_target.lvid) and valid_vertex_id(guard_target.gvid)
+                and guard_target.support == "static_ray" then
+                    local old_clearance = tonumber(guard_target.clearance) or 0.1
+                    local proven_surface_y = tonumber(guard_target.surface_y) or (guard_target.pos.y - old_clearance)
+                    local migration_clearance = math.max(0.5, math.min(1,
+                        C.get_number("global", "artifact_proactive_clearance", 0.75)))
+                    record.lifecycle = "proactive"
+                    record.disabled = false
+                    record.legacy_actions = record.actions
+                    record.actions = {}
+                    record.proactive = {
+                        schema = 1,
+                        state = "rehydrate_pending",
+                        reason = "schema_5_proven_target_migration",
+                        hold_required = true,
+                        target = {
+                            pos = { x = guard_target.pos.x, y = proven_surface_y + migration_clearance,
+                                z = guard_target.pos.z },
+                            lvid = guard_target.lvid,
+                            gvid = guard_target.gvid,
+                            source = "legacy_guarded_spawn_target",
+                            support = guard_target.support,
+                            surface_y = proven_surface_y,
+                            clearance = migration_clearance,
+                        },
+                        fixed_indices = {},
+                        foreign_fixed_indices = {},
+                        attempts = 0,
+                        rehydrate_count = 1,
+                    }
+                    record.target = record.proactive.target
+                    record.state = "rehydrate_pending"
+                    record.reason = "schema_5_proven_target_migration"
+                    release_log("artifact proactive load id=%s migration=schema_5_proven_target target=(%s) clearance=%s",
+                        tostring(record.artifact_id), fmt_position(record.proactive.target.pos),
+                        fmt_number(record.proactive.target.clearance))
+                else
+                    record.lifecycle = "legacy"
+                    record.legacy_observe_only = true
+                    record.disabled = false
+                    if record.state == "disabled" then record.state = "observing_server" end
+                    record.reason = "legacy_target_unproven_observe_only"
+                    release_log("artifact proactive load id=%s migration=legacy_observe_only reason=target_or_identity_unproven",
+                        tostring(record.artifact_id))
+                end
+            end
+        end
+    end
 end
 
 local function load_state(m_data)
@@ -5378,7 +5947,7 @@ local function load_state(m_data)
         end
     end
     migrate_artifact_provenance(previous_schema)
-    state.schema = 5
+    state.schema = 6
 end
 
 local function find_debug_ui(...)
@@ -5475,6 +6044,7 @@ function on_game_start()
     RegisterScriptCallback("actor_on_item_take", actor_on_item_take)
     RegisterScriptCallback("npc_on_item_take", npc_on_item_take)
     RegisterScriptCallback("physic_object_on_use_callback", physic_object_on_use_callback)
+    RegisterScriptCallback("artefact_on_first_update", PROACTIVE.artefact_on_first_update)
     RegisterScriptCallback("on_before_level_changing", on_before_level_changing)
     RegisterScriptCallback("save_state", save_state)
     RegisterScriptCallback("load_state", load_state)

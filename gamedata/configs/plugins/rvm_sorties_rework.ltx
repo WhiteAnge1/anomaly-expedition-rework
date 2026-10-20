@@ -119,10 +119,24 @@ rare_artifact_chance = 70
 update_interval_ms = 1000
 
 ; --------------------------------------------------------------------------
-; Спасение рейдовых артефактов. Классификаторы включены по умолчанию, но сами
-; действия требуют отдельного master gate ниже.
+; Все новые артефакты infected-вылазки создаются над доказанной static-ray
+; поверхностью и фиксируются с первого доступного binder lifecycle callback до
+; подбора. Это намеренно отключает их штатное качение/левитацию ради доступности.
+artifact_proactive_hold = true
+; Высота pivot над static-ray surface, допустимый диапазон 0.5-1.0 м. Default
+; 0.75 м намеренно оставляет небольшую видимую левитацию даже на склоне.
+; Не прибавляется к произвольной server position: target обязан заранее пройти
+; vertex, ray и captured-field guards.
+artifact_proactive_clearance = 0.75
+; Допуск только для проверки свежей client shell. Он не разрешает relocation:
+; proactive path никогда не вызывает teleport_object для online объекта.
+artifact_proactive_position_tolerance = 0.35
+
+; Ниже оставлен диагностический legacy rescue для старых alpha-save. Новые
+; schema-6 records его полностью обходят; legacy без доказанного target работает
+; observe-only и не выполняет рискованные действия.
 artifact_rescue_observe_only = false
-; Общий предохранитель активных действий. Безопасный default false.
+; Общий предохранитель только legacy/debug действий.
 artifact_rescue_actions = true
 ; Production policy: held_first. После штатных 15 секунд подтверждённого rolling
 ; первый rescue делает same-ID teleport, три fresh snapshots, reacquire и held.

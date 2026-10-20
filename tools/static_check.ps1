@@ -28,6 +28,7 @@ $required = @(
     'docs\ARTIFACT-COUNT-OPTIONS.md',
     'docs\RELEASE-CHECKLIST.md',
     'docs\ROADMAP-TO-RELEASE.md',
+    'docs\FIELD-TEST-PROACTIVE-HOLD.md',
     'tools\watch_live_log.ps1',
     'tools\watch_live_log.cmd',
     'tools\test_loot_policy.ps1',
@@ -37,6 +38,7 @@ $required = @(
     'tools\test_artifact_held_stabilization_policy.ps1',
     'tools\test_artifact_count_policy.py',
     'tools\test_artifact_pool.py',
+    'tools\test_artifact_proactive_hold.py',
     'tools\test_lua51_compile.py',
     'tools\test_artifact_spawn_level_proxy.py',
     'tools\test_origin_position_normalization.py',
@@ -310,7 +312,7 @@ foreach ($needle in @('Обычному пользователю','debug_mode = 
 }
 
 $releaseRoadmap = Get-Content -LiteralPath (Join-Path $ModRoot 'docs\ROADMAP-TO-RELEASE.md') -Raw -Encoding UTF8
-foreach ($needle in @('T2','radius/5','T3','radius/10','artifact_rescue_actions = false','clean-install','обновление','MO2/FOMOD','SHA-256','GitHub release','Google Drive')) {
+foreach ($needle in @('T2','radius/5','T3','radius/10','proactive artifact hold','clean-install','обновление','MO2/FOMOD','SHA-256','GitHub release','Google Drive')) {
     if (-not $releaseRoadmap.Contains($needle)) { $failures.Add("release roadmap missing: $needle") }
 }
 
@@ -389,6 +391,8 @@ if ($Profile -eq 'full' -or $Profile -eq 'fast') {
                 python (Join-Path $ModRoot 'tools\test_artifact_pool.py') $ModRoot
             }
             if ($LASTEXITCODE -ne 0) { $failures.Add('artifact family x quality pool regression failed') }
+            python (Join-Path $ModRoot 'tools\test_artifact_proactive_hold.py') $ModRoot
+            if ($LASTEXITCODE -ne 0) { $failures.Add('artifact proactive hold lifecycle policy test failed') }
         } finally {
             $env:PYTHONPATH = $savedPythonPath
         }
