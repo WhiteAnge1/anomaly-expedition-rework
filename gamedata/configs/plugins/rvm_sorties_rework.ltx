@@ -212,6 +212,34 @@ debug_force_tier = 0
 ; true очищает состояние при следующем обновлении. Затем верните false вручную.
 debug_cleanup_current_sortie = false
 
+[artifact_pool]
+; Профиль настоящих артефактов в anomaly-fields infected-вылазок.
+; weighted (рекомендуется): семейство зоны остаётся штатным, затем отдельно
+; выбирается качество по весам тира и равновероятная base-section внутри
+; полного семейного каталога АЭР. stock: исходные короткие списки GRA Bolt.
+; Ошибка таблиц, весов или hook автоматически и целиком возвращает stock.
+profile = weighted
+
+; Каждый ряд обязан состоять из целых неотрицательных весов с суммой 100.
+; Порядок категорий: junk / low / medium / high / unique.
+tier_1_weight_junk = 45
+tier_1_weight_low = 45
+tier_1_weight_medium = 10
+tier_1_weight_high = 0
+tier_1_weight_unique = 0
+
+tier_2_weight_junk = 10
+tier_2_weight_low = 32
+tier_2_weight_medium = 43
+tier_2_weight_high = 15
+tier_2_weight_unique = 0
+
+tier_3_weight_junk = 2
+tier_3_weight_low = 8
+tier_3_weight_medium = 43
+tier_3_weight_high = 45
+tier_3_weight_unique = 2
+
 [tier_1]
 ; Связано с: zone_radius_min/max и artifact_offset_fraction_min/max этого тира.
 map_spot = rvm_search_small

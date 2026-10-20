@@ -4638,6 +4638,27 @@ local function install_hooks()
     if hooks_installed then return end
     hooks_installed = true
 
+    artifact_pool_context = {
+        profile = string.lower(C.get_string("artifact_pool", "profile", "weighted")),
+        enabled = false, reason = "module_unavailable", error_reported = false,
+    }
+    if type(rvm_sorties_artifact_pool) == "table" and type(rvm_sorties_artifact_pool.create_context) == "function" then
+        local context_ok, context_or_error = pcall(rvm_sorties_artifact_pool.create_context,
+            raid_artefacts and raid_artefacts.spawn_artefact_in_zone,
+            raid_artefacts and raid_artefacts.raid_artefacts_tiers_by_dop,
+            function(section) return ini_sys and ini_sys:section_exist(section) end, C)
+        if context_ok and type(context_or_error) == "table" then
+            artifact_pool_context = context_or_error
+        else
+            artifact_pool_context.reason = "context_error:" .. tostring(context_or_error)
+        end
+    end
+    if artifact_pool_context.profile ~= "stock" and not artifact_pool_context.enabled then
+        artifact_pool_context.error_reported = true
+        printf(PREFIX .. " ERROR artifact pool disabled reason=%s; full stock selector fallback enabled",
+            tostring(artifact_pool_context.reason))
+    end
+
     if raid_anomalys and type(raid_anomalys.spawner_anomals_zones) == "function" then
         local base_spawner = raid_anomalys.spawner_anomals_zones
         ARTIFACT_COUNT.hook.stock_table, ARTIFACT_COUNT.hook.error = ARTIFACT_COUNT.find_stock_table(base_spawner)
@@ -4697,8 +4718,63 @@ local function install_hooks()
             if plan then plan.callbacks = (plan.callbacks or 0) + 1 end
             local artifact_id, spawn_guard = nil, nil
             if guard_active then
-                artifact_id, spawn_guard = guarded_rvm_artifact_spawn(
-                    base_spawn_artifact, anom_zone, pos, level_tier)
+                local selection, selection_error = nil, artifact_pool_context and artifact_pool_context.reason
+                if artifact_pool_context and artifact_pool_context.enabled then
+                    local choose_ok, choice_or_error, reason = pcall(rvm_sorties_artifact_pool.choose,
+                        artifact_pool_context, anom_zone, level_tier, math.random)
+                    if choose_ok then
+                        selection, selection_error = choice_or_error, reason
+                    else
+                        selection_error = "choose_error:" .. tostring(choice_or_error)
+                    end
+                    if not selection then
+                        artifact_pool_context.enabled = false
+                        artifact_pool_context.reason = tostring(selection_error or "selection_failed")
+                        if not artifact_pool_context.error_reported then
+                            artifact_pool_context.error_reported = true
+                            printf(PREFIX .. " ERROR artifact pool disabled reason=%s; full stock selector fallback enabled",
+                                tostring(artifact_pool_context.reason))
+                        end
+                    end
+                end
+
+                if selection then
+                    local call_ok, first, second, restore_ok, restore_error, fallback_reason =
+                        rvm_sorties_artifact_pool.call_with_override(artifact_pool_context, selection,
+                            guarded_rvm_artifact_spawn, base_spawn_artifact, anom_zone, pos, level_tier)
+                    if not restore_ok then
+                        printf(PREFIX .. " ERROR artifact pool restoration failed raid=%s tier=%s family=%s section=%s error=%s; aborting",
+                            tostring(level.name()), tostring(level_tier), tostring(selection.family),
+                            tostring(selection.section), tostring(restore_error))
+                        error("artifact pool restoration failed: " .. tostring(restore_error), 0)
+                    end
+                    if not call_ok then
+                        printf(PREFIX .. " ERROR artifact pool wrapped spawn failed raid=%s tier=%s family=%s section=%s restored=true error=%s",
+                            tostring(level.name()), tostring(level_tier), tostring(selection.family),
+                            tostring(selection.section), tostring(first))
+                        error(first, 0)
+                    end
+                    artifact_id, spawn_guard = first, second
+                    if fallback_reason then
+                        artifact_pool_context.enabled = false
+                        artifact_pool_context.reason = tostring(fallback_reason)
+                        if not artifact_pool_context.error_reported then
+                            artifact_pool_context.error_reported = true
+                            printf(PREFIX .. " ERROR artifact pool disabled reason=%s; full stock selector fallback enabled",
+                                tostring(artifact_pool_context.reason))
+                        end
+                    end
+                    release_log("artifact_pool raid=%s tier=%s family=%s quality=%s section=%s roll=%s section_roll=%s weights=%s fallback=%s",
+                        tostring(level.name()), tostring(level_tier), tostring(selection.family),
+                        tostring(selection.quality), tostring(selection.section), tostring(selection.roll),
+                        tostring(selection.section_roll), tostring(selection.weights), tostring(fallback_reason or "none"))
+                else
+                    artifact_id, spawn_guard = guarded_rvm_artifact_spawn(
+                        base_spawn_artifact, anom_zone, pos, level_tier)
+                    release_log("artifact_pool raid=%s tier=%s family=stock quality=stock section=stock roll=none section_roll=none weights=stock fallback=%s",
+                        tostring(level.name()), tostring(level_tier),
+                        tostring(selection_error or (artifact_pool_context and artifact_pool_context.reason) or "stock"))
+                end
             else
                 artifact_id = base_spawn_artifact(anom_zone, pos, level_tier)
             end

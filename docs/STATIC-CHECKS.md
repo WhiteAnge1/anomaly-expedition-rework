@@ -8,6 +8,7 @@
 - Проверено наличие ключевых hooks, callbacks сохранения/загрузки/очистки и конфигурационных инвариантов.
 - Проверено отсутствие обёртки `drx_da_main.spawn_artefact_on_smart` и постфактум-перебора всех артефактов уровня.
 - Проверено динамическое чтение штатной таблицы артефактов, точное соответствие групп пулов `{1..5}`, `{5,6}`, `{6,7}` и вызов сохраняемой очереди `raid_artefacts.addToQueuedArtefacts`.
+- `tools/test_artifact_pool.py` исполняет новый true-field selector в Lua 5.1/LuaJIT 2.0/2.1: 223 уникальные base-section, 20 непустых ячеек, aliases семейств, точные границы весов, нулевые buckets, распределение 100000 бросков на тир, повторы, все 14 T3 unique, fail-closed stock fallback и восстановление локальной `raid_groups_artifacts` после success/error.
 - Проверено использование PAW `script_zone`, видимых `raid_small_stash_*`, отсутствие несовместимых `printf`-форматов и запрещённых после полевого теста loot-секций.
 - Проверены global-debug auto/default-off, три независимых пользовательских exact-marker default-off, разделение обычных и технических tooltip, безопасный вывод runtime-команд в Debug UI, census и отсутствие обёртки штатного `raid_dospawn_dungeons.raid_start_spawn`.
 - Проверены exact-ID fallback владения артефактом, fail-closed сохранение области, размеры кругов `32/60/48` при `scale_max=4.5`, icon-only exact markers с `location_level=20` и per-level `start/start/proximity`.

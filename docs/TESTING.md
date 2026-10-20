@@ -43,6 +43,9 @@
 | Редкий пул T3 | Только группы 6 и 7 РВМ, без группы 8 | Сверить section с `raid_artefacts_tiers_by_dop` |
 | Класс и мутации | Артефакт получает штатный класс/доп. свойства РВМ | Лог `raid_artefacts randomize with tier`; осмотр в UI |
 | Save до открытия box | После загрузки артефакт всё равно рандомизируется один раз | Сверить ID и отсутствие повторного reroll |
+| Weighted true-field T1 | Только junk/low/medium; семейство соответствует зоне | `artifact_pool ... tier=1 ... fallback=none`, high/unique отсутствуют |
+| Weighted true-field T2 | Junk/low/medium/high, но не unique | `artifact_pool ... tier=2 ... fallback=none` и штатная Rojok queue для exact ID |
+| Weighted true-field T3 | Доступны все категории, unique имеет production-вес 2% | `artifact_pool ... tier=3 ... quality=... section=...`; pickup и save/load не меняют ID |
 | Пустышка | Нет content/spawn, живёт до выхода | `type=empty linked=none` |
 | Save/load на месте | Нет новых `create`, spots восстановлены | Счётчики до/после одинаковы |
 | Fast travel на той же локации | Незакрытые zones/anchors/loot сохраняются | `transition pending`, затем `transition resolved same_level` |
@@ -52,6 +55,8 @@
 | Производительность | Нет заметного постоянного stutter | Обновление раз в 1000 мс |
 
 Если игра падает до главного меню, приложите конец `xray_*.log` со строками `[Anomaly Expedition Rework]`. Если круги есть, но PAW не предлагает маршрут, приложите версию PAW и результат теста на минимальном/максимальном масштабе карты.
+
+Короткая полевая выборка weighted-пула: после полного restart пройти по одной новой infected-вылазке T1 и T2, сохранить строки `artifact_pool` и одну цепочку `spawn → Rojok queue/randomize → pickup`. Затем выполнить T3. Естественный unique имеет лишь 2%, поэтому для одного контролируемого T3-прогона допустимо временно выставить веса T3 `0/0/0/0/100`; после проверки класса/мутации, pickup и save/load обязательно вернуть production `2/8/43/45/2` и полностью перезапустить игру. `af_oasis_heart` входит в общий unique-пул без отдельного блокирующего gate; если он выпадет, достаточно обычного smoke pickup/save-load. Успешный weighted spawn не закрывает отдельную матрицу artifact rescue.
 
 Для runtime-проверки откройте **Debug UI debug launcher**, не обычную консоль `~`. Используйте `rvm_rework_debug_off`, затем `rvm_rework_debug_on`: Debug UI должен подтвердить mode/effective, а круги — переключиться между обычным и техническим tooltip без изменения количества зон. Команда `rvm_rework_census` должна показать краткие `squads/stalkers/mutants` в Debug UI и не создавать/удалять население.
 

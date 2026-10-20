@@ -1,0 +1,317 @@
+-- Anomaly Expedition Rework by White_Angel
+-- Validated family x quality selector for true anomaly-field artefacts.
+
+local QUALITY_ORDER = { "junk", "low", "medium", "high", "unique" }
+local FAMILY_ORDER = { "gravi", "electro", "chem", "thermo" }
+local FAMILY_ALIAS = {
+    gravi = "gravi", mosquito = "gravi",
+    electr = "electro", psy = "electro",
+    chem = "chem", fuzz = "chem",
+    therm = "thermo",
+}
+local EXPECTED_COUNTS = {
+    gravi = { 12, 12, 13, 12, 3 },
+    electro = { 13, 13, 14, 13, 4 },
+    chem = { 14, 13, 14, 13, 4 },
+    thermo = { 13, 13, 14, 13, 3 },
+}
+local QUALITY_GROUPS = {
+    junk = { 1, 2, 3, 4 }, low = { 5 }, medium = { 6 }, high = { 7 }, unique = { 8 },
+}
+
+POOLS = {
+    gravi = {
+        junk = {
+            "af_ameba_sli", "af_ameba_slu", "af_cocoon", "af_fountain", "af_repei", "af_med",
+            "af_grapes", "af_spaika", "af_chelust", "af_nigh_sta", "af_cell", "af_crist_flower",
+        },
+        low = {
+            "af_armor_1", "af_night_star", "af_medusa", "af_simbion", "af_night_star2", "af_vyvert2",
+            "af_indeikam3", "af_gubka3", "af_vyve", "af_brain", "af_absorbent", "af_mahovik",
+        },
+        medium = {
+            "af_pudd_2", "af_dik_1", "af_gravi", "af_empty", "af_gravi2", "af_cristall_flower2",
+            "af_vyvert", "af_cristall_flower", "af_mayatnik3", "af_crystal_gravi", "af_padshi_angel",
+            "af_cristall_flower3", "af_swivel",
+        },
+        high = {
+            "af_spirit_1", "af_gold_fish", "af_full_empty", "af_gold_fish2", "af_medusa_green",
+            "af_vyvert_green", "af_lifekam", "af_best_compass", "af_crystal_vyvert", "af_lobster_eyes",
+            "af_vyvert3", "af_propeller",
+        },
+        unique = { "amk_snezhok", "af_bumerang", "af_compass" },
+    },
+    electro = {
+        junk = {
+            "af_moh", "af_kogot", "af_electra_spar", "af_ball", "af_fonar", "af_tapeworm", "af_signet",
+            "af_elektron", "amk_ice_s", "af_generator", "af_joker", "af_lighthouse", "af_dummy_glassbe",
+        },
+        low = {
+            "af_armor_2", "af_electra_sparkler", "af_dummy_battery", "af_electra_flash2", "af_wish",
+            "af_dummy_battery3", "af_glass3", "af_oblivion3", "af_electra_flash3", "af_fire_ba",
+            "af_electra_fla", "af_ice3", "af_blood3",
+        },
+        medium = {
+            "af_pudd_3", "af_dik_2", "af_electra_moonlight", "af_dummy_dummy", "af_electra_sparkler2",
+            "af_cristal_drops", "af_ring", "af_ameba_mi", "af_lifekam3", "af_pulsar", "af_electra_moon",
+            "af_mincer_me", "af_crystal_ice", "af_baloon3",
+        },
+        high = {
+            "af_spirit_3", "af_electra_flash", "af_ice", "af_electra_moonlight2", "af_electra_sparkler3",
+            "jup_b1_half_artifact2", "af_clear_sky", "af_dummy_dummy3", "af_deformer", "af_skripka",
+            "af_black_spray", "af_microb", "af_life_heart",
+        },
+        unique = { "af_oblivion", "af_pero", "af_poipruz", "af_monolith" },
+    },
+    chem = {
+        junk = {
+            "af_skull_miser", "af_peas", "af_kislushka", "af_dummy_spri", "af_serofim", "af_zhelch",
+            "af_sverlo", "af_raibloko3", "af_star_phantom", "af_midi", "af_itching1", "af_ledenec",
+            "af_arhara_globus", "af_soul2",
+        },
+        low = {
+            "af_armor_4", "af_mincer_meat", "af_soul", "af_rusty_thorn", "af_ameba_slime", "af_water_flower",
+            "af_mincer_meat2", "af_crystal_blood", "af_bracelet", "af_mayatnik", "af_pendulum", "af_klaksa",
+            "af_vereteno",
+        },
+        medium = {
+            "af_pudd_4", "af_dik_3", "af_blood", "af_fuzz_kolobok", "af_rusty_kristall", "af_ameba_slug",
+            "af_water_flower1", "af_blood2", "af_sponge", "af_kol_4", "af_fuzz_kolobok3", "af_cristall3",
+            "af_seaej", "af_zelonka",
+        },
+        high = {
+            "af_spirit_4", "af_baloon", "af_glass", "af_rusty_sea_urchin", "af_ameba_mica", "af_water_flower2",
+            "af_blood_green", "af_electro_crystal_thorn", "af_oasis_heart2", "af_volchok", "af_morf",
+            "af_fuzz_kolobok2", "af_slizen",
+        },
+        unique = { "af_caterpillar", "af_oko", "af_karusel", "af_oasis_heart" },
+    },
+    thermo = {
+        junk = {
+            "af_ear", "af_dummy_glassbeads3", "af_vedsleza3", "af_dragon_eye", "af_fire_loop", "af_atom",
+            "af_itching_low", "af_black", "af_sandstone", "af_sun", "af_medallion", "af_bat", "af_black_angel",
+        },
+        low = {
+            "af_armor_3", "af_dummy_glassbeads", "af_pin", "af_dummy_dummy2", "af_drops", "af_fireball3",
+            "af_babka_1", "af_oreh", "af_dummy_pellicle", "af_raibloko", "af_eye3", "af_fire3",
+            "af_crystal_generator",
+        },
+        medium = {
+            "af_pudd_1", "af_dik_4", "af_eye", "af_cristall", "af_dummy_spring", "af_cristall2",
+            "af_crystal_glassbeads", "af_babka_2", "af_itcher", "af_vedsleza", "af_bloo", "af_chertyaico",
+            "af_kashtan", "af_dummy_battery_red",
+        },
+        high = {
+            "af_spirit_2", "af_fire", "af_fireball", "af_dummy_spring_red", "af_fireball2",
+            "af_dummy_glassbeads2", "af_babka_3", "af_dark_soul", "af_dummy_pellicle_red", "af_crystal_oko",
+            "amk_yoyo", "af_prujina", "af_magnito",
+        },
+        unique = { "af_part_monolit", "af_quest_b14_twisted2", "af_death_lamp" },
+    },
+}
+
+local function zone_prefix(anom_zone)
+    return string.match(tostring(anom_zone or ""), "^([^_]+)")
+end
+
+local function collect_canonical(canonical)
+    if type(canonical) ~= "table" then return nil, "canonical_table_unavailable" end
+    local result = {}
+    local total = 0
+    for _, quality in ipairs(QUALITY_ORDER) do
+        for _, group_id in ipairs(QUALITY_GROUPS[quality]) do
+            local group = canonical[group_id]
+            if type(group) ~= "table" or type(group.artefacts) ~= "table" then
+                return nil, "canonical_group_missing:" .. tostring(group_id)
+            end
+            for _, section in ipairs(group.artefacts) do
+                if result[section] then return nil, "canonical_duplicate:" .. tostring(section) end
+                result[section] = quality
+                total = total + 1
+            end
+        end
+    end
+    if total ~= 223 then return nil, "canonical_total:" .. tostring(total) end
+    return result, nil
+end
+
+function validate_pools(canonical, section_exists)
+    if type(section_exists) ~= "function" then return false, "section_checker_unavailable" end
+    local canonical_map, canonical_error = collect_canonical(canonical)
+    if not canonical_map then return false, canonical_error end
+    local seen = {}
+    local total = 0
+    for _, family in ipairs(FAMILY_ORDER) do
+        if type(POOLS[family]) ~= "table" then return false, "family_missing:" .. family end
+        for quality_index, quality in ipairs(QUALITY_ORDER) do
+            local pool = POOLS[family][quality]
+            local expected = EXPECTED_COUNTS[family][quality_index]
+            if type(pool) ~= "table" or #pool ~= expected then
+                return false, "cell_count:" .. family .. ":" .. quality .. ":" .. tostring(type(pool) == "table" and #pool or -1)
+            end
+            for _, section in ipairs(pool) do
+                if seen[section] then return false, "pool_duplicate:" .. tostring(section) end
+                if canonical_map[section] ~= quality then
+                    return false, "canonical_quality_mismatch:" .. tostring(section) .. ":" .. tostring(quality)
+                end
+                if string.find(section, "_lead_box", 1, true)
+                or string.find(section, "_af_iam", 1, true)
+                or string.find(section, "_af_aac", 1, true)
+                or string.find(section, "_af_aam", 1, true)
+                or string.find(section, "absorbation", 1, true) then
+                    return false, "technical_section:" .. tostring(section)
+                end
+                local exists_ok, exists = pcall(section_exists, section)
+                if not exists_ok or not exists then return false, "section_missing:" .. tostring(section) end
+                seen[section] = family .. ":" .. quality
+                total = total + 1
+            end
+        end
+    end
+    if total ~= 223 then return false, "pool_total:" .. tostring(total) end
+    for section, _ in pairs(canonical_map) do
+        if not seen[section] then return false, "canonical_unmapped:" .. tostring(section) end
+    end
+    return true, nil
+end
+
+function validate_weights(weights)
+    if type(weights) ~= "table" then return false, "weights_not_table" end
+    for tier = 1, 3 do
+        if type(weights[tier]) ~= "table" then return false, "tier_weights_missing:" .. tostring(tier) end
+        local sum = 0
+        for _, quality in ipairs(QUALITY_ORDER) do
+            local value = tonumber(weights[tier][quality])
+            if not value or value < 0 or value ~= math.floor(value) then
+                return false, "weight_invalid:" .. tostring(tier) .. ":" .. quality
+            end
+            sum = sum + value
+        end
+        if sum ~= 100 then return false, "weight_sum:" .. tostring(tier) .. ":" .. tostring(sum) end
+    end
+    return true, nil
+end
+
+function read_weights(config)
+    local result = {}
+    for tier = 1, 3 do
+        result[tier] = {}
+        for _, quality in ipairs(QUALITY_ORDER) do
+            result[tier][quality] = config.get_number("artifact_pool", "tier_" .. tostring(tier) .. "_weight_" .. quality, -1)
+        end
+    end
+    return result
+end
+
+function find_stock_pool(fn)
+    if type(fn) ~= "function" or type(debug) ~= "table" or type(debug.getupvalue) ~= "function" then
+        return nil, "debug_getupvalue_unavailable"
+    end
+    for index = 1, 64 do
+        local ok, name, value = pcall(debug.getupvalue, fn, index)
+        if not ok then return nil, "getupvalue_error" end
+        if name == nil then break end
+        if name == "raid_groups_artifacts" then
+            if type(value) ~= "table" then return nil, "stock_pool_not_table" end
+            return value, nil
+        end
+    end
+    return nil, "stock_pool_not_found"
+end
+
+local function validate_stock_pool(stock_pool)
+    for _, raw_family in ipairs({ "gravi", "mosquito", "electr", "psy", "chem", "fuzz", "therm" }) do
+        local family_table = rawget(stock_pool, raw_family)
+        if type(family_table) ~= "table" then return false, "stock_family_missing:" .. raw_family end
+        for tier = 1, 3 do
+            local cell = rawget(family_table, tier)
+            if type(cell) ~= "table" or #cell == 0 then
+                return false, "stock_cell_missing:" .. raw_family .. ":" .. tostring(tier)
+            end
+        end
+    end
+    return true, nil
+end
+
+function create_context(inner_spawn, canonical, section_exists, config)
+    local profile = string.lower(tostring(config.get_string("artifact_pool", "profile", "weighted")))
+    local context = { profile = profile, enabled = false, active = false, error_reported = false }
+    if profile == "stock" then context.reason = "profile_stock"; return context end
+    if profile ~= "weighted" then context.reason = "profile_invalid:" .. profile; return context end
+    context.weights = read_weights(config)
+    local weights_ok, weights_error = validate_weights(context.weights)
+    if not weights_ok then context.reason = weights_error; return context end
+    local pools_ok, pools_error = validate_pools(canonical, section_exists)
+    if not pools_ok then context.reason = pools_error; return context end
+    context.stock_pool, context.reason = find_stock_pool(inner_spawn)
+    if not context.stock_pool then return context end
+    local stock_ok, stock_error = validate_stock_pool(context.stock_pool)
+    if not stock_ok then context.reason = stock_error; return context end
+    context.enabled = true
+    context.reason = nil
+    return context
+end
+
+function weights_text(weights)
+    local values = {}
+    for _, quality in ipairs(QUALITY_ORDER) do values[#values + 1] = quality .. ":" .. tostring(weights[quality]) end
+    return table.concat(values, ",")
+end
+
+function choose(context, anom_zone, tier, random_integer)
+    if type(context) ~= "table" or not context.enabled then return nil, context and context.reason or "context_missing" end
+    tier = tonumber(tier)
+    local raw_family = zone_prefix(anom_zone)
+    local family = FAMILY_ALIAS[raw_family]
+    if not family then return nil, "family_unknown:" .. tostring(raw_family) end
+    local weights = context.weights[tier]
+    if not weights then return nil, "tier_unsupported:" .. tostring(tier) end
+    local roll = random_integer(1, 100)
+    local cumulative = 0
+    local quality = nil
+    for _, candidate in ipairs(QUALITY_ORDER) do
+        cumulative = cumulative + weights[candidate]
+        if roll <= cumulative then quality = candidate; break end
+    end
+    if not quality then return nil, "roll_unmapped:" .. tostring(roll) end
+    local pool = POOLS[family][quality]
+    if type(pool) ~= "table" or #pool == 0 then return nil, "active_cell_empty:" .. family .. ":" .. quality end
+    local section_roll = random_integer(1, #pool)
+    return {
+        raw_family = raw_family, family = family, quality = quality, section = pool[section_roll],
+        tier = tier, roll = roll, section_roll = section_roll, weights = weights_text(weights),
+    }, nil
+end
+
+function call_with_override(context, selection, callback, ...)
+    if type(callback) ~= "function" then return false, "callback_missing", nil, true, nil, "callback_missing" end
+    if type(context) ~= "table" or not context.enabled or type(selection) ~= "table" then
+        local stock_results = { pcall(callback, ...) }
+        return stock_results[1], stock_results[2], stock_results[3], true, nil,
+            type(context) == "table" and context.reason or "context_missing"
+    end
+    if context.active then
+        local reentrant_results = { pcall(callback, ...) }
+        return reentrant_results[1], reentrant_results[2], reentrant_results[3], true, nil, "reentrant"
+    end
+    local family_table = rawget(context.stock_pool, selection.raw_family)
+    local original = type(family_table) == "table" and rawget(family_table, selection.tier) or nil
+    if type(original) ~= "table" or #original == 0 then
+        local unavailable_results = { pcall(callback, ...) }
+        return unavailable_results[1], unavailable_results[2], unavailable_results[3], true, nil, "stock_cell_unavailable"
+    end
+    context.active = true
+    local set_ok, set_error = pcall(rawset, family_table, selection.tier, { selection.section })
+    if not set_ok then
+        context.active = false
+        local set_results = { pcall(callback, ...) }
+        return set_results[1], set_results[2], set_results[3], true, nil, "override_failed:" .. tostring(set_error)
+    end
+    local call_results = { pcall(callback, ...) }
+    local restore_ok, restore_error = pcall(rawset, family_table, selection.tier, original)
+    context.active = false
+    local final_restore_error = nil
+    if not restore_ok then final_restore_error = restore_error end
+    return call_results[1], call_results[2], call_results[3], restore_ok, final_restore_error, nil
+end
+

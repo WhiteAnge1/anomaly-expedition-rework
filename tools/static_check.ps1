@@ -13,6 +13,7 @@ $failures = [System.Collections.Generic.List[string]]::new()
 
 $required = @(
     'gamedata\scripts\rvm_sorties_config.script',
+    'gamedata\scripts\rvm_sorties_artifact_pool.script',
     'gamedata\scripts\zzz_rvm_sorties_rework.script',
     'gamedata\scripts\modxml_rvm_sorties_map_spots.script',
     'gamedata\configs\plugins\rvm_sorties_rework.ltx',
@@ -35,6 +36,7 @@ $required = @(
     'tools\test_artifact_stabilization_policy.ps1',
     'tools\test_artifact_held_stabilization_policy.ps1',
     'tools\test_artifact_count_policy.py',
+    'tools\test_artifact_pool.py',
     'tools\test_lua51_compile.py',
     'tools\test_artifact_spawn_level_proxy.py',
     'tools\test_origin_position_normalization.py',
@@ -77,6 +79,9 @@ foreach ($needle in @(
 }
 foreach ($needle in @('raid_anomalys.spawn_artefact_in_zone','actor_on_item_take','npc_on_item_take','save_state','load_state','on_before_level_changing')) {
     if (-not $main.Contains($needle)) { $failures.Add("main hook missing: $needle") }
+}
+foreach ($needle in @('rvm_sorties_artifact_pool.create_context','rvm_sorties_artifact_pool.choose','rvm_sorties_artifact_pool.call_with_override','artifact pool restoration failed','full stock selector fallback enabled')) {
+    if (-not $main.Contains($needle)) { $failures.Add("weighted artifact pool integration missing: $needle") }
 }
 foreach ($needle in @('raid_artefacts_tiers_by_dop','raid_artefacts.addToQueuedArtefacts','{ 1, 2, 3, 4, 5 }','{ 5, 6 }','{ 6, 7 }')) {
     if (-not $main.Contains($needle)) { $failures.Add("artifact integration missing: $needle") }
@@ -168,6 +173,9 @@ foreach ($section in $ambushProfiles.Keys) {
 }
 foreach ($needle in @('stash_mode = scouting','weight_enemy = 50','weight_loot = 25','weight_empty = 25','remove_on_npc_pickup = false','ambush_start_center_exclusion_radius = 120','artifact_offset_fraction_min = 0.10','artifact_offset_fraction_max = 0.20','artifact_offset_fraction_min = 0.06','artifact_offset_fraction_max = 0.12','loot_offset_divisor = 3','loot_offset_divisor = 5','loot_offset_divisor = 10','valuable_first_chance = 35','valuable_second_chance = 10','valuable_third_chance = 1.5','loot_cap = 6','loot_cap = 7','loot_cap = 8','loot_medicine_half_weight = medkit_army','loot_medicine_half_weight = medkit_scientic','loot_medicine_half_weight = adrenalin','loot_valuable = af_iam, lead_box, detector_simple, detector_advanced, af_cooler, af_freon, af_camelbak, af_frames, af_grid, af_surge, device_torch','loot_valuable = detector_advanced, detector_elite, af_iam, af_aac, lead_box, af_grid_up, af_freon_up, af_cooler_up, af_camelbak_up, af_frames_up, device_torch_nv_1, device_torch_nv_2','loot_valuable = detector_elite, detector_scientific, lead_box, af_aac, af_aam, device_torch_nv_3','rare_artifact_chance = 70','loot_rare_non_artifact = raid_intelligence_note','loot_container_visuals = raid_small_stash_1','map_spot = rvm_search_small','debug_mode = on','debug_log = false','[level_y04_pole]','[level_k01_darkscape]','[level_l09_deadcity]')) {
     if (-not $ltx.Contains($needle)) { $failures.Add("config invariant missing: $needle") }
+}
+foreach ($needle in @('profile = weighted','tier_1_weight_junk = 45','tier_1_weight_low = 45','tier_1_weight_medium = 10','tier_1_weight_high = 0','tier_1_weight_unique = 0','tier_2_weight_junk = 10','tier_2_weight_low = 32','tier_2_weight_medium = 43','tier_2_weight_high = 15','tier_2_weight_unique = 0','tier_3_weight_junk = 2','tier_3_weight_low = 8','tier_3_weight_medium = 43','tier_3_weight_high = 45','tier_3_weight_unique = 2')) {
+    if (-not $ltx.Contains($needle)) { $failures.Add("artifact pool config invariant missing: $needle") }
 }
 foreach ($needle in @('ambush_spawn_timing = proximity','ambush_start_trigger_margin = 20','ambush_start_zone_margin = 8','ambush_outside_zone_padding = 25','ambush_anomaly_clearance = 15','ambush_unknown_anomaly_radius = 20','ambush_retry_delay_ms = 10000','enemy_category_weight_frequent = 4','enemy_category_weight_rare = 2','enemy_category_weight_superrare = 1')) {
     if (-not $ltx.Contains($needle)) { $failures.Add("ambush config invariant missing: $needle") }
@@ -375,6 +383,12 @@ if ($Profile -eq 'full' -or $Profile -eq 'fast') {
             if ($LASTEXITCODE -ne 0) { $failures.Add('origin position normalization failed') }
             python (Join-Path $ModRoot 'tools\test_artifact_count_policy.py') $ModRoot
             if ($LASTEXITCODE -ne 0) { $failures.Add('artifact count policy regression failed') }
+            if ($BuildModsRoot) {
+                python (Join-Path $ModRoot 'tools\test_artifact_pool.py') $ModRoot $BuildModsRoot
+            } else {
+                python (Join-Path $ModRoot 'tools\test_artifact_pool.py') $ModRoot
+            }
+            if ($LASTEXITCODE -ne 0) { $failures.Add('artifact family x quality pool regression failed') }
         } finally {
             $env:PYTHONPATH = $savedPythonPath
         }
