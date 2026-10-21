@@ -32,6 +32,7 @@ $required = @(
     'docs\FIELD-TEST-2026-10-21-COMPILE-FAIL.md',
     'docs\FIELD-TEST-2026-10-21-PROACTIVE-UNDERGROUND-FAIL.md',
     'docs\FIELD-TEST-2026-10-21-SCHEMA7-SURFACE-PICKUP-FAIL.md',
+    'docs\FIELD-TEST-2026-10-21-SCHEMA8-FIRST-ONLINE-EQ-FAIL.md',
     'tools\watch_live_log.ps1',
     'tools\watch_live_log.cmd',
     'tools\test_loot_policy.ps1',

@@ -15,7 +15,7 @@
 
 ## 2. Принять proactive artifact hold в поле
 
-Продуктовое решение принято: все новые raid-artifacts статичны до подбора. После guarded server spawn X-Ray нормализует pivot к поверхности; schema 8 валидирует этот surface envelope, однократно поднимает exact client object через `force_set_position(pos, true)` на `2.0 м` (конфиг `0.5..3.0`), верифицирует и фиксирует только свободные physics elements. Save/load повторяет lift+fix без action counters. ALife teleport, respawn и reactive rescue запрещены.
+Продуктовое решение принято: все новые raid-artifacts статичны до подбора. После guarded server spawn X-Ray нормализует pivot к поверхности; schema 9 ждёт готовности physics shell, валидирует surface envelope и атомарно поднимает exact client object через `force_set_position(pos, true)` на `1.0 м` (конфиг `0.5..3.0`), верифицирует и фиксирует только свободные physics elements. Save/load и новый online lifecycle повторяют lift+fix без action counters. ALife teleport, respawn и reactive rescue запрещены.
 
 Перед заморозкой обязателен узкий прогон `docs/FIELD-TEST-PROACTIVE-HOLD.md`. Старый rolling/underground/origin код остаётся только изолированным legacy/debug слоем и не является основанием считать новый путь проверенным.
 

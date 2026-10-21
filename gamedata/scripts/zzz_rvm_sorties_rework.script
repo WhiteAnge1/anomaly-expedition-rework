@@ -24,7 +24,7 @@ local census_error_reported = false
 local next_artifact_diagnostic = 0
 local reported_artifact_overlaps = {}
 local safe_alive = nil
-local ARTIFACT_PROVENANCE_SCHEMA = 8
+local ARTIFACT_PROVENANCE_SCHEMA = 9
 local INVALID_VERTEX_ID = 4294967295
 local ARTIFACT_RESCUE_DEBUG_IDS = { [1407] = true, [6362] = true }
 local release_held_stabilization = nil
@@ -34,6 +34,7 @@ local attempt_held_stabilization = nil
 -- 200 local variables. Keep this collision-resistant namespace out of that
 -- finite local-variable budget.
 RVM_SORTIES_PROACTIVE = RVM_SORTIES_PROACTIVE or {}
+RVM_SORTIES_PROACTIVE.pending_online = RVM_SORTIES_PROACTIVE.pending_online or {}
 local saved_origin_evidence_valid = nil
 local ORIGIN = {}
 
@@ -100,7 +101,7 @@ local ENEMY_SQUAD_PRESETS = {
 
 local function fresh_state()
     return {
-        schema = 8,
+        schema = 9,
         level_name = nil,
         sortie_type = nil,
         pending_transition = false,
@@ -1130,7 +1131,7 @@ local function capture_artifact_provenance(artifact_id, anom_zone, pos, level_ti
     and valid_vertex_id(guarded_target.lvid) and valid_vertex_id(guarded_target.gvid)
     and guarded_target.support == "static_ray" then
         local hold_clearance = math.max(0.5, math.min(3,
-            C.get_number("global", "artifact_online_hold_clearance", 2.0)))
+            C.get_number("global", "artifact_online_hold_clearance", 1.0)))
         proactive = {
             schema = 1,
             state = "target_ready",
@@ -1225,6 +1226,12 @@ local function capture_artifact_provenance(artifact_id, anom_zone, pos, level_ti
         provenance_log("observing_server", record, nil, record.reason)
     end
     if proactive then
+        local pending_online = RVM_SORTIES_PROACTIVE.pending_online[key]
+        if pending_online then
+            RVM_SORTIES_PROACTIVE.pending_online[key] = nil
+            RVM_SORTIES_PROACTIVE.begin_online_incarnation(record,
+                pending_online.binder_token, "capture_after_" .. tostring(pending_online.source))
+        end
         local hold_ok, hold_error = pcall(RVM_SORTIES_PROACTIVE.hold_attempt, record, "capture", nil, nil)
         if not hold_ok then
             proactive.state = "unresolved"
@@ -1896,7 +1903,7 @@ function RVM_SORTIES_PROACTIVE.position_safe(record, online)
     local nav_ok, nav = pcall(level.vertex_position, fresh_surface.lvid)
     local vertex_delta_y = nav_ok and nav and (current.y - nav.y) or nil
     local required_clearance = (tonumber(target.hold_clearance)
-        or tonumber(target.clearance) or 2.0) - tolerance
+        or tonumber(target.clearance) or 1.0) - tolerance
     local safe = dxz <= tolerance and math.abs(dy) <= tolerance
         and math.abs(surface_y - expected_surface) <= tolerance
         and clearance >= required_clearance
@@ -1936,10 +1943,16 @@ function RVM_SORTIES_PROACTIVE.lift_to_target(record, online, source)
     local target = lifecycle and lifecycle.target
     local before = safe_object_position(online)
     if not (target and target.pos and before) then return false, "lift_target_or_position_missing" end
-    if lifecycle.lift_attempted_this_online then
-        return false, "lift_already_attempted_this_online:" .. tostring(lifecycle.lift_attempt_reason)
+    if lifecycle.lift_verified_this_online then
+        return false, "lift_already_verified_this_online:" .. tostring(lifecycle.lift_attempt_reason)
     end
-    lifecycle.lift_attempted_this_online = true
+    local maximum_attempts = 3
+    lifecycle.lift_attempts_this_online = math.max(0,
+        math.floor(tonumber(lifecycle.lift_attempts_this_online) or 0))
+    if lifecycle.lift_attempts_this_online >= maximum_attempts then
+        return false, "lift_retry_exhausted:" .. tostring(lifecycle.lift_attempt_reason)
+    end
+    lifecycle.lift_attempts_this_online = lifecycle.lift_attempts_this_online + 1
     local method_ok, method = pcall(function() return online.force_set_position end)
     if not (method_ok and type(method) == "function") then
         lifecycle.lift_attempt_reason = "force_set_position_unavailable"
@@ -1958,6 +1971,7 @@ function RVM_SORTIES_PROACTIVE.lift_to_target(record, online, source)
         tostring(record.artifact_id), tostring(source), fmt_position(before), fmt_position(target.pos),
         fmt_position(after), tostring(position_ok), tostring(position_reason), fmt_number(dxz),
         fmt_number(dy), fmt_number(clearance), tostring(lvid), fmt_number(vertex_dy))
+    lifecycle.lift_verified_this_online = position_ok
     lifecycle.lift_attempt_reason = position_ok and "lift_verified" or ("lift_unverified:" .. tostring(position_reason))
     return position_ok, position_ok and "lift_verified" or ("lift_unverified:" .. tostring(position_reason))
 end
@@ -2092,11 +2106,6 @@ function RVM_SORTIES_PROACTIVE.hold_attempt(record, source, supplied_online, bin
             tostring(record.artifact_id), tostring(source), lifecycle.reason)
         return false, lifecycle.reason
     end
-    if lifecycle.runtime_online_ref ~= online then
-        lifecycle.runtime_online_ref = online
-        lifecycle.lift_attempted_this_online = false
-        lifecycle.lift_attempt_reason = nil
-    end
     local parent_ok, parent = pcall(function() return online:parent() end)
     local parent_id = parent_ok and safe_object_id_any(parent) or nil
     if parent_id ~= nil and parent_id ~= 65535 then
@@ -2104,6 +2113,18 @@ function RVM_SORTIES_PROACTIVE.hold_attempt(record, source, supplied_online, bin
         record.state = "owned"
         record.reason = "ownership_before_hold"
         return true, "owned"
+    end
+    -- force_set_position can succeed before the physics shell exists. Lifting
+    -- at that point lets X-Ray normalize the object back to the surface before
+    -- a later callback can fix it. Wait for the shell so lift+verify+fix happen
+    -- atomically in one callback; subsequent readiness callbacks remain bounded.
+    local shell_ok, shell = pcall(function() return online:get_physics_shell() end)
+    if not (shell_ok and shell) then
+        lifecycle.state = "awaiting_online"
+        lifecycle.reason = "physics_shell_unavailable"
+        record.state = "awaiting_online"
+        record.reason = lifecycle.reason
+        return false, lifecycle.reason
     end
     local position_ok, position_reason, current, dxz, dy, clearance = RVM_SORTIES_PROACTIVE.position_safe(record, online)
     if not position_ok then
@@ -2136,14 +2157,6 @@ function RVM_SORTIES_PROACTIVE.hold_attempt(record, source, supplied_online, bin
     if RVM_SORTIES_PROACTIVE.shell_still_fixed(record, online) then
         lifecycle.runtime_binder_token = binder_token or lifecycle.runtime_binder_token
         return true, "already_held"
-    end
-    local shell_ok, shell = pcall(function() return online:get_physics_shell() end)
-    if not (shell_ok and shell) then
-        lifecycle.state = "awaiting_online"
-        lifecycle.reason = "physics_shell_unavailable"
-        record.state = "awaiting_online"
-        record.reason = lifecycle.reason
-        return false, lifecycle.reason
     end
     local before_linear = read_physics_velocity(shell, false)
     local before_angular = read_physics_velocity(shell, true)
@@ -2252,8 +2265,8 @@ function RVM_SORTIES_PROACTIVE.maintain(record, snapshot, now)
         return true
     end
     if not (snapshot and snapshot.online_exists) then
-        lifecycle.runtime_online_ref = nil
-        lifecycle.lift_attempted_this_online = false
+        lifecycle.lift_attempts_this_online = 0
+        lifecycle.lift_verified_this_online = false
         lifecycle.lift_attempt_reason = nil
         if lifecycle.state == "held_accessible" then
             lifecycle.state = "awaiting_online"
@@ -5106,7 +5119,9 @@ local function guarded_rvm_artifact_spawn(base_spawn, anom_zone, field_pos, leve
             return created
         end)
 
+        RVM_SORTIES_PROACTIVE.capture_in_progress = true
         local call_ok, artifact_id_or_error = pcall(base_spawn, anom_zone, field_pos, level_tier)
+        RVM_SORTIES_PROACTIVE.capture_in_progress = false
         rawset(raid_anomalys, "level", saved_level)
         rawset(raid_anomalys, "alife_create_item", saved_create)
 
@@ -5150,13 +5165,52 @@ local function guarded_rvm_artifact_spawn(base_spawn, anom_zone, field_pos, leve
     return nil, result
 end
 
+function RVM_SORTIES_PROACTIVE.begin_online_incarnation(record, binder_token, source)
+    local lifecycle = record and record.proactive
+    if not (lifecycle and lifecycle.hold_required ~= false) then return false end
+    lifecycle.online_incarnation = (tonumber(lifecycle.online_incarnation) or 0) + 1
+    lifecycle.runtime_binder_token = binder_token
+    lifecycle.lift_attempts_this_online = 0
+    lifecycle.lift_verified_this_online = false
+    lifecycle.lift_attempt_reason = nil
+    lifecycle.fixed_indices = {}
+    lifecycle.foreign_fixed_indices = {}
+    lifecycle.state = "awaiting_online"
+    lifecycle.reason = "new_online_incarnation"
+    record.state = "awaiting_online"
+    record.reason = lifecycle.reason
+    release_log("artifact proactive incarnation id=%s generation=%s source=%s binder=%s",
+        tostring(record.artifact_id), tostring(lifecycle.online_incarnation),
+        tostring(source), tostring(binder_token or "none"))
+    return true
+end
+
 function RVM_SORTIES_PROACTIVE.artifact_online(obj, binder, source)
     if not obj then return false end
     local artifact_id = safe_object_id_any(obj)
     local record = artifact_id and state.artifact_provenance
         and state.artifact_provenance[tostring(artifact_id)] or nil
-    if not (record and record.lifecycle == "proactive") then return false end
     local token = binder and tostring(binder) or nil
+    if not (record and record.lifecycle == "proactive") then
+        if artifact_id and source == "binder_net_spawn"
+        and RVM_SORTIES_PROACTIVE.capture_in_progress == true then
+            local now = time_global()
+            for pending_id, pending in pairs(RVM_SORTIES_PROACTIVE.pending_online) do
+                if not pending.at or now - pending.at > 10000 then
+                    RVM_SORTIES_PROACTIVE.pending_online[pending_id] = nil
+                end
+            end
+            RVM_SORTIES_PROACTIVE.pending_online[tostring(artifact_id)] = {
+                source = tostring(source or "unknown"), binder_token = token, at = now,
+            }
+            release_log("artifact proactive online pending id=%s source=%s binder=%s reason=record_not_ready",
+                tostring(artifact_id), tostring(source), tostring(token or "none"))
+        end
+        return false
+    end
+    if source == "binder_net_spawn" then
+        RVM_SORTIES_PROACTIVE.begin_online_incarnation(record, token, source)
+    end
     release_log("artifact proactive online id=%s source=%s state=%s binder=%s",
         tostring(artifact_id), tostring(source), tostring(record.proactive and record.proactive.state),
         tostring(token or "none"))
@@ -5656,8 +5710,8 @@ local function save_state(m_data)
         if record.lifecycle == "proactive" and record.proactive
         and record.proactive.hold_required ~= false then
             record.proactive.runtime_binder_token = nil
-            record.proactive.runtime_online_ref = nil
-            record.proactive.lift_attempted_this_online = false
+            record.proactive.lift_attempts_this_online = 0
+            record.proactive.lift_verified_this_online = false
             record.proactive.lift_attempt_reason = nil
             release_log("artifact proactive save id=%s state=%s hold_required=true own_fixed=%s foreign_fixed=%s target=(%s); hold_preserved=true",
                 tostring(record.artifact_id), tostring(record.proactive.state),
@@ -5955,7 +6009,7 @@ local function migrate_artifact_provenance(previous_schema)
                     local old_target = record.proactive.target
                     local proven_surface_y = tonumber(old_target.surface_y) or old_target.pos.y
                     local hold_clearance = math.max(0.5, math.min(3,
-                        C.get_number("global", "artifact_online_hold_clearance", 2.0)))
+                        C.get_number("global", "artifact_online_hold_clearance", 1.0)))
                     old_target.surface_pos = old_target.surface_pos
                         or { x = old_target.pos.x, y = proven_surface_y, z = old_target.pos.z }
                     old_target.pos = { x = old_target.pos.x, y = proven_surface_y + hold_clearance,
@@ -5968,9 +6022,28 @@ local function migrate_artifact_provenance(previous_schema)
                         tostring(record.artifact_id), fmt_position(old_target.pos),
                         fmt_position(old_target.surface_pos), fmt_number(old_target.hold_clearance))
                 end
+                if previous_schema < 9 then
+                    local old_target = record.proactive.target
+                    local proven_surface_y = tonumber(old_target.surface_y)
+                        or (old_target.surface_pos and old_target.surface_pos.y)
+                        or old_target.pos.y
+                    local hold_clearance = math.max(0.5, math.min(3,
+                        C.get_number("global", "artifact_online_hold_clearance", 1.0)))
+                    old_target.surface_pos = old_target.surface_pos
+                        or { x = old_target.pos.x, y = proven_surface_y, z = old_target.pos.z }
+                    old_target.pos = { x = old_target.pos.x, y = proven_surface_y + hold_clearance,
+                        z = old_target.pos.z }
+                    old_target.clearance = hold_clearance
+                    old_target.hold_clearance = hold_clearance
+                    old_target.source = "schema_8_shell_ready_migration"
+                    record.target = old_target
+                    release_log("artifact proactive load id=%s migration=schema_8_shell_ready target=(%s) surface=(%s) hold_clearance=%s",
+                        tostring(record.artifact_id), fmt_position(old_target.pos),
+                        fmt_position(old_target.surface_pos), fmt_number(old_target.hold_clearance))
+                end
                 record.proactive.runtime_binder_token = nil
-                record.proactive.runtime_online_ref = nil
-                record.proactive.lift_attempted_this_online = false
+                record.proactive.lift_attempts_this_online = 0
+                record.proactive.lift_verified_this_online = false
                 record.proactive.lift_attempt_reason = nil
                 record.proactive.fixed_indices = {}
                 record.proactive.foreign_fixed_indices = {}
@@ -5998,7 +6071,7 @@ local function migrate_artifact_provenance(previous_schema)
                     local migration_clearance = math.max(0.5, math.min(1,
                         C.get_number("global", "artifact_proactive_clearance", 0.75)))
                     local migration_hold_clearance = math.max(0.5, math.min(3,
-                        C.get_number("global", "artifact_online_hold_clearance", 2.0)))
+                        C.get_number("global", "artifact_online_hold_clearance", 1.0)))
                     record.lifecycle = "proactive"
                     record.disabled = false
                     record.legacy_actions = record.actions
@@ -6088,7 +6161,7 @@ local function load_state(m_data)
         end
     end
     migrate_artifact_provenance(previous_schema)
-    state.schema = 8
+    state.schema = 9
 end
 
 local function find_debug_ui(...)
