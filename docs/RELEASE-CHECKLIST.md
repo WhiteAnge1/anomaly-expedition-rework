@@ -1,5 +1,7 @@
 # Release checklist
 
+> `0.3.0-rc1` сохранён как промежуточный prerelease и не является текущим acceptance-кандидатом. `rc2` запрещён до прохождения MCM static/runtime checks, проверки 56 русских/английских tooltip, clean install единого Recommended FOMOD и полевого new-expedition/save-load smoke.
+
 ## Обязательные блокеры публичного релиза
 
 - [x] Владелец утвердил public config/FOMOD: Recommended/Observe-only `debug_mode=off`, Diagnostic `on`, schema 9 и weighted во всех профилях, legacy actions всегда off, exact markers default None, три типа ложных зон независимо отключаемы. Обновление ставится новой MO2-записью без автоматического backup/merge старого LTX.

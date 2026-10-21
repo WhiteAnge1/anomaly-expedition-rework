@@ -1,0 +1,83 @@
+-- Anomaly Expedition Rework by White_Angel
+-- MCM 1.7.2 declaration. Runtime reads are isolated in rvm_sorties_config.
+
+local function track(id, minimum, maximum, step, default)
+    return { id=id, type="track", val=2, min=minimum, max=maximum, step=step, def=default }
+end
+
+local function weights(prefix, counts, defaults)
+    local result = {}
+    for index, count in ipairs(counts) do
+        result[#result + 1] = track(prefix .. tostring(count), 1, 100, 1, defaults[index])
+    end
+    return result
+end
+
+local function append(target, values)
+    for _, value in ipairs(values) do target[#target + 1] = value end
+end
+
+function on_mcm_load()
+    local artifact_counts = {
+        { id="enabled", type="check", val=1, def=true },
+        { id="pole_title", type="title", text="ui_mcm_rvm_sorties_rework_artifact_counts_pole_title" },
+    }
+    append(artifact_counts, weights("pole_", {3,4,5}, {35,60,5}))
+    artifact_counts[#artifact_counts + 1] = { id="darkscape_title", type="title", text="ui_mcm_rvm_sorties_rework_artifact_counts_darkscape_title" }
+    append(artifact_counts, weights("darkscape_", {5,6,7,8,9}, {5,20,47,26,2}))
+    artifact_counts[#artifact_counts + 1] = { id="deadcity_title", type="title", text="ui_mcm_rvm_sorties_rework_artifact_counts_deadcity_title" }
+    append(artifact_counts, weights("deadcity_", {4,5,6,7}, {11,80,7,2}))
+
+    local zone_counts = {
+        { id="enabled", type="check", val=1, def=true },
+        { id="pole_title", type="title", text="ui_mcm_rvm_sorties_rework_zone_counts_pole_title" },
+    }
+    append(zone_counts, weights("pole_", {1}, {1}))
+    zone_counts[#zone_counts + 1] = { id="darkscape_title", type="title", text="ui_mcm_rvm_sorties_rework_zone_counts_darkscape_title" }
+    append(zone_counts, weights("darkscape_", {2,3,4}, {1,1,1}))
+    zone_counts[#zone_counts + 1] = { id="deadcity_title", type="title", text="ui_mcm_rvm_sorties_rework_zone_counts_deadcity_title" }
+    append(zone_counts, weights("deadcity_", {1,2,3}, {20,60,20}))
+
+    return { id="rvm_sorties_rework", gr={
+        { id="general", sh=true, gr={
+            { id="enabled", type="check", val=1, def=true },
+            { id="stash_mode", type="list", val=0, def="scouting", content={
+                {"scouting","scouting"}, {"anomaly","anomaly"}, {"disabled","disabled"} } },
+        }},
+        { id="decoys", sh=true, gr={
+            { id="enable_enemy", type="check", val=1, def=true },
+            { id="enable_loot", type="check", val=1, def=true },
+            { id="enable_empty", type="check", val=1, def=true },
+            track("weight_enemy", 0, 100, 1, 50),
+            track("weight_loot", 0, 100, 1, 25),
+            track("weight_empty", 0, 100, 1, 25),
+        }},
+        { id="markers", sh=true, gr={
+            { id="artifact", type="check", val=1, def=false },
+            { id="loot", type="check", val=1, def=false },
+            { id="enemy", type="check", val=1, def=false },
+            { id="remove_on_npc_pickup", type="check", val=1, def=false },
+        }},
+        { id="artifact_pool", sh=true, gr={
+            { id="profile", type="list", val=0, def="weighted", content={
+                {"weighted","weighted"}, {"stock","stock"} } },
+            track("tier1_junk",0,100,1,45), track("tier1_low",0,100,1,45), track("tier1_medium",0,100,1,10), track("tier1_high",0,100,1,0), track("tier1_unique",0,100,1,0),
+            track("tier2_junk",0,100,1,10), track("tier2_low",0,100,1,32), track("tier2_medium",0,100,1,43), track("tier2_high",0,100,1,15), track("tier2_unique",0,100,1,0),
+            track("tier3_junk",0,100,1,2), track("tier3_low",0,100,1,8), track("tier3_medium",0,100,1,43), track("tier3_high",0,100,1,45), track("tier3_unique",0,100,1,2),
+        }},
+        { id="artifact_counts", sh=true, gr=artifact_counts },
+        { id="zone_counts", sh=true, gr=zone_counts },
+        { id="darkscape", sh=true, gr={
+            { id="spawn_timing", type="list", val=0, def="proximity", content={
+                {"proximity","proximity"}, {"start","start"} } },
+        }},
+        { id="schema9", sh=true, gr={
+            { id="enabled", type="check", val=1, def=true },
+            track("server_clearance",0.5,1.0,0.05,0.75),
+            track("online_clearance",0.5,3.0,0.1,1.0),
+            track("position_tolerance",0.1,1.0,0.05,0.35),
+            track("guard_attempts",1,20,1,8),
+        }},
+        { id="advanced", sh=true, gr={ track("update_interval_ms",250,5000,250,1000) }},
+    }}
+end

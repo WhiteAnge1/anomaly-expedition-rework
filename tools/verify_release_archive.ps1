@@ -22,20 +22,19 @@ try {
     $zip = [IO.Compression.ZipFile]::OpenRead($ArchivePath)
     try {
         $entries = @($zip.Entries | Where-Object { $_.Name })
-        if ($entries.Count -lt 140) { throw "Archive manifest too small: $($entries.Count)" }
+        if ($entries.Count -lt 10) { throw "Archive manifest too small: $($entries.Count)" }
         foreach ($entry in $entries) {
             $name = $entry.FullName
             if ($name.Contains('\') -or $name.Contains(':') -or $name.StartsWith('/') -or $name -match '(^|/)\.\.(/|$)') {
                 throw "Unsafe archive path: $name"
             }
-            if ($name -notmatch '^(gamedata|fomod|installer)/') { throw "Unexpected archive root: $name" }
+            if ($name -notmatch '^(gamedata|fomod)/') { throw "Unexpected archive root: $name" }
             if ($name -match '(?i)\.(log|sav|scop|db|bak|tmp)$') { throw "Forbidden runtime artifact: $name" }
         }
         foreach ($required in @('fomod/info.xml','fomod/ModuleConfig.xml','gamedata/scripts/zzz_rvm_sorties_rework.script','gamedata/configs/plugins/rvm_sorties_rework.ltx')) {
             if (-not ($entries.FullName -contains $required)) { throw "Required archive entry missing: $required" }
         }
-        $variantCount = @($entries | Where-Object FullName -Match '^installer/variants/[^/]+/rvm_sorties_rework\.ltx$').Count
-        if ($variantCount -ne 136) { throw "Expected 136 installer variants, found $variantCount" }
+        if (@($entries | Where-Object FullName -Match '^installer/').Count -ne 0) { throw 'Obsolete installer variants found' }
     } finally { $zip.Dispose() }
 
     Expand-Archive -LiteralPath $ArchivePath -DestinationPath $temporary
@@ -67,6 +66,8 @@ try {
     try {
         $env:PYTHONPATH = if ($PythonDeps) { "$luaDeps;$PythonDeps" } else { $luaDeps }
         Invoke-PythonTest 'test_lua51_compile.py' @($temporary)
+        Invoke-PythonTest 'test_mcm_settings.py' @($temporary)
+        Invoke-PythonTest 'test_mcm_localization.py' @($temporary)
         Invoke-PythonTest 'test_artifact_spawn_level_proxy.py' @($temporary)
         Invoke-PythonTest 'test_origin_position_normalization.py' @($temporary)
         Invoke-PythonTest 'test_artifact_count_policy.py' @($temporary)

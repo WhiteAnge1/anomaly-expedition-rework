@@ -1,8 +1,54 @@
 -- Anomaly Expedition Rework by White_Angel
--- Runtime reader for gamedata/configs/plugins/rvm_sorties_rework.ltx.
+-- Unified settings reader. MCM overrides LTX when available; a validated
+-- snapshot keeps one expedition internally consistent across save/load.
 
 local PATH = "plugins\\rvm_sorties_rework.ltx"
+local MCM_ROOT = "rvm_sorties_rework/"
 local cfg = nil
+local active_snapshot = nil
+
+local specs = {
+    ["global/enabled"] = { path="general/enabled", kind="bool" },
+    ["global/stash_mode"] = { path="general/stash_mode", kind="enum", values={ anomaly=true, scouting=true, disabled=true } },
+    ["global/enable_enemy_decoys"] = { path="decoys/enable_enemy", kind="bool" },
+    ["global/enable_loot_decoys"] = { path="decoys/enable_loot", kind="bool" },
+    ["global/enable_empty_decoys"] = { path="decoys/enable_empty", kind="bool" },
+    ["global/weight_enemy"] = { path="decoys/weight_enemy", kind="number", min=0, max=100, integer=true },
+    ["global/weight_loot"] = { path="decoys/weight_loot", kind="number", min=0, max=100, integer=true },
+    ["global/weight_empty"] = { path="decoys/weight_empty", kind="number", min=0, max=100, integer=true },
+    ["global/show_exact_artifact_markers"] = { path="markers/artifact", kind="bool" },
+    ["global/show_exact_loot_markers"] = { path="markers/loot", kind="bool" },
+    ["global/show_exact_enemy_markers"] = { path="markers/enemy", kind="bool" },
+    ["global/remove_on_npc_pickup"] = { path="markers/remove_on_npc_pickup", kind="bool" },
+    ["global/enable_location_artifact_counts"] = { path="artifact_counts/enabled", kind="bool" },
+    ["global/enable_location_zone_counts"] = { path="zone_counts/enabled", kind="bool" },
+    ["global/artifact_proactive_hold"] = { path="schema9/enabled", kind="bool" },
+    ["global/artifact_proactive_clearance"] = { path="schema9/server_clearance", kind="number", min=0.5, max=1.0 },
+    ["global/artifact_online_hold_clearance"] = { path="schema9/online_clearance", kind="number", min=0.5, max=3.0 },
+    ["global/artifact_proactive_position_tolerance"] = { path="schema9/position_tolerance", kind="number", min=0.1, max=1.0 },
+    ["global/artifact_spawn_guard_attempts"] = { path="schema9/guard_attempts", kind="number", min=1, max=20, integer=true },
+    ["global/update_interval_ms"] = { path="advanced/update_interval_ms", kind="number", min=250, max=5000, integer=true },
+    ["artifact_pool/profile"] = { path="artifact_pool/profile", kind="enum", values={ weighted=true, stock=true } },
+    ["level_k01_darkscape/ambush_spawn_timing"] = { path="darkscape/spawn_timing", kind="enum", values={ proximity=true, start=true } },
+}
+
+local distribution_specs = {
+    ["level_y04_pole/artifact_count_weights"] = { path="artifact_counts/pole_", values={3,4,5}, normalize=true },
+    ["level_k01_darkscape/artifact_count_weights"] = { path="artifact_counts/darkscape_", values={5,6,7,8,9}, normalize=true },
+    ["level_l09_deadcity/artifact_count_weights"] = { path="artifact_counts/deadcity_", values={4,5,6,7}, normalize=true },
+    ["level_y04_pole/zone_count_weights"] = { path="zone_counts/pole_", values={1} },
+    ["level_k01_darkscape/zone_count_weights"] = { path="zone_counts/darkscape_", values={2,3,4} },
+    ["level_l09_deadcity/zone_count_weights"] = { path="zone_counts/deadcity_", values={1,2,3} },
+}
+
+local qualities = { "junk", "low", "medium", "high", "unique" }
+for tier = 1, 3 do
+    for _, quality in ipairs(qualities) do
+        local key = "artifact_pool/tier_" .. tostring(tier) .. "_weight_" .. quality
+        specs[key] = { path="artifact_pool/tier" .. tostring(tier) .. "_" .. quality,
+            kind="number", min=0, max=100, integer=true, pool_tier=tier }
+    end
+end
 
 local function split_csv(value)
     local result = {}
@@ -19,21 +65,133 @@ local function has(section, key)
     return cfg and cfg:section_exist(section) and cfg:line_exist(section, key)
 end
 
-local function raw(section, key, default)
+local function ltx_raw(section, key, default)
     if not has(section, key) then return default end
     return cfg:r_string(section, key)
 end
 
-local function number(section, key, default)
-    local value = tonumber(raw(section, key, nil))
-    return value ~= nil and value or default
+local function mcm_get(path)
+    if type(ui_mcm) ~= "table" or type(ui_mcm.get) ~= "function" then return nil end
+    if type(ui_mcm.is_gathering) == "function" then
+        local gathering_ok, gathering = pcall(ui_mcm.is_gathering)
+        if not gathering_ok or gathering then return nil end
+    end
+    local ok, value = pcall(ui_mcm.get, MCM_ROOT .. path)
+    if not ok then return nil end
+    return value
 end
 
-local function boolean(section, key, default)
-    local value = raw(section, key, nil)
-    if value == nil then return default end
-    value = string.lower(tostring(value))
-    return value == "true" or value == "1" or value == "yes" or value == "on"
+local function validate(value, spec)
+    if value == nil or not spec then return nil end
+    if spec.kind == "bool" then
+        if type(value) == "boolean" then return value end
+        local text = string.lower(tostring(value))
+        if text == "true" or text == "1" or text == "yes" or text == "on" then return true end
+        if text == "false" or text == "0" or text == "no" or text == "off" then return false end
+        return nil
+    elseif spec.kind == "number" then
+        local number_value = tonumber(value)
+        if not number_value then return nil end
+        if spec.min and number_value < spec.min then return nil end
+        if spec.max and number_value > spec.max then return nil end
+        if spec.integer and number_value ~= math.floor(number_value) then return nil end
+        return number_value
+    elseif spec.kind == "enum" then
+        local text = string.lower(tostring(value))
+        return spec.values[text] and text or nil
+    end
+    return nil
+end
+
+local function snapshot_value(section, key)
+    if type(active_snapshot) ~= "table" or type(active_snapshot.values) ~= "table" then return nil, false end
+    local marker = active_snapshot.values[section .. "/" .. key]
+    if type(marker) == "table" and marker.present then return marker.value, true end
+    return nil, true
+end
+
+local function effective(section, key, default)
+    local snap, snapshot_active = snapshot_value(section, key)
+    if snapshot_active then
+        if snap ~= nil then return snap end
+        return ltx_raw(section, key, default)
+    end
+    local spec = specs[section .. "/" .. key]
+    local override = spec and validate(mcm_get(spec.path), spec) or nil
+    if override ~= nil then return override end
+    return ltx_raw(section, key, default)
+end
+
+local function normalize_percent(values, allow_zero)
+    local total = 0
+    for _, value in ipairs(values) do
+        if not value or value < 0 then return nil end
+        total = total + value
+    end
+    if total <= 0 then return nil end
+    local result, fractions, assigned = {}, {}, 0
+    for index, value in ipairs(values) do
+        local exact = value * 100 / total
+        result[index] = math.floor(exact)
+        fractions[index] = { index=index, fraction=exact-result[index] }
+        assigned = assigned + result[index]
+    end
+    table.sort(fractions, function(a, b)
+        if a.fraction == b.fraction then return a.index < b.index end
+        return a.fraction > b.fraction
+    end)
+    for index = 1, 100 - assigned do result[fractions[index].index] = result[fractions[index].index] + 1 end
+    if not allow_zero then
+        for _, value in ipairs(result) do if value <= 0 then return nil end end
+    end
+    return result
+end
+
+local function distribution_override(section, key)
+    local spec = distribution_specs[section .. "/" .. key]
+    if not spec then return nil end
+    local values = {}
+    for index, count in ipairs(spec.values) do
+        local value = tonumber(mcm_get(spec.path .. tostring(count)))
+        if not value or value < 1 or value > 100 or value ~= math.floor(value) then return nil end
+        values[index] = value
+    end
+    return spec.normalize and normalize_percent(values, false) or values
+end
+
+local function list_to_strings(values)
+    local result = {}
+    for index, value in ipairs(values or {}) do result[index] = tostring(value) end
+    return result
+end
+
+local function capture(values, section, key, value)
+    values[section .. "/" .. key] = { present=true, value=value }
+end
+
+local function validate_snapshot_groups(values)
+    local decoy_total = 0
+    for _, name in ipairs({ "enemy", "loot", "empty" }) do
+        local enabled_value = values["global/enable_" .. name .. "_decoys"]
+        local weight_value = values["global/weight_" .. name]
+        if enabled_value and enabled_value.value == true and weight_value then decoy_total = decoy_total + weight_value.value end
+    end
+    if decoy_total <= 0 then
+        for _, name in ipairs({ "enemy", "loot", "empty" }) do values["global/weight_" .. name] = nil end
+    end
+    for tier = 1, 3 do
+        local raw_weights, keys = {}, {}
+        for index, quality in ipairs(qualities) do
+            keys[index] = "artifact_pool/tier_" .. tostring(tier) .. "_weight_" .. quality
+            raw_weights[index] = values[keys[index]] and values[keys[index]].value or nil
+        end
+        local normalized = normalize_percent(raw_weights, true)
+        if normalized then
+            for index, key in ipairs(keys) do values[key].value = normalized[index] end
+        else
+            for _, key in ipairs(keys) do values[key] = nil end
+        end
+    end
 end
 
 function reload()
@@ -41,20 +199,61 @@ function reload()
     return cfg ~= nil
 end
 
+function build_snapshot(level_name)
+    local values = {}
+    for compound, spec in pairs(specs) do
+        local separator = string.find(compound, "/", 1, true)
+        local section, key = string.sub(compound, 1, separator - 1), string.sub(compound, separator + 1)
+        local value = validate(mcm_get(spec.path), spec)
+        if value ~= nil then capture(values, section, key, value) end
+    end
+    for compound, _ in pairs(distribution_specs) do
+        local separator = string.find(compound, "/", 1, true)
+        local section, key = string.sub(compound, 1, separator - 1), string.sub(compound, separator + 1)
+        local value = distribution_override(section, key)
+        if value then capture(values, section, key, table.concat(value, ",")) end
+    end
+    validate_snapshot_groups(values)
+    return { version=1, level_name=tostring(level_name or ""), values=values }
+end
+
+function activate_snapshot(snapshot)
+    if type(snapshot) == "table" and tonumber(snapshot.version) == 1 and type(snapshot.values) == "table" then
+        active_snapshot = snapshot
+        return true
+    end
+    active_snapshot = nil
+    return false
+end
+
+function clear_snapshot()
+    active_snapshot = nil
+end
+
 function get_string(section, key, default)
-    return raw(section, key, default)
+    local value = effective(section, key, default)
+    return value ~= nil and tostring(value) or default
 end
 
 function get_number(section, key, default)
-    return number(section, key, default)
+    local value = tonumber(effective(section, key, nil))
+    return value ~= nil and value or default
 end
 
 function get_bool(section, key, default)
-    return boolean(section, key, default)
+    local value = effective(section, key, nil)
+    if value == nil then return default end
+    if type(value) == "boolean" then return value end
+    value = string.lower(tostring(value))
+    return value == "true" or value == "1" or value == "yes" or value == "on"
 end
 
 function get_list(section, key)
-    return split_csv(raw(section, key, ""))
+    local snap, snapshot_active = snapshot_value(section, key)
+    if snapshot_active then return split_csv(snap ~= nil and tostring(snap) or ltx_raw(section, key, "")) end
+    local override = distribution_override(section, key)
+    if override then return list_to_strings(override) end
+    return split_csv(ltx_raw(section, key, ""))
 end
 
 function get_level_tier(level_name)
@@ -62,27 +261,23 @@ function get_level_tier(level_name)
         local sim = raid_utils.get_raid_sim(level_name)
         if sim and sim.level_tier then return sim.level_tier end
     end
-    local level_section = "level_" .. tostring(level_name)
-    return math.floor(number(level_section, "tier", 1))
+    return math.floor(get_number("level_" .. tostring(level_name), "tier", 1))
 end
 
--- Hierarchy: global -> tier_N -> level_<technical id>.
 function get_balanced(level_name, key, default)
-    local value = number("global", key, default)
+    local value = get_number("global", key, default)
     local tier = get_level_tier(level_name)
-    value = number("tier_" .. tostring(tier), key, value)
-    value = number("level_" .. tostring(level_name), key, value)
+    value = get_number("tier_" .. tostring(tier), key, value)
+    value = get_number("level_" .. tostring(level_name), key, value)
     return value
 end
 
 function get_balanced_string(level_name, key, default)
-    local value = raw("global", key, default)
+    local value = get_string("global", key, default)
     local tier = get_level_tier(level_name)
-    if has("tier_" .. tostring(tier), key) then
-        value = raw("tier_" .. tostring(tier), key, value)
-    end
-    if has("level_" .. tostring(level_name), key) then
-        value = raw("level_" .. tostring(level_name), key, value)
+    if has("tier_" .. tostring(tier), key) then value = get_string("tier_" .. tostring(tier), key, value) end
+    if has("level_" .. tostring(level_name), key) or specs["level_" .. tostring(level_name) .. "/" .. key] then
+        value = get_string("level_" .. tostring(level_name), key, value)
     end
     return value
 end
@@ -90,12 +285,8 @@ end
 function get_balanced_list(level_name, key)
     local result = get_list("global", key)
     local tier = get_level_tier(level_name)
-    if has("tier_" .. tostring(tier), key) then
-        result = get_list("tier_" .. tostring(tier), key)
-    end
-    if has("level_" .. tostring(level_name), key) then
-        result = get_list("level_" .. tostring(level_name), key)
-    end
+    if has("tier_" .. tostring(tier), key) then result = get_list("tier_" .. tostring(tier), key) end
+    if has("level_" .. tostring(level_name), key) then result = get_list("level_" .. tostring(level_name), key) end
     return result
 end
 

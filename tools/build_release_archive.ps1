@@ -14,7 +14,7 @@ if (Test-Path -LiteralPath $archivePath) { Remove-Item -LiteralPath $archivePath
 if (Test-Path -LiteralPath $checksumPath) { Remove-Item -LiteralPath $checksumPath -Force }
 
 $relativeFiles = New-Object System.Collections.Generic.List[string]
-foreach ($relativeRoot in @('gamedata','fomod','installer')) {
+foreach ($relativeRoot in @('gamedata','fomod')) {
     $sourceRoot = Join-Path $ModRoot $relativeRoot
     if (-not (Test-Path -LiteralPath $sourceRoot -PathType Container)) { throw "Missing package root: $relativeRoot" }
     foreach ($file in Get-ChildItem -LiteralPath $sourceRoot -Recurse -File) {
@@ -23,7 +23,7 @@ foreach ($relativeRoot in @('gamedata','fomod','installer')) {
     }
 }
 $relativeFiles = @($relativeFiles | Sort-Object -Unique)
-if ($relativeFiles.Count -lt 140) { throw "Unexpectedly small package manifest: $($relativeFiles.Count) files" }
+if ($relativeFiles.Count -lt 10) { throw "Unexpectedly small package manifest: $($relativeFiles.Count) files" }
 
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem

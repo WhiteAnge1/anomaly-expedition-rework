@@ -13,6 +13,7 @@ $failures = [System.Collections.Generic.List[string]]::new()
 
 $required = @(
     'gamedata\scripts\rvm_sorties_config.script',
+    'gamedata\scripts\rvm_sorties_mcm.script',
     'gamedata\scripts\rvm_sorties_artifact_pool.script',
     'gamedata\scripts\zzz_rvm_sorties_rework.script',
     'gamedata\scripts\modxml_rvm_sorties_map_spots.script',
@@ -20,6 +21,8 @@ $required = @(
     'gamedata\configs\mod_system_rvm_sorties_squads.ltx',
     'gamedata\configs\ui\map_spots_rvm_sorties.xml',
     'gamedata\configs\text\rus\st_rvm_sorties_rework.xml',
+    'gamedata\configs\text\rus\st_rvm_sorties_mcm.xml',
+    'gamedata\configs\text\eng\st_rvm_sorties_mcm.xml',
     'fomod\info.xml',
     'fomod\ModuleConfig.xml',
     'tools\generate_fomod.ps1',
@@ -33,6 +36,8 @@ $required = @(
     'docs\ARTIFACT-COUNT-OPTIONS.md',
     'docs\RELEASE-CHECKLIST.md',
     'docs\PUBLIC-CONFIG-AUDIT-2026-10-21.md',
+    'docs\MCM-IMPACT-DESIGN.md',
+    'docs\MCM-STATIC-REPORT-2026-10-22.md',
     'docs\FOMOD-MATRIX-PROPOSAL.md',
     'docs\GITHUB-README-OUTLINE.md',
     'docs\RC-STAGING-0.3.0-rc1.md',
@@ -56,6 +61,8 @@ $required = @(
     'tools\test_xray_main_chunk_locals.py',
     'tools\test_startup_generation_path.py',
     'tools\test_lua51_compile.py',
+    'tools\test_mcm_settings.py',
+    'tools\test_mcm_localization.py',
     'tools\test_artifact_spawn_level_proxy.py',
     'tools\test_origin_position_normalization.py',
     'docs\ARTIFACT-RESCUE-DESIGN.md',
@@ -97,6 +104,13 @@ foreach ($needle in @(
 }
 foreach ($needle in @('raid_anomalys.spawn_artefact_in_zone','actor_on_item_take','npc_on_item_take','save_state','load_state','on_before_level_changing')) {
     if (-not $main.Contains($needle)) { $failures.Add("main hook missing: $needle") }
+}
+foreach ($needle in @('settings_snapshot = nil','C.build_snapshot(level.name())','C.activate_snapshot(state.settings_snapshot)','C.clear_snapshot()','settings snapshot migrated','refresh_artifact_pool_context')) {
+    if (-not $main.Contains($needle)) { $failures.Add("MCM snapshot lifecycle missing: $needle") }
+}
+$configRuntime = Get-Content -LiteralPath (Join-Path $ModRoot 'gamedata\scripts\rvm_sorties_config.script') -Raw
+foreach ($needle in @('MCM_ROOT = "rvm_sorties_rework/"','pcall(ui_mcm.get','function build_snapshot(level_name)','function activate_snapshot(snapshot)','normalize_percent','ltx_raw')) {
+    if (-not $configRuntime.Contains($needle)) { $failures.Add("MCM effective settings layer missing: $needle") }
 }
 foreach ($needle in @('rvm_sorties_artifact_pool.create_context','rvm_sorties_artifact_pool.choose','rvm_sorties_artifact_pool.call_with_override','artifact pool restoration failed','full stock selector fallback enabled')) {
     if (-not $main.Contains($needle)) { $failures.Add("weighted artifact pool integration missing: $needle") }
@@ -264,6 +278,8 @@ foreach ($forbidden in @('simk_card','artifact_container')) {
 
 [xml](Get-Content -LiteralPath (Join-Path $ModRoot 'fomod\info.xml') -Raw -Encoding UTF8) | Out-Null
 [xml](Get-Content -LiteralPath (Join-Path $ModRoot 'fomod\ModuleConfig.xml') -Raw -Encoding UTF8) | Out-Null
+[xml](Get-Content -LiteralPath (Join-Path $ModRoot 'gamedata\configs\text\rus\st_rvm_sorties_mcm.xml') -Raw -Encoding UTF8) | Out-Null
+[xml](Get-Content -LiteralPath (Join-Path $ModRoot 'gamedata\configs\text\eng\st_rvm_sorties_mcm.xml') -Raw -Encoding UTF8) | Out-Null
 $fomod = Get-Content -LiteralPath (Join-Path $ModRoot 'fomod\info.xml') -Raw -Encoding UTF8
 if (-not $fomod.Contains('[Геймплей] Anomaly Expedition Rework by White_Angel v0.3.0-rc1')) { $failures.Add('FOMOD display name must include category and version') }
 $stringsPath = Join-Path $ModRoot 'gamedata\configs\text\rus\st_rvm_sorties_rework.xml'
@@ -339,6 +355,15 @@ foreach ($needle in @('T2','radius/5','T3','radius/10','proactive artifact hold'
 if ($BuildModsRoot) {
     if (-not (Test-Path -LiteralPath $BuildModsRoot)) { $failures.Add("build mods root missing: $BuildModsRoot") }
     else {
+        $mcmCore = Get-ChildItem -LiteralPath $BuildModsRoot -Recurse -File -Filter 'ui_mcm.script' |
+            Where-Object { $_.FullName -match 'Anomaly-MCM' } | Select-Object -First 1
+        if (-not $mcmCore) { $failures.Add('installed Anomaly-MCM ui_mcm.script not found') }
+        else {
+            $mcmCoreText = Get-Content -LiteralPath $mcmCore.FullName -Raw
+            foreach ($needle in @('function get(id)','function is_gathering()','ui_mcm.get() cannot be called during script load or on_mcm_load()','function get_opt_table(id)','_desc')) {
+                if (-not $mcmCoreText.Contains($needle)) { $failures.Add("installed MCM API mismatch: $needle") }
+            }
+        }
         $lootSections = [regex]::Matches($ltx, '(?m)^loot_(?:medicine|ordinary|fragments|valuable|rare_non_artifact)\s*=\s*([^;\r\n]+)') |
             ForEach-Object { $_.Groups[1].Value -split ',' } |
             ForEach-Object { $_.Trim() } |
@@ -400,6 +425,10 @@ if ($Profile -eq 'full' -or $Profile -eq 'fast') {
             $env:PYTHONPATH = $LuaRuntimeDeps
             python (Join-Path $ModRoot 'tools\test_lua51_compile.py') $ModRoot
             if ($LASTEXITCODE -ne 0) { $failures.Add('Lua 5.1/LuaJIT compile failed') }
+            python (Join-Path $ModRoot 'tools\test_mcm_settings.py') $ModRoot
+            if ($LASTEXITCODE -ne 0) { $failures.Add('MCM settings regression failed') }
+            python (Join-Path $ModRoot 'tools\test_mcm_localization.py') $ModRoot
+            if ($LASTEXITCODE -ne 0) { $failures.Add('MCM localization regression failed') }
             python (Join-Path $ModRoot 'tools\test_artifact_spawn_level_proxy.py') $ModRoot
             if ($LASTEXITCODE -ne 0) { $failures.Add('artifact spawn level proxy regression failed') }
             python (Join-Path $ModRoot 'tools\test_origin_position_normalization.py') $ModRoot

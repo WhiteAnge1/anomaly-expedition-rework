@@ -106,6 +106,7 @@ local function fresh_state()
         sortie_type = nil,
         pending_transition = false,
         transition_from_level = nil,
+        settings_snapshot = nil,
         start_pos = nil,
         zones = {},
         artifact_zone = {},
@@ -3687,6 +3688,7 @@ function cleanup(reason)
         release_anchor(zone)
     end
     cleanup_stashes()
+    C.clear_snapshot()
     state = fresh_state()
     artifact_center_failures = {}
     reported_artifact_overlaps = {}
@@ -5033,6 +5035,15 @@ end
 
 local function prepare_sortie(sortie_type)
     if state.level_name and (state.level_name ~= level.name() or state.sortie_type ~= sortie_type) then cleanup("new_sortie") end
+    if not state.level_name or type(state.settings_snapshot) ~= "table" then
+        state.settings_snapshot = C.build_snapshot(level.name())
+        C.activate_snapshot(state.settings_snapshot)
+        if RVM_SORTIES_PROACTIVE.refresh_artifact_pool_context then
+            RVM_SORTIES_PROACTIVE.refresh_artifact_pool_context()
+        end
+        printf(PREFIX .. " settings snapshot created source=mcm_or_ltx version=%s level=%s",
+            tostring(state.settings_snapshot.version), tostring(level.name()))
+    end
     state.level_name = level.name()
     state.sortie_type = sortie_type
     state.start_capture_after = time_global() + 1200
@@ -5271,26 +5282,29 @@ local function install_hooks()
         printf(PREFIX .. " ERROR proactive artifact binder net_spawn unavailable; first-update fallback retained")
     end
 
-    artifact_pool_context = {
-        profile = string.lower(C.get_string("artifact_pool", "profile", "weighted")),
-        enabled = false, reason = "module_unavailable", error_reported = false,
-    }
-    if type(rvm_sorties_artifact_pool) == "table" and type(rvm_sorties_artifact_pool.create_context) == "function" then
-        local context_ok, context_or_error = pcall(rvm_sorties_artifact_pool.create_context,
-            raid_artefacts and raid_artefacts.spawn_artefact_in_zone,
-            raid_artefacts and raid_artefacts.raid_artefacts_tiers_by_dop,
-            function(section) return ini_sys and ini_sys:section_exist(section) end, C)
-        if context_ok and type(context_or_error) == "table" then
-            artifact_pool_context = context_or_error
-        else
-            artifact_pool_context.reason = "context_error:" .. tostring(context_or_error)
+    RVM_SORTIES_PROACTIVE.refresh_artifact_pool_context = function()
+        artifact_pool_context = {
+            profile = string.lower(C.get_string("artifact_pool", "profile", "weighted")),
+            enabled = false, reason = "module_unavailable", error_reported = false,
+        }
+        if type(rvm_sorties_artifact_pool) == "table" and type(rvm_sorties_artifact_pool.create_context) == "function" then
+            local context_ok, context_or_error = pcall(rvm_sorties_artifact_pool.create_context,
+                raid_artefacts and raid_artefacts.spawn_artefact_in_zone,
+                raid_artefacts and raid_artefacts.raid_artefacts_tiers_by_dop,
+                function(section) return ini_sys and ini_sys:section_exist(section) end, C)
+            if context_ok and type(context_or_error) == "table" then
+                artifact_pool_context = context_or_error
+            else
+                artifact_pool_context.reason = "context_error:" .. tostring(context_or_error)
+            end
+        end
+        if artifact_pool_context.profile ~= "stock" and not artifact_pool_context.enabled then
+            artifact_pool_context.error_reported = true
+            printf(PREFIX .. " ERROR artifact pool disabled reason=%s; full stock selector fallback enabled",
+                tostring(artifact_pool_context.reason))
         end
     end
-    if artifact_pool_context.profile ~= "stock" and not artifact_pool_context.enabled then
-        artifact_pool_context.error_reported = true
-        printf(PREFIX .. " ERROR artifact pool disabled reason=%s; full stock selector fallback enabled",
-            tostring(artifact_pool_context.reason))
-    end
+    RVM_SORTIES_PROACTIVE.refresh_artifact_pool_context()
 
     if raid_anomalys and type(raid_anomalys.spawner_anomals_zones) == "function" then
         local base_spawner = raid_anomalys.spawner_anomals_zones
@@ -6165,6 +6179,14 @@ local function load_state(m_data)
     state.provenance_next_save_log_at = 0
     state.pending_transition = state.pending_transition == true
     state.transition_from_level = state.transition_from_level or nil
+    if not C.activate_snapshot(state.settings_snapshot) and state.level_name then
+        state.settings_snapshot = C.build_snapshot(state.level_name)
+        C.activate_snapshot(state.settings_snapshot)
+        printf(PREFIX .. " settings snapshot migrated source=mcm_or_ltx level=%s", tostring(state.level_name))
+    end
+    if RVM_SORTIES_PROACTIVE.refresh_artifact_pool_context then
+        RVM_SORTIES_PROACTIVE.refresh_artifact_pool_context()
+    end
     for _, zone in pairs(state.zones) do
         if zone.kind == "enemy" then
             zone.member_ids = zone.member_ids or zone.spawned_ids or {}
