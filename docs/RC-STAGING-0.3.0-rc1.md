@@ -9,6 +9,8 @@ This repository tree is the release-candidate staging source. No final ZIP, Git 
 - 136 complete configs: `installer/variants/`;
 - deterministic generator: `tools/generate_fomod.ps1`;
 - matrix validator: `tools/test_fomod.ps1`.
+- reproducible ZIP builder: `tools/build_release_archive.ps1`;
+- clean-extraction verifier: `tools/verify_release_archive.ps1`.
 
 The eventual archive root must contain `gamedata`, `fomod` and `installer` directly. Development documents, tests, `.git`, evidence logs and local dependencies are not runtime payload and must be excluded by the later archive builder.
 
