@@ -2,6 +2,8 @@
 
 ## Обязательные блокеры публичного релиза
 
+- [ ] Владелец утвердил public config/FOMOD решения из `docs/PUBLIC-CONFIG-AUDIT-2026-10-21.md` и `docs/FOMOD-MATRIX-PROPOSAL.md`: Recommended/Observe-only `debug_mode=off`, Diagnostic `on`, schema 9 и weighted во всех профилях; отдельно выбран default legacy `artifact_rescue_actions` и upgrade policy полного LTX.
+
 - [x] Proactive artifact hold принят серией из пяти weighted-рейдов: T2 `7/6/7`, T1 `4`, T3 `5`. Все 29 exact ID дали ровно один `lift verified=true -> held clearance=1 -> release -> closed`; два same-level reload сохранили зоны, duplicate create/net-spawn, online teleport, `__eq`, unresolved и AER errors отсутствуют. Полный аудит: `docs/FIELD-TEST-2026-10-21-SCHEMA9-WEIGHTED-FIVE-RAID-PASS.md`.
 
 - [x] Подготовлено и статически проверяется отдельное руководство `docs/DEBUG-GUIDE.md` для пользователя и тестировщика по всем возможностям debug-режима.
@@ -29,6 +31,11 @@
 - [x] В forced-empty T1/T2/T3 подтверждены captured/created counts и допустимое перекрытие истинных областей; отдельный T2 `7/8+2` документирован как доказанный world-origin `invalid_vertex:60`, а не потеря callback.
 - [x] Утверждены и реализованы переменные локационные распределения настоящих артефактов: Поляна `3/4/5 = 35/60/5%`, Лощина `5/6/7/8/9 = 5/20/47/26/2%`, Мёртвый город `4/5/6/7 = 11/80/7/2%`. Lua 5.1/LuaJIT regression проверяет support/веса/средние, один сохранённый roll, stock fallback, восстановление upvalue при success/error, unique IDs и независимость decoys.
 - [ ] Полевым normal debug-off прогоном подтвердить новый roll, `requested=created=captured=linked`, отсутствие повторного spawn после save/load/same-level и независимый decoy count.
+
+- [ ] Smoke A — чистая ручная установка будущего архива в новый MO2-мод: Recommended + exact markers All, `debug_mode=off`; одна новая T2 проверяет effective debug false, нетехнические exact hints у присутствующих типов, schema-9/weighted startup и обычный выход.
+- [ ] Smoke B — ручное обновление/переустановка тем же архивом: Recommended + exact markers None, `debug_mode=off`; существующее убежище + одна новая короткая вылазка + save/load подтверждают отсутствие exact markers/технического текста, отсутствие повторного roll/spawn и сохранение выбранной upgrade policy.
+- [ ] FOMOD реализован только полными проверенными LTX-вариантами по утверждённой матрице; partial overlays/merge отсутствуют, все 17 вариантов проходят config/static validation.
+- [ ] GitHub README собран по `docs/GITHUB-README-OUTLINE.md`; добавлены license/attribution, known limitation #5, update/rollback, SHA verification и support template.
 - [x] Зафиксировано продуктовое решение не добавлять координатные границы карты в artifact rescue. Известное редкое ограничение описано: пока физически недоступный артефакт остаётся внутри связанного круга, rescue не срабатывает; обычный rolling-path применим после устойчивого выхода за `radius + 5 м`.
 
 ## Уже подтверждено полем
