@@ -29,6 +29,7 @@ $required = @(
     'docs\RELEASE-CHECKLIST.md',
     'docs\ROADMAP-TO-RELEASE.md',
     'docs\FIELD-TEST-PROACTIVE-HOLD.md',
+    'docs\FIELD-TEST-2026-10-21-COMPILE-FAIL.md',
     'tools\watch_live_log.ps1',
     'tools\watch_live_log.cmd',
     'tools\test_loot_policy.ps1',
@@ -39,6 +40,8 @@ $required = @(
     'tools\test_artifact_count_policy.py',
     'tools\test_artifact_pool.py',
     'tools\test_artifact_proactive_hold.py',
+    'tools\test_xray_main_chunk_locals.py',
+    'tools\test_startup_generation_path.py',
     'tools\test_lua51_compile.py',
     'tools\test_artifact_spawn_level_proxy.py',
     'tools\test_origin_position_normalization.py',
@@ -393,6 +396,10 @@ if ($Profile -eq 'full' -or $Profile -eq 'fast') {
             if ($LASTEXITCODE -ne 0) { $failures.Add('artifact family x quality pool regression failed') }
             python (Join-Path $ModRoot 'tools\test_artifact_proactive_hold.py') $ModRoot
             if ($LASTEXITCODE -ne 0) { $failures.Add('artifact proactive hold lifecycle policy test failed') }
+            python (Join-Path $ModRoot 'tools\test_xray_main_chunk_locals.py') $ModRoot
+            if ($LASTEXITCODE -ne 0) { $failures.Add('X-Ray main-chunk local variable budget exceeded') }
+            python (Join-Path $ModRoot 'tools\test_startup_generation_path.py') $ModRoot
+            if ($LASTEXITCODE -ne 0) { $failures.Add('startup-to-generation path regression failed') }
         } finally {
             $env:PYTHONPATH = $savedPythonPath
         }

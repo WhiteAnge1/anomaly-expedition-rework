@@ -30,7 +30,10 @@ local ARTIFACT_RESCUE_DEBUG_IDS = { [1407] = true, [6362] = true }
 local release_held_stabilization = nil
 local release_all_held_stabilizations = nil
 local attempt_held_stabilization = nil
-local PROACTIVE = {}
+-- Deliberately global: X-Ray rejects the main chunk when it contains more than
+-- 200 local variables. Keep this collision-resistant namespace out of that
+-- finite local-variable budget.
+RVM_SORTIES_PROACTIVE = RVM_SORTIES_PROACTIVE or {}
 local saved_origin_evidence_valid = nil
 local ORIGIN = {}
 
@@ -1072,7 +1075,7 @@ local function terminal_provenance(record, terminal, reason, snapshot)
         end
     end
     if record.lifecycle == "proactive" then
-        local released_ok, released_error = pcall(PROACTIVE.release,
+        local released_ok, released_error = pcall(RVM_SORTIES_PROACTIVE.release,
             record, nil, "terminal_" .. tostring(terminal) .. ":" .. tostring(reason))
         if not released_ok then
             printf(PREFIX .. " ERROR proactive hold terminal release failed id=%s terminal=%s error=%s",
@@ -1210,7 +1213,7 @@ local function capture_artifact_provenance(artifact_id, anom_zone, pos, level_ti
         provenance_log("observing_server", record, nil, record.reason)
     end
     if proactive then
-        local hold_ok, hold_error = pcall(PROACTIVE.hold_attempt, record, "capture", nil, nil)
+        local hold_ok, hold_error = pcall(RVM_SORTIES_PROACTIVE.hold_attempt, record, "capture", nil, nil)
         if not hold_ok then
             proactive.state = "unresolved"
             proactive.reason = "capture_exception:" .. tostring(hold_error)
@@ -1854,13 +1857,13 @@ local function read_physics_velocity(shell, angular)
 end
 
 -- PROACTIVE_HOLD_BEGIN
-function PROACTIVE.indices_text(indices)
+function RVM_SORTIES_PROACTIVE.indices_text(indices)
     local values = {}
     for _, index in ipairs(indices or {}) do values[#values + 1] = tostring(index) end
     return #values > 0 and table.concat(values, ",") or "none"
 end
 
-function PROACTIVE.position_safe(record, online)
+function RVM_SORTIES_PROACTIVE.position_safe(record, online)
     local lifecycle = record and record.proactive
     local target = lifecycle and lifecycle.target
     local current = safe_object_position(online)
@@ -1891,7 +1894,7 @@ function PROACTIVE.position_safe(record, online)
     return safe, reason, current, dxz, dy, clearance, fresh_surface.lvid, vertex_delta_y
 end
 
-function PROACTIVE.shell_still_fixed(record, online)
+function RVM_SORTIES_PROACTIVE.shell_still_fixed(record, online)
     local lifecycle = record and record.proactive
     if not (lifecycle and lifecycle.state == "held_accessible") then return false end
     local shell_ok, shell = pcall(function() return online:get_physics_shell() end)
@@ -1911,7 +1914,7 @@ function PROACTIVE.shell_still_fixed(record, online)
     return #(lifecycle.fixed_indices or {}) > 0 or #(lifecycle.foreign_fixed_indices or {}) > 0
 end
 
-function PROACTIVE.zero_velocity(shell)
+function RVM_SORTIES_PROACTIVE.zero_velocity(shell)
     local zero = vector():set(0, 0, 0)
     local applied = {}
     for _, name in ipairs({ "set_linear_vel", "set_angular_vel" }) do
@@ -1924,7 +1927,7 @@ function PROACTIVE.zero_velocity(shell)
     return applied
 end
 
-function PROACTIVE.release(record, online, reason)
+function RVM_SORTIES_PROACTIVE.release(record, online, reason)
     local lifecycle = record and record.proactive
     if not lifecycle or lifecycle.hold_required == false then return true end
     local owned = lifecycle.fixed_indices or {}
@@ -1968,8 +1971,8 @@ function PROACTIVE.release(record, online, reason)
         end
     end
     release_log("artifact proactive release id=%s reason=%s owned_indices=%s released=%s foreign_preserved=%s failures=%s",
-        tostring(record.artifact_id), tostring(reason), PROACTIVE.indices_text(owned),
-        PROACTIVE.indices_text(released), PROACTIVE.indices_text(lifecycle.foreign_fixed_indices),
+        tostring(record.artifact_id), tostring(reason), RVM_SORTIES_PROACTIVE.indices_text(owned),
+        RVM_SORTIES_PROACTIVE.indices_text(released), RVM_SORTIES_PROACTIVE.indices_text(lifecycle.foreign_fixed_indices),
         #failures > 0 and table.concat(failures, "|") or "none")
     if #failures > 0 then
         lifecycle.state = "unresolved"
@@ -1987,7 +1990,7 @@ function PROACTIVE.release(record, online, reason)
     return true
 end
 
-function PROACTIVE.hold_attempt(record, source, supplied_online, binder_token)
+function RVM_SORTIES_PROACTIVE.hold_attempt(record, source, supplied_online, binder_token)
     local lifecycle = record and record.proactive
     if not (record and record.lifecycle == "proactive" and lifecycle and lifecycle.hold_required ~= false) then
         return false, "not_proactive"
@@ -2024,12 +2027,12 @@ function PROACTIVE.hold_attempt(record, source, supplied_online, binder_token)
     local parent_ok, parent = pcall(function() return online:parent() end)
     local parent_id = parent_ok and safe_object_id_any(parent) or nil
     if parent_id ~= nil and parent_id ~= 65535 then
-        PROACTIVE.release(record, online, "ownership_before_hold")
+        RVM_SORTIES_PROACTIVE.release(record, online, "ownership_before_hold")
         record.state = "owned"
         record.reason = "ownership_before_hold"
         return true, "owned"
     end
-    local position_ok, position_reason, current, dxz, dy, clearance = PROACTIVE.position_safe(record, online)
+    local position_ok, position_reason, current, dxz, dy, clearance = RVM_SORTIES_PROACTIVE.position_safe(record, online)
     if not position_ok then
         lifecycle.state = "unresolved"
         lifecycle.reason = position_reason
@@ -2043,7 +2046,7 @@ function PROACTIVE.hold_attempt(record, source, supplied_online, binder_token)
         end
         return false, position_reason
     end
-    if PROACTIVE.shell_still_fixed(record, online) then
+    if RVM_SORTIES_PROACTIVE.shell_still_fixed(record, online) then
         lifecycle.runtime_binder_token = binder_token or lifecycle.runtime_binder_token
         return true, "already_held"
     end
@@ -2091,7 +2094,7 @@ function PROACTIVE.hold_attempt(record, source, supplied_online, binder_token)
             owned_elements[#owned_elements + 1] = { index = index, element = element }
         end
     end
-    local zero_methods = PROACTIVE.zero_velocity(shell)
+    local zero_methods = RVM_SORTIES_PROACTIVE.zero_velocity(shell)
     local failures = {}
     for _, candidate in ipairs(owned_elements) do
         local fix_ok, fix_error = pcall(function() candidate.element:fix() end)
@@ -2114,7 +2117,7 @@ function PROACTIVE.hold_attempt(record, source, supplied_online, binder_token)
         return false, lifecycle.reason
     end
     local post_ok, post_reason, post, post_dxz, post_dy, post_clearance, post_lvid, post_vertex_dy =
-        PROACTIVE.position_safe(record, online)
+        RVM_SORTIES_PROACTIVE.position_safe(record, online)
     if not post_ok then
         for _, candidate in ipairs(owned_elements) do
             pcall(function() candidate.element:release_fixed() end)
@@ -2140,7 +2143,7 @@ function PROACTIVE.hold_attempt(record, source, supplied_online, binder_token)
     local after_angular = read_physics_velocity(shell, true)
     release_log("artifact proactive held id=%s source=%s elements=%s own_fixed=%s foreign_fixed=%s zero_methods=%s before_linear=(%s) before_angular=(%s) after_linear=(%s) after_angular=(%s) post=(%s) target=(%s) dxz=%s dy=%s clearance=%s vertex=%s vertex_dy=%s",
         tostring(record.artifact_id), tostring(source), tostring(element_count),
-        PROACTIVE.indices_text(lifecycle.fixed_indices), PROACTIVE.indices_text(lifecycle.foreign_fixed_indices),
+        RVM_SORTIES_PROACTIVE.indices_text(lifecycle.fixed_indices), RVM_SORTIES_PROACTIVE.indices_text(lifecycle.foreign_fixed_indices),
         #zero_methods > 0 and table.concat(zero_methods, ",") or "fix_authoritative",
         fmt_position(before_linear), fmt_position(before_angular), fmt_position(after_linear), fmt_position(after_angular),
         fmt_position(post), fmt_position(lifecycle.target and lifecycle.target.pos), fmt_number(post_dxz),
@@ -2148,7 +2151,7 @@ function PROACTIVE.hold_attempt(record, source, supplied_online, binder_token)
     return true, "held_accessible"
 end
 
-function PROACTIVE.maintain(record, snapshot, now)
+function RVM_SORTIES_PROACTIVE.maintain(record, snapshot, now)
     local lifecycle = record and record.proactive
     if not (record and record.lifecycle == "proactive" and lifecycle) then return false end
     if lifecycle.hold_required == false or record.state == "closed" or record.state == "released"
@@ -2156,7 +2159,7 @@ function PROACTIVE.maintain(record, snapshot, now)
     local parent_id = snapshot and (snapshot.online_parent_id or snapshot.parent_id) or nil
     if parent_id ~= nil and parent_id ~= 65535 then
         local online_ok, online = pcall(function() return level.object_by_id(record.artifact_id) end)
-        PROACTIVE.release(record, online_ok and online or nil, "ownership_transition")
+        RVM_SORTIES_PROACTIVE.release(record, online_ok and online or nil, "ownership_transition")
         record.state = "owned"
         record.reason = snapshot and snapshot.ownership_source or "parent_changed"
         return true
@@ -2177,7 +2180,7 @@ function PROACTIVE.maintain(record, snapshot, now)
     end
     local online_ok, online = pcall(function() return level.object_by_id(record.artifact_id) end)
     if not (online_ok and online) then return true end
-    local hold_ok, hold_reason = PROACTIVE.hold_attempt(record, "periodic_rehydrate", online, nil)
+    local hold_ok, hold_reason = RVM_SORTIES_PROACTIVE.hold_attempt(record, "periodic_rehydrate", online, nil)
     return hold_ok, hold_reason
 end
 -- PROACTIVE_HOLD_END
@@ -4753,7 +4756,7 @@ local function update_artifact_zones(now)
             }
             local snapshot_ok, snapshot = pcall(artifact_snapshot, zone)
             if snapshot_ok then
-                local maintain_ok, maintain_error = pcall(PROACTIVE.maintain, record, snapshot, now)
+                local maintain_ok, maintain_error = pcall(RVM_SORTIES_PROACTIVE.maintain, record, snapshot, now)
                 if not maintain_ok then
                     record.proactive.state = "unresolved"
                     record.proactive.reason = "maintain_exception:" .. tostring(maintain_error)
@@ -5057,7 +5060,7 @@ local function guarded_rvm_artifact_spawn(base_spawn, anom_zone, field_pos, leve
     return nil, result
 end
 
-function PROACTIVE.artifact_online(obj, binder, source)
+function RVM_SORTIES_PROACTIVE.artifact_online(obj, binder, source)
     if not obj then return false end
     local artifact_id = safe_object_id_any(obj)
     local record = artifact_id and state.artifact_provenance
@@ -5067,7 +5070,7 @@ function PROACTIVE.artifact_online(obj, binder, source)
     release_log("artifact proactive online id=%s source=%s state=%s binder=%s",
         tostring(artifact_id), tostring(source), tostring(record.proactive and record.proactive.state),
         tostring(token or "none"))
-    local ok, result, reason = pcall(PROACTIVE.hold_attempt, record, source, obj, token)
+    local ok, result, reason = pcall(RVM_SORTIES_PROACTIVE.hold_attempt, record, source, obj, token)
     if not ok then
         record.proactive.state = "unresolved"
         record.proactive.reason = "online_callback_exception:" .. tostring(result)
@@ -5090,7 +5093,7 @@ local function install_hooks()
         item_artefact.artefact_binder.net_spawn = function(self, se_abstract)
             local result = base_artifact_net_spawn(self, se_abstract)
             if result and self and self.object then
-                PROACTIVE.artifact_online(self.object, self, "binder_net_spawn")
+                RVM_SORTIES_PROACTIVE.artifact_online(self.object, self, "binder_net_spawn")
             end
             return result
         end
@@ -5372,7 +5375,7 @@ local function release_zone_held_on_pickup(zone, item, owner, reason)
         online_parent_id = safe_object_id_any(owner),
     }
     if record.lifecycle == "proactive" then
-        local ok, released = pcall(PROACTIVE.release, record, item, reason or "pickup")
+        local ok, released = pcall(RVM_SORTIES_PROACTIVE.release, record, item, reason or "pickup")
         if not ok or not released then
             printf(PREFIX .. " ERROR proactive hold pickup release failed id=%s error=%s",
                 tostring(record.artifact_id), tostring(released))
@@ -5442,8 +5445,8 @@ local function physic_object_on_use_callback(box, who)
     end
 end
 
-function PROACTIVE.artefact_on_first_update(obj, binder, config_changed)
-    PROACTIVE.artifact_online(obj, binder, "artefact_on_first_update")
+function RVM_SORTIES_PROACTIVE.artefact_on_first_update(obj, binder, config_changed)
+    RVM_SORTIES_PROACTIVE.artifact_online(obj, binder, "artefact_on_first_update")
 end
 
 local function actor_on_first_update()
@@ -5456,7 +5459,7 @@ local function actor_on_first_update()
     for _, record in pairs(state.artifact_provenance or {}) do
         if record.lifecycle == "proactive" and record.proactive
         and record.proactive.hold_required ~= false then
-            local ok, hold_error = pcall(PROACTIVE.hold_attempt,
+            local ok, hold_error = pcall(RVM_SORTIES_PROACTIVE.hold_attempt,
                 record, "actor_on_first_update_rehydrate", nil, nil)
             if not ok then
                 record.proactive.state = "unresolved"
@@ -5565,8 +5568,8 @@ local function save_state(m_data)
             record.proactive.runtime_binder_token = nil
             release_log("artifact proactive save id=%s state=%s hold_required=true own_fixed=%s foreign_fixed=%s target=(%s); hold_preserved=true",
                 tostring(record.artifact_id), tostring(record.proactive.state),
-                PROACTIVE.indices_text(record.proactive.fixed_indices),
-                PROACTIVE.indices_text(record.proactive.foreign_fixed_indices),
+                RVM_SORTIES_PROACTIVE.indices_text(record.proactive.fixed_indices),
+                RVM_SORTIES_PROACTIVE.indices_text(record.proactive.foreign_fixed_indices),
                 fmt_position(record.proactive.target and record.proactive.target.pos))
         end
     end
@@ -6044,7 +6047,7 @@ function on_game_start()
     RegisterScriptCallback("actor_on_item_take", actor_on_item_take)
     RegisterScriptCallback("npc_on_item_take", npc_on_item_take)
     RegisterScriptCallback("physic_object_on_use_callback", physic_object_on_use_callback)
-    RegisterScriptCallback("artefact_on_first_update", PROACTIVE.artefact_on_first_update)
+    RegisterScriptCallback("artefact_on_first_update", RVM_SORTIES_PROACTIVE.artefact_on_first_update)
     RegisterScriptCallback("on_before_level_changing", on_before_level_changing)
     RegisterScriptCallback("save_state", save_state)
     RegisterScriptCallback("load_state", load_state)
