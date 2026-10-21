@@ -125,22 +125,27 @@ update_interval_ms = 1000
 artifact_proactive_hold = true
 ; Schema 7 correction: clearance below is SERVER-SPAWN clearance only. X-Ray
 ; normalizes the online artifact pivot back to the proven static surface; the
-; physics hold validates and fixes that surface pivot, not a visible hover.
+; schema 8 validates that surface pivot, lifts the exact client object to the
+; configured visible hover, verifies it, then fixes its physics shell.
 ; Высота pivot над static-ray surface, допустимый диапазон 0.5-1.0 м. Default
 ; 0.75 м намеренно оставляет небольшую видимую левитацию даже на склоне.
 ; Не прибавляется к произвольной server position: target обязан заранее пройти
 ; vertex, ray и captured-field guards.
 artifact_proactive_clearance = 0.75
+; Direct client-object lift before physics fix. This is intentionally visible:
+; some artifact meshes were unpickable when fixed at surface_y-0.1..-0.3.
+; Runtime range: 0.5..3.0 m. Does not call alife():teleport_object or respawn.
+artifact_online_hold_clearance = 2.0
 ; Допуск только для проверки свежей client shell. Он не разрешает relocation:
 ; proactive path никогда не вызывает teleport_object для online объекта.
 artifact_proactive_position_tolerance = 0.35
 
 ; Ниже оставлен диагностический legacy rescue для старых alpha-save. Новые
-; schema-7 records его полностью обходят; legacy без доказанного target работает
+; schema-8 records его полностью обходят; legacy без доказанного target работает
 ; observe-only и не выполняет рискованные действия.
 artifact_rescue_observe_only = false
-; Schema 7 supersedes the older schema-6 description above: exact guarded
-; targets persist separate spawn_pos/spawn_clearance and surface-pivot target.
+; Schema 8 supersedes the older schema-6 description above: exact guarded
+; targets persist spawn, surface and raised online-hold coordinates separately.
 ; Общий предохранитель только legacy/debug действий.
 artifact_rescue_actions = true
 ; Production policy: held_first. После штатных 15 секунд подтверждённого rolling

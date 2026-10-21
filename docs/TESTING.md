@@ -46,7 +46,7 @@
 | Weighted true-field T1 | Только junk/low/medium; семейство соответствует зоне | `artifact_pool ... tier=1 ... fallback=none`, high/unique отсутствуют |
 | Weighted true-field T2 | Junk/low/medium/high, но не unique | `artifact_pool ... tier=2 ... fallback=none` и штатная Rojok queue для exact ID |
 | Weighted true-field T3 | Доступны все категории, unique имеет production-вес 2% | `artifact_pool ... tier=3 ... quality=... section=...`; pickup и save/load не меняют ID |
-| Proactive hold T2 | Каждый новый exact ID создаётся server-side с запасом `+0.75`, фиксируется на нормализованном X-Ray surface pivot, статичен до pickup и восстанавливает hold после save/load | `artifact proactive target -> hold attempt -> held -> save -> rehydrate/held -> release`; нет duplicate `net_spawn` и online teleport |
+| Proactive hold T2 | Каждый новый exact ID после surface callback поднимается на `+2.0 м`, немедленно верифицируется, статичен до pickup и повторяет lift+fix после save/load | `target -> online -> lift verified=true -> held -> save -> rehydrate/lift/held -> release`; нет ALife teleport, respawn или duplicate `net_spawn` |
 | Пустышка | Нет content/spawn, живёт до выхода | `type=empty linked=none` |
 | Save/load на месте | Нет новых `create`, spots восстановлены | Счётчики до/после одинаковы |
 | Fast travel на той же локации | Незакрытые zones/anchors/loot сохраняются | `transition pending`, затем `transition resolved same_level` |

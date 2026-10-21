@@ -24,7 +24,7 @@ local census_error_reported = false
 local next_artifact_diagnostic = 0
 local reported_artifact_overlaps = {}
 local safe_alive = nil
-local ARTIFACT_PROVENANCE_SCHEMA = 7
+local ARTIFACT_PROVENANCE_SCHEMA = 8
 local INVALID_VERTEX_ID = 4294967295
 local ARTIFACT_RESCUE_DEBUG_IDS = { [1407] = true, [6362] = true }
 local release_held_stabilization = nil
@@ -100,7 +100,7 @@ local ENEMY_SQUAD_PRESETS = {
 
 local function fresh_state()
     return {
-        schema = 7,
+        schema = 8,
         level_name = nil,
         sortie_type = nil,
         pending_transition = false,
@@ -1129,24 +1129,27 @@ local function capture_artifact_provenance(artifact_id, anom_zone, pos, level_ti
     and guarded_target and guarded_target.pos
     and valid_vertex_id(guarded_target.lvid) and valid_vertex_id(guarded_target.gvid)
     and guarded_target.support == "static_ray" then
+        local hold_clearance = math.max(0.5, math.min(3,
+            C.get_number("global", "artifact_online_hold_clearance", 2.0)))
         proactive = {
             schema = 1,
             state = "target_ready",
             hold_required = true,
             target = {
-                -- X-Ray preserves the raised server spawn position but places
-                -- the online artifact pivot on the static surface. Holding is
-                -- therefore validated against the proven surface pivot, not
-                -- against the temporary server-side spawn clearance.
-                pos = { x = guarded_target.pos.x, y = guarded_target.surface_y,
+                -- X-Ray places the online pivot on the static surface. Lift
+                -- this exact client object to an accessible target before fix.
+                pos = { x = guarded_target.pos.x, y = guarded_target.surface_y + hold_clearance,
+                    z = guarded_target.pos.z },
+                surface_pos = { x = guarded_target.pos.x, y = guarded_target.surface_y,
                     z = guarded_target.pos.z },
                 spawn_pos = pos_table(guarded_target.pos),
                 lvid = guarded_target.lvid,
                 gvid = guarded_target.gvid,
-                source = "guarded_surface_pivot",
+                source = "guarded_online_hold_target",
                 support = guarded_target.support,
                 surface_y = guarded_target.surface_y,
-                clearance = 0,
+                clearance = hold_clearance,
+                hold_clearance = hold_clearance,
                 spawn_clearance = guarded_target.clearance,
             },
             fixed_indices = {},
@@ -1202,10 +1205,11 @@ local function capture_artifact_provenance(artifact_id, anom_zone, pos, level_ti
     state.artifact_provenance[key] = record
     if proactive then
         record.target = proactive.target
-        release_log("artifact proactive target id=%s section=%s source=%s target=(%s) spawn=(%s) surface_y=%s pivot_clearance=%s spawn_clearance=%s lvid=%s gvid=%s",
+        release_log("artifact proactive target id=%s section=%s source=%s target=(%s) surface=(%s) spawn=(%s) surface_y=%s hold_clearance=%s spawn_clearance=%s lvid=%s gvid=%s",
             tostring(artifact_id), tostring(record.section), tostring(proactive.target.source),
-            fmt_position(proactive.target.pos), fmt_position(proactive.target.spawn_pos),
-            fmt_number(proactive.target.surface_y), fmt_number(proactive.target.clearance),
+            fmt_position(proactive.target.pos), fmt_position(proactive.target.surface_pos),
+            fmt_position(proactive.target.spawn_pos), fmt_number(proactive.target.surface_y),
+            fmt_number(proactive.target.hold_clearance),
             fmt_number(proactive.target.spawn_clearance), tostring(proactive.target.lvid), tostring(proactive.target.gvid))
     elseif artifact_rescue_observe_enabled() then
         compute_observe_target(record)
@@ -1891,11 +1895,8 @@ function RVM_SORTIES_PROACTIVE.position_safe(record, online)
     local clearance = current.y - surface_y
     local nav_ok, nav = pcall(level.vertex_position, fresh_surface.lvid)
     local vertex_delta_y = nav_ok and nav and (current.y - nav.y) or nil
-    -- Artifact models use heterogeneous pivots. Field evidence shows the
-    -- engine's first online position between surface_y-0.2 and surface_y+0.1
-    -- for valid, pickup-accessible artifacts. The raised server spawn point is
-    -- not an online pivot contract; accept only the proven surface envelope.
-    local required_clearance = -tolerance
+    local required_clearance = (tonumber(target.hold_clearance)
+        or tonumber(target.clearance) or 2.0) - tolerance
     local safe = dxz <= tolerance and math.abs(dy) <= tolerance
         and math.abs(surface_y - expected_surface) <= tolerance
         and clearance >= required_clearance
@@ -1903,6 +1904,62 @@ function RVM_SORTIES_PROACTIVE.position_safe(record, online)
         .. ",dy=" .. fmt_number(dy) .. ",surface_delta=" .. fmt_number(surface_y - expected_surface)
         .. ",clearance=" .. fmt_number(clearance) .. ",required=" .. fmt_number(required_clearance))
     return safe, reason, current, dxz, dy, clearance, fresh_surface.lvid, vertex_delta_y
+end
+
+function RVM_SORTIES_PROACTIVE.surface_position_safe(record, online)
+    local lifecycle = record and record.proactive
+    local target = lifecycle and lifecycle.target
+    local current = safe_object_position(online)
+    if not (target and target.pos and current) then
+        return false, "surface_position_or_target_missing", current, nil, nil, nil
+    end
+    local tolerance = math.max(0.1, math.min(1,
+        C.get_number("global", "artifact_proactive_position_tolerance", 0.35)))
+    local fresh_surface, surface_error = artifact_static_target(current, 0)
+    if not fresh_surface then
+        return false, "fresh_static_support_" .. tostring(surface_error), current, nil, nil, nil
+    end
+    local expected_surface = tonumber(target.surface_y)
+    local dxz = distance_xz(current, target.surface_pos or target.pos)
+    local surface_delta = expected_surface and (fresh_surface.surface_y - expected_surface) or nil
+    local pivot_clearance = current.y - fresh_surface.surface_y
+    local safe = dxz <= tolerance and surface_delta ~= nil
+        and math.abs(surface_delta) <= tolerance and math.abs(pivot_clearance) <= tolerance
+    local reason = safe and "safe_surface_pivot" or ("surface_envelope_mismatch:dxz=" .. fmt_number(dxz)
+        .. ",surface_delta=" .. fmt_number(surface_delta)
+        .. ",pivot_clearance=" .. fmt_number(pivot_clearance))
+    return safe, reason, current, dxz, pivot_clearance, fresh_surface.lvid
+end
+
+function RVM_SORTIES_PROACTIVE.lift_to_target(record, online, source)
+    local lifecycle = record and record.proactive
+    local target = lifecycle and lifecycle.target
+    local before = safe_object_position(online)
+    if not (target and target.pos and before) then return false, "lift_target_or_position_missing" end
+    if lifecycle.lift_attempted_this_online then
+        return false, "lift_already_attempted_this_online:" .. tostring(lifecycle.lift_attempt_reason)
+    end
+    lifecycle.lift_attempted_this_online = true
+    local method_ok, method = pcall(function() return online.force_set_position end)
+    if not (method_ok and type(method) == "function") then
+        lifecycle.lift_attempt_reason = "force_set_position_unavailable"
+        return false, "force_set_position_unavailable"
+    end
+    local call_ok, call_error = pcall(method, online, pos_vector(target.pos), true)
+    if not call_ok then
+        lifecycle.lift_attempt_reason = "force_set_position_failed:" .. tostring(call_error)
+        return false, lifecycle.lift_attempt_reason
+    end
+    lifecycle.lift_count = (lifecycle.lift_count or 0) + 1
+    lifecycle.last_lift_at = time_global()
+    local position_ok, position_reason, after, dxz, dy, clearance, lvid, vertex_dy =
+        RVM_SORTIES_PROACTIVE.position_safe(record, online)
+    release_log("artifact proactive lift id=%s source=%s method=force_set_position initialize_physics=true before=(%s) requested=(%s) after=(%s) verified=%s reason=%s dxz=%s dy=%s clearance=%s vertex=%s vertex_dy=%s",
+        tostring(record.artifact_id), tostring(source), fmt_position(before), fmt_position(target.pos),
+        fmt_position(after), tostring(position_ok), tostring(position_reason), fmt_number(dxz),
+        fmt_number(dy), fmt_number(clearance), tostring(lvid), fmt_number(vertex_dy))
+    lifecycle.lift_attempt_reason = position_ok and "lift_verified" or ("lift_unverified:" .. tostring(position_reason))
+    return position_ok, position_ok and "lift_verified" or ("lift_unverified:" .. tostring(position_reason))
 end
 
 function RVM_SORTIES_PROACTIVE.shell_still_fixed(record, online)
@@ -2035,6 +2092,11 @@ function RVM_SORTIES_PROACTIVE.hold_attempt(record, source, supplied_online, bin
             tostring(record.artifact_id), tostring(source), lifecycle.reason)
         return false, lifecycle.reason
     end
+    if lifecycle.runtime_online_ref ~= online then
+        lifecycle.runtime_online_ref = online
+        lifecycle.lift_attempted_this_online = false
+        lifecycle.lift_attempt_reason = nil
+    end
     local parent_ok, parent = pcall(function() return online:parent() end)
     local parent_id = parent_ok and safe_object_id_any(parent) or nil
     if parent_id ~= nil and parent_id ~= 65535 then
@@ -2045,17 +2107,31 @@ function RVM_SORTIES_PROACTIVE.hold_attempt(record, source, supplied_online, bin
     end
     local position_ok, position_reason, current, dxz, dy, clearance = RVM_SORTIES_PROACTIVE.position_safe(record, online)
     if not position_ok then
-        lifecycle.state = "unresolved"
-        lifecycle.reason = position_reason
-        record.state = "unresolved"
-        record.reason = lifecycle.reason
-        if lifecycle.last_unresolved ~= position_reason then
-            lifecycle.last_unresolved = position_reason
-            printf(PREFIX .. " ERROR artifact proactive unresolved id=%s source=%s reason=%s current=(%s) target=(%s); online teleport forbidden",
-                tostring(record.artifact_id), tostring(source), tostring(position_reason), fmt_position(current),
-                fmt_position(lifecycle.target and lifecycle.target.pos))
+        local surface_ok, surface_reason = RVM_SORTIES_PROACTIVE.surface_position_safe(record, online)
+        if surface_ok then
+            local lift_ok, lift_reason = RVM_SORTIES_PROACTIVE.lift_to_target(record, online, source)
+            if lift_ok then
+                position_ok, position_reason, current, dxz, dy, clearance =
+                    RVM_SORTIES_PROACTIVE.position_safe(record, online)
+            else
+                position_reason = lift_reason
+            end
+        else
+            position_reason = surface_reason
         end
-        return false, position_reason
+        if not position_ok then
+            lifecycle.state = "unresolved"
+            lifecycle.reason = position_reason
+            record.state = "unresolved"
+            record.reason = lifecycle.reason
+            if lifecycle.last_unresolved ~= position_reason then
+                lifecycle.last_unresolved = position_reason
+                printf(PREFIX .. " ERROR artifact proactive unresolved id=%s source=%s reason=%s current=(%s) target=(%s); ALife teleport and recreate forbidden",
+                    tostring(record.artifact_id), tostring(source), tostring(position_reason), fmt_position(current),
+                    fmt_position(lifecycle.target and lifecycle.target.pos))
+            end
+            return false, position_reason
+        end
     end
     if RVM_SORTIES_PROACTIVE.shell_still_fixed(record, online) then
         lifecycle.runtime_binder_token = binder_token or lifecycle.runtime_binder_token
@@ -2176,6 +2252,9 @@ function RVM_SORTIES_PROACTIVE.maintain(record, snapshot, now)
         return true
     end
     if not (snapshot and snapshot.online_exists) then
+        lifecycle.runtime_online_ref = nil
+        lifecycle.lift_attempted_this_online = false
+        lifecycle.lift_attempt_reason = nil
         if lifecycle.state == "held_accessible" then
             lifecycle.state = "awaiting_online"
             lifecycle.reason = "online_shell_disappeared"
@@ -5577,6 +5656,9 @@ local function save_state(m_data)
         if record.lifecycle == "proactive" and record.proactive
         and record.proactive.hold_required ~= false then
             record.proactive.runtime_binder_token = nil
+            record.proactive.runtime_online_ref = nil
+            record.proactive.lift_attempted_this_online = false
+            record.proactive.lift_attempt_reason = nil
             release_log("artifact proactive save id=%s state=%s hold_required=true own_fixed=%s foreign_fixed=%s target=(%s); hold_preserved=true",
                 tostring(record.artifact_id), tostring(record.proactive.state),
                 RVM_SORTIES_PROACTIVE.indices_text(record.proactive.fixed_indices),
@@ -5869,7 +5951,27 @@ local function migrate_artifact_provenance(previous_schema)
                         tostring(record.artifact_id), fmt_position(old_target.pos),
                         fmt_position(old_target.spawn_pos), fmt_number(old_target.spawn_clearance))
                 end
+                if previous_schema < 8 then
+                    local old_target = record.proactive.target
+                    local proven_surface_y = tonumber(old_target.surface_y) or old_target.pos.y
+                    local hold_clearance = math.max(0.5, math.min(3,
+                        C.get_number("global", "artifact_online_hold_clearance", 2.0)))
+                    old_target.surface_pos = old_target.surface_pos
+                        or { x = old_target.pos.x, y = proven_surface_y, z = old_target.pos.z }
+                    old_target.pos = { x = old_target.pos.x, y = proven_surface_y + hold_clearance,
+                        z = old_target.pos.z }
+                    old_target.clearance = hold_clearance
+                    old_target.hold_clearance = hold_clearance
+                    old_target.source = "schema_7_online_hold_migration"
+                    record.target = old_target
+                    release_log("artifact proactive load id=%s migration=schema_7_online_hold target=(%s) surface=(%s) hold_clearance=%s",
+                        tostring(record.artifact_id), fmt_position(old_target.pos),
+                        fmt_position(old_target.surface_pos), fmt_number(old_target.hold_clearance))
+                end
                 record.proactive.runtime_binder_token = nil
+                record.proactive.runtime_online_ref = nil
+                record.proactive.lift_attempted_this_online = false
+                record.proactive.lift_attempt_reason = nil
                 record.proactive.fixed_indices = {}
                 record.proactive.foreign_fixed_indices = {}
                 if not terminal and record.proactive.hold_required ~= false then
@@ -5895,6 +5997,8 @@ local function migrate_artifact_provenance(previous_schema)
                     local proven_surface_y = tonumber(guard_target.surface_y) or (guard_target.pos.y - old_clearance)
                     local migration_clearance = math.max(0.5, math.min(1,
                         C.get_number("global", "artifact_proactive_clearance", 0.75)))
+                    local migration_hold_clearance = math.max(0.5, math.min(3,
+                        C.get_number("global", "artifact_online_hold_clearance", 2.0)))
                     record.lifecycle = "proactive"
                     record.disabled = false
                     record.legacy_actions = record.actions
@@ -5905,15 +6009,19 @@ local function migrate_artifact_provenance(previous_schema)
                         reason = "schema_5_proven_target_migration",
                         hold_required = true,
                         target = {
-                            pos = { x = guard_target.pos.x, y = proven_surface_y, z = guard_target.pos.z },
+                            pos = { x = guard_target.pos.x, y = proven_surface_y + migration_hold_clearance,
+                                z = guard_target.pos.z },
+                            surface_pos = { x = guard_target.pos.x, y = proven_surface_y,
+                                z = guard_target.pos.z },
                             spawn_pos = { x = guard_target.pos.x, y = proven_surface_y + migration_clearance,
                                 z = guard_target.pos.z },
                             lvid = guard_target.lvid,
                             gvid = guard_target.gvid,
-                            source = "legacy_guarded_surface_pivot",
+                            source = "legacy_guarded_online_hold_target",
                             support = guard_target.support,
                             surface_y = proven_surface_y,
-                            clearance = 0,
+                            clearance = migration_hold_clearance,
+                            hold_clearance = migration_hold_clearance,
                             spawn_clearance = migration_clearance,
                         },
                         fixed_indices = {},
@@ -5980,7 +6088,7 @@ local function load_state(m_data)
         end
     end
     migrate_artifact_provenance(previous_schema)
-    state.schema = 7
+    state.schema = 8
 end
 
 local function find_debug_ui(...)
