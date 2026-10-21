@@ -22,7 +22,8 @@ class Shell:
 class Record:
     object_id: int = 42
     section: str = "af_test"
-    target: tuple[float, float, float] = (10.0, 5.75, 20.0)
+    target: tuple[float, float, float] = (10.0, 5.0, 20.0)
+    spawn_target: tuple[float, float, float] = (10.0, 5.75, 20.0)
     surface_y: float = 5.0
     clearance: float = 0.75
     state: str = "target_ready"
@@ -35,6 +36,16 @@ def position_safe(record: Record, position: tuple[float, float, float], toleranc
     dx = position[0] - record.target[0]
     dz = position[2] - record.target[2]
     dy = position[1] - record.target[1]
+    clearance = position[1] - record.surface_y
+    return (dx * dx + dz * dz) ** 0.5 <= tolerance and abs(dy) <= tolerance \
+        and clearance >= -tolerance
+
+
+def schema6_position_safe(record: Record, position: tuple[float, float, float], tolerance: float = 0.35) -> bool:
+    """Rejected field predicate: treated the raised server spawn as online pivot."""
+    dx = position[0] - record.spawn_target[0]
+    dz = position[2] - record.spawn_target[2]
+    dy = position[1] - record.spawn_target[1]
     clearance = position[1] - record.surface_y
     return (dx * dx + dz * dz) ** 0.5 <= tolerance and abs(dy) <= tolerance \
         and clearance >= max(0.05, record.clearance - tolerance)
@@ -82,12 +93,14 @@ def main() -> int:
     proactive = source[begin:end]
     required_source = (
         "artifact_proactive_hold", "artifact_proactive_clearance", "artifact_proactive_position_tolerance",
-        'source = "guarded_spawn_target"', 'state = "target_ready"', 'state = "awaiting_online"',
+        'source = "guarded_surface_pivot"', 'state = "target_ready"', 'state = "awaiting_online"',
         'state = "held_accessible"', 'state = "rehydrate_pending"', 'state = "unresolved"',
         'item_artefact.artefact_binder.net_spawn', 'RegisterScriptCallback("artefact_on_first_update"',
         "online teleport forbidden", "foreign_fixed_indices", "hold_preserved=true",
         "math.max(0.5, math.min(1,",
-        "local ARTIFACT_PROVENANCE_SCHEMA = 6", "state.schema = 6",
+        "local ARTIFACT_PROVENANCE_SCHEMA = 7", "state.schema = 7",
+        "schema_6_surface_pivot_migration", "spawn_clearance = guarded_target.clearance",
+        "y = guarded_target.surface_y", "local required_clearance = -tolerance",
     )
     for needle in required_source:
         if needle not in source:
@@ -105,7 +118,8 @@ def main() -> int:
 
     record = Record()
     shell = Shell([Element(), Element(fixed=True, foreign=True)])
-    assert record.target[1] == record.surface_y + 0.75
+    assert record.spawn_target[1] == record.surface_y + 0.75
+    assert record.target[1] == record.surface_y
     assert hold(record, 42, "af_test", record.target, shell) == "held"
     assert record.own == [0] and record.foreign == [1]
     assert shell.linear == (0.0, 0.0, 0.0) and shell.angular == (0.0, 0.0, 0.0)
@@ -122,6 +136,38 @@ def main() -> int:
     recreated_shell = Shell([Element(), Element(fixed=True, foreign=True)])
     assert hold(record, 42, "af_test", record.target, recreated_shell) == "held"
     assert record.own == [0] and record.foreign == [1]
+
+    # Exact positions captured in the failed field run. X-Ray converted every
+    # raised server spawn to a surface-relative online pivot before callbacks.
+    # The old +clearance target rejected all seven; the surface-pivot contract
+    # must accept binder positions while they are still accessible.
+    field_rows = (
+        (6703, 1.0, 1.0),
+        (6905, -0.4, -0.4),
+        (6959, -1.0, -1.0),
+        (6994, 0.7, 0.7),
+        (7002, 11.1, 11.1),
+        (7016, 9.1, 9.2),
+        (7795, 5.1, 5.0),
+    )
+    surfaces = {6703: 1.0, 6905: -0.4, 6959: -1.0, 6994: 0.7, 7002: 11.1, 7016: 9.2, 7795: 5.1}
+    for artifact_id, binder_y, first_update_y in field_rows:
+        surface = surfaces[artifact_id]
+        observed = Record(object_id=artifact_id, target=(10.0, surface, 20.0),
+                          spawn_target=(10.0, surface + 0.75, 20.0), surface_y=surface)
+        observed_shell = Shell([Element()])
+        assert not schema6_position_safe(observed, (10.0, binder_y, 20.0))
+        assert position_safe(observed, (10.0, binder_y, 20.0))
+        assert hold(observed, artifact_id, "af_test", (10.0, binder_y, 20.0), observed_shell) == "held"
+        assert observed_shell.elements[0].fixed
+        assert position_safe(observed, (10.0, first_update_y, 20.0))
+
+        # Save/load clears runtime ownership, then the new shell is fixed again
+        # at the same surface pivot instead of preserving a falling body.
+        observed.state, observed.own, observed.foreign = "rehydrate_pending", [], []
+        reloaded_shell = Shell([Element()])
+        assert hold(observed, artifact_id, "af_test", (10.0, first_update_y, 20.0), reloaded_shell) == "held"
+        assert reloaded_shell.elements[0].fixed
 
     # Pickup/ownership releases only our element; a foreign pre-fix survives.
     release(record, recreated_shell, ownership=True)

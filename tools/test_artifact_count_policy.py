@@ -180,7 +180,7 @@ def main() -> int:
         'not plan.linked_ids[artifact_key]',
         'artifact_count duplicate spawn suppressed',
         'plan.spawn_invoked = true',
-        'state.schema = 6',
+        'state.schema = 7',
     )
     for needle in required_runtime:
         if needle not in source:

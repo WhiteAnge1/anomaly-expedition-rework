@@ -15,7 +15,7 @@
 
 ## 2. Принять proactive artifact hold в поле
 
-Продуктовое решение принято: все новые raid-artifacts статичны до подбора. Guarded spawn ставит pivot на доказанную static-ray surface `+0.75 м` (конфиг ограничен `0.5..1.0`), binder lifecycle фиксирует только свободные physics elements, save/load rehydrate не использует action counters. Online teleport и reactive rescue для schema-6 запрещены.
+Продуктовое решение принято: все новые raid-artifacts статичны до подбора. Guarded spawn создаёт server object над доказанной static-ray surface с запасом `+0.75 м` (конфиг ограничен `0.5..1.0`), X-Ray нормализует online pivot к поверхности, после чего binder lifecycle фиксирует только свободные physics elements. Save/load rehydrate не использует action counters. Online teleport и reactive rescue для schema-7 запрещены.
 
 Перед заморозкой обязателен узкий прогон `docs/FIELD-TEST-PROACTIVE-HOLD.md`. Старый rolling/underground/origin код остаётся только изолированным legacy/debug слоем и не является основанием считать новый путь проверенным.
 

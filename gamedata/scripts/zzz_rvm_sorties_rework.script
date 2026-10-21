@@ -24,7 +24,7 @@ local census_error_reported = false
 local next_artifact_diagnostic = 0
 local reported_artifact_overlaps = {}
 local safe_alive = nil
-local ARTIFACT_PROVENANCE_SCHEMA = 6
+local ARTIFACT_PROVENANCE_SCHEMA = 7
 local INVALID_VERTEX_ID = 4294967295
 local ARTIFACT_RESCUE_DEBUG_IDS = { [1407] = true, [6362] = true }
 local release_held_stabilization = nil
@@ -100,7 +100,7 @@ local ENEMY_SQUAD_PRESETS = {
 
 local function fresh_state()
     return {
-        schema = 6,
+        schema = 7,
         level_name = nil,
         sortie_type = nil,
         pending_transition = false,
@@ -1134,13 +1134,20 @@ local function capture_artifact_provenance(artifact_id, anom_zone, pos, level_ti
             state = "target_ready",
             hold_required = true,
             target = {
-                pos = pos_table(guarded_target.pos),
+                -- X-Ray preserves the raised server spawn position but places
+                -- the online artifact pivot on the static surface. Holding is
+                -- therefore validated against the proven surface pivot, not
+                -- against the temporary server-side spawn clearance.
+                pos = { x = guarded_target.pos.x, y = guarded_target.surface_y,
+                    z = guarded_target.pos.z },
+                spawn_pos = pos_table(guarded_target.pos),
                 lvid = guarded_target.lvid,
                 gvid = guarded_target.gvid,
-                source = "guarded_spawn_target",
+                source = "guarded_surface_pivot",
                 support = guarded_target.support,
                 surface_y = guarded_target.surface_y,
-                clearance = guarded_target.clearance,
+                clearance = 0,
+                spawn_clearance = guarded_target.clearance,
             },
             fixed_indices = {},
             foreign_fixed_indices = {},
@@ -1195,10 +1202,11 @@ local function capture_artifact_provenance(artifact_id, anom_zone, pos, level_ti
     state.artifact_provenance[key] = record
     if proactive then
         record.target = proactive.target
-        release_log("artifact proactive target id=%s section=%s source=%s target=(%s) surface_y=%s clearance=%s lvid=%s gvid=%s",
+        release_log("artifact proactive target id=%s section=%s source=%s target=(%s) spawn=(%s) surface_y=%s pivot_clearance=%s spawn_clearance=%s lvid=%s gvid=%s",
             tostring(artifact_id), tostring(record.section), tostring(proactive.target.source),
-            fmt_position(proactive.target.pos), fmt_number(proactive.target.surface_y),
-            fmt_number(proactive.target.clearance), tostring(proactive.target.lvid), tostring(proactive.target.gvid))
+            fmt_position(proactive.target.pos), fmt_position(proactive.target.spawn_pos),
+            fmt_number(proactive.target.surface_y), fmt_number(proactive.target.clearance),
+            fmt_number(proactive.target.spawn_clearance), tostring(proactive.target.lvid), tostring(proactive.target.gvid))
     elseif artifact_rescue_observe_enabled() then
         compute_observe_target(record)
     end
@@ -1879,12 +1887,15 @@ function RVM_SORTIES_PROACTIVE.position_safe(record, online)
         return false, "fresh_static_support_" .. tostring(surface_error), current, dxz, dy, nil, nil, nil
     end
     local surface_y = fresh_surface.surface_y
-    local expected_surface = tonumber(target.surface_y)
-        or (target.pos.y - (tonumber(target.clearance) or 0.1))
+    local expected_surface = tonumber(target.surface_y) or target.pos.y
     local clearance = current.y - surface_y
     local nav_ok, nav = pcall(level.vertex_position, fresh_surface.lvid)
     local vertex_delta_y = nav_ok and nav and (current.y - nav.y) or nil
-    local required_clearance = math.max(0.05, (tonumber(target.clearance) or 0.1) - tolerance)
+    -- Artifact models use heterogeneous pivots. Field evidence shows the
+    -- engine's first online position between surface_y-0.2 and surface_y+0.1
+    -- for valid, pickup-accessible artifacts. The raised server spawn point is
+    -- not an online pivot contract; accept only the proven surface envelope.
+    local required_clearance = -tolerance
     local safe = dxz <= tolerance and math.abs(dy) <= tolerance
         and math.abs(surface_y - expected_surface) <= tolerance
         and clearance >= required_clearance
@@ -5841,6 +5852,23 @@ local function migrate_artifact_provenance(previous_schema)
         if type(record) == "table" then
             local terminal = record.state == "owned" or record.state == "closed" or record.state == "released"
             if record.lifecycle == "proactive" and record.proactive and record.proactive.target then
+                if previous_schema < 7 then
+                    local old_target = record.proactive.target
+                    local old_spawn_clearance = tonumber(old_target.spawn_clearance)
+                        or tonumber(old_target.clearance) or 0.75
+                    local proven_surface_y = tonumber(old_target.surface_y)
+                        or (old_target.pos.y - old_spawn_clearance)
+                    old_target.spawn_pos = old_target.spawn_pos or pos_table(old_target.pos)
+                    old_target.spawn_clearance = old_spawn_clearance
+                    old_target.pos = { x = old_target.pos.x, y = proven_surface_y, z = old_target.pos.z }
+                    old_target.surface_y = proven_surface_y
+                    old_target.clearance = 0
+                    old_target.source = "schema_6_surface_pivot_migration"
+                    record.target = old_target
+                    release_log("artifact proactive load id=%s migration=schema_6_surface_pivot target=(%s) spawn=(%s) spawn_clearance=%s",
+                        tostring(record.artifact_id), fmt_position(old_target.pos),
+                        fmt_position(old_target.spawn_pos), fmt_number(old_target.spawn_clearance))
+                end
                 record.proactive.runtime_binder_token = nil
                 record.proactive.fixed_indices = {}
                 record.proactive.foreign_fixed_indices = {}
@@ -5877,14 +5905,16 @@ local function migrate_artifact_provenance(previous_schema)
                         reason = "schema_5_proven_target_migration",
                         hold_required = true,
                         target = {
-                            pos = { x = guard_target.pos.x, y = proven_surface_y + migration_clearance,
+                            pos = { x = guard_target.pos.x, y = proven_surface_y, z = guard_target.pos.z },
+                            spawn_pos = { x = guard_target.pos.x, y = proven_surface_y + migration_clearance,
                                 z = guard_target.pos.z },
                             lvid = guard_target.lvid,
                             gvid = guard_target.gvid,
-                            source = "legacy_guarded_spawn_target",
+                            source = "legacy_guarded_surface_pivot",
                             support = guard_target.support,
                             surface_y = proven_surface_y,
-                            clearance = migration_clearance,
+                            clearance = 0,
+                            spawn_clearance = migration_clearance,
                         },
                         fixed_indices = {},
                         foreign_fixed_indices = {},
@@ -5950,7 +5980,7 @@ local function load_state(m_data)
         end
     end
     migrate_artifact_provenance(previous_schema)
-    state.schema = 6
+    state.schema = 7
 end
 
 local function find_debug_ui(...)

@@ -123,6 +123,9 @@ update_interval_ms = 1000
 ; поверхностью и фиксируются с первого доступного binder lifecycle callback до
 ; подбора. Это намеренно отключает их штатное качение/левитацию ради доступности.
 artifact_proactive_hold = true
+; Schema 7 correction: clearance below is SERVER-SPAWN clearance only. X-Ray
+; normalizes the online artifact pivot back to the proven static surface; the
+; physics hold validates and fixes that surface pivot, not a visible hover.
 ; Высота pivot над static-ray surface, допустимый диапазон 0.5-1.0 м. Default
 ; 0.75 м намеренно оставляет небольшую видимую левитацию даже на склоне.
 ; Не прибавляется к произвольной server position: target обязан заранее пройти
@@ -133,9 +136,11 @@ artifact_proactive_clearance = 0.75
 artifact_proactive_position_tolerance = 0.35
 
 ; Ниже оставлен диагностический legacy rescue для старых alpha-save. Новые
-; schema-6 records его полностью обходят; legacy без доказанного target работает
+; schema-7 records его полностью обходят; legacy без доказанного target работает
 ; observe-only и не выполняет рискованные действия.
 artifact_rescue_observe_only = false
+; Schema 7 supersedes the older schema-6 description above: exact guarded
+; targets persist separate spawn_pos/spawn_clearance and surface-pivot target.
 ; Общий предохранитель только legacy/debug действий.
 artifact_rescue_actions = true
 ; Production policy: held_first. После штатных 15 секунд подтверждённого rolling
