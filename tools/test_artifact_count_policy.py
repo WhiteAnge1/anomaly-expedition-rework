@@ -12,6 +12,12 @@ EXPECTED = {
     "l09_deadcity": ([4, 5, 6, 7], [11, 80, 7, 2], 5.0, 6),
 }
 
+ZONE_EXPECTED = {
+    "y04_pole": ([1], [1]),
+    "k01_darkscape": ([2, 3, 4], [1, 1, 1]),
+    "l09_deadcity": ([1, 2, 3], [20, 60, 20]),
+}
+
 
 def marked(source: str, begin: str, end: str) -> str:
     start = source.index(begin) + len(begin)
@@ -146,6 +152,48 @@ end
 same(created, 2, "duplicate artifact IDs changed count")
 '''
 
+DECOY_FIXTURE = r'''
+local function expect(ok, message)
+    if not ok then error(message, 2) end
+end
+local source = {
+    global = { zone_count_values = { "1" }, zone_count_weights = { "1" } },
+    level_y04_pole = { zone_count_values = { "1" }, zone_count_weights = { "1" } },
+    level_k01_darkscape = { zone_count_values = { "2", "3", "4" }, zone_count_weights = { "1", "1", "1" } },
+    level_l09_deadcity = { zone_count_values = { "1", "2", "3" }, zone_count_weights = { "20", "60", "20" } },
+}
+local use_level = true
+C = {
+    get_bool = function() return use_level end,
+    get_list = function(section, key) return source[section][key] end,
+}
+local original_random = math.random
+local function choose(level_name, roll)
+    math.random = function(minimum, maximum)
+        expect(minimum == 1 and roll <= maximum, "invalid configured roll range")
+        return roll
+    end
+    local value, section, raw_roll, reason = ARTIFACT_COUNT.configured_decoy_count(level_name)
+    math.random = original_random
+    return value, section, raw_roll, reason
+end
+local value, section, raw_roll, reason = choose("k01_darkscape", 1)
+expect(value == 2 and section == "level_k01_darkscape" and raw_roll == 1 and reason == nil, "Darkscape lower boundary")
+value = choose("k01_darkscape", 2); expect(value == 3, "Darkscape middle boundary")
+value = choose("k01_darkscape", 3); expect(value == 4, "Darkscape upper boundary")
+value = choose("l09_deadcity", 20); expect(value == 1, "Dead City first boundary")
+value = choose("l09_deadcity", 21); expect(value == 2, "Dead City second lower boundary")
+value = choose("l09_deadcity", 80); expect(value == 2, "Dead City second upper boundary")
+value = choose("l09_deadcity", 81); expect(value == 3, "Dead City third boundary")
+use_level = false
+value, section = choose("k01_darkscape", 1)
+expect(value == 1 and section == "global", "global zone-count fallback switch")
+use_level = true
+source.level_y04_pole.zone_count_weights = {}
+value, section, raw_roll, reason = ARTIFACT_COUNT.configured_decoy_count("y04_pole")
+expect(value == 1 and section == "level_y04_pole" and raw_roll == nil and reason == "weights_length_mismatch", "invalid table fallback")
+'''
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run artifact-count policy regressions in Lua 5.1/LuaJIT.")
@@ -155,8 +203,13 @@ def main() -> int:
     runtime_path = args.mod_root / "gamedata" / "scripts" / "zzz_rvm_sorties_rework.script"
     source = runtime_path.read_text(encoding="utf-8")
     policy = marked(source, "-- ARTIFACT_COUNT_POLICY_BEGIN", "-- ARTIFACT_COUNT_POLICY_END")
+    decoy_policy = marked(source, "-- DECOY_COUNT_POLICY_BEGIN", "-- DECOY_COUNT_POLICY_END")
 
     config = parse_ltx(args.mod_root / "gamedata" / "configs" / "plugins" / "rvm_sorties_rework.ltx")
+    if config["global"].get("enable_location_artifact_counts") != "true":
+        raise RuntimeError("location artifact-count switch must default on")
+    if config["global"].get("enable_location_zone_counts") != "true":
+        raise RuntimeError("location zone-count switch must default on")
     for level, (values, weights, mean, stock) in EXPECTED.items():
         section = config[f"level_{level}"]
         actual_values = [int(x.strip()) for x in section["artifact_count_values"].split(",")]
@@ -171,6 +224,12 @@ def main() -> int:
         if stock not in (4, 8, 6):
             raise RuntimeError(f"{level} stock fallback mismatch")
 
+        zone_values, zone_weights = ZONE_EXPECTED[level]
+        actual_zone_values = [int(x.strip()) for x in section["zone_count_values"].split(",")]
+        actual_zone_weights = [int(x.strip()) for x in section["zone_count_weights"].split(",")]
+        if actual_zone_values != zone_values or actual_zone_weights != zone_weights:
+            raise RuntimeError(f"{level} zone-count distribution mismatch")
+
     required_runtime = (
         'release_log("artifact_count rolled=%s profile=%s stock=%s status=%s raw_roll=%s reason=%s"',
         'ARTIFACT_COUNT.diagnostic("spawn_complete", false)',
@@ -181,30 +240,31 @@ def main() -> int:
         'artifact_count duplicate spawn suppressed',
         'plan.spawn_invoked = true',
         'state.schema = 9',
+        'ARTIFACT_COUNT.configured_decoy_count(level.name())',
+        'C.get_bool("global", "enable_location_artifact_counts", true)',
     )
     for needle in required_runtime:
         if needle not in source:
             raise RuntimeError(f"runtime artifact-count invariant missing: {needle}")
 
-    decoy_start = source.index("local false_count = 1")
+    decoy_start = source.index("local false_count, count_section")
     decoy_end = source.index('release_log("decoy plan', decoy_start)
-    if "artifact_count" in source[decoy_start:decoy_end]:
+    if "state.artifact_count" in source[decoy_start:decoy_end]:
         raise RuntimeError("decoy count roll is coupled to artifact-count policy")
-    if "math.random(2, 4)" not in source[decoy_start:decoy_end]:
-        raise RuntimeError("Darkscape independent decoy roll changed")
-    if "roll <= 20 and 1 or roll <= 80 and 2 or 3" not in source[decoy_start:decoy_end]:
-        raise RuntimeError("Dead City independent decoy roll changed")
+    if "configured_decoy_count" not in source[decoy_start:decoy_end]:
+        raise RuntimeError("configured independent zone-count roll missing")
 
     variants = ("lua51", "luajit20", "luajit21")
     for variant in variants:
         module = importlib.import_module(f"lupa.{variant}")
         lua = module.LuaRuntime(unpack_returned_tuples=True)
         lua.execute("ARTIFACT_COUNT = {}\n" + policy + FIXTURE)
+        lua.execute("ARTIFACT_COUNT = {}\n" + policy + decoy_policy + DECOY_FIXTURE)
 
     print(
         "Artifact count policy: OK "
         "(exact support/weights/means, one roll persistence, stock fallback, "
-        "success/error restoration, unique IDs, independent decoys; " + ", ".join(variants) + ")"
+        "success/error restoration, unique IDs, configurable independent decoy counts; " + ", ".join(variants) + ")"
     )
     return 0
 

@@ -2,7 +2,7 @@
 
 ## Обязательные блокеры публичного релиза
 
-- [ ] Владелец утвердил public config/FOMOD решения из `docs/PUBLIC-CONFIG-AUDIT-2026-10-21.md` и `docs/FOMOD-MATRIX-PROPOSAL.md`: Recommended/Observe-only `debug_mode=off`, Diagnostic `on`, schema 9 и weighted во всех профилях; отдельно выбран default legacy `artifact_rescue_actions` и upgrade policy полного LTX.
+- [x] Владелец утвердил public config/FOMOD: Recommended/Observe-only `debug_mode=off`, Diagnostic `on`, schema 9 и weighted во всех профилях, legacy actions всегда off, exact markers default None, три типа ложных зон независимо отключаемы. Обновление ставится новой MO2-записью без автоматического backup/merge старого LTX.
 
 - [x] Proactive artifact hold принят серией из пяти weighted-рейдов: T2 `7/6/7`, T1 `4`, T3 `5`. Все 29 exact ID дали ровно один `lift verified=true -> held clearance=1 -> release -> closed`; два same-level reload сохранили зоны, duplicate create/net-spawn, online teleport, `__eq`, unresolved и AER errors отсутствуют. Полный аудит: `docs/FIELD-TEST-2026-10-21-SCHEMA9-WEIGHTED-FIVE-RAID-PASS.md`.
 
@@ -32,9 +32,9 @@
 - [x] Утверждены и реализованы переменные локационные распределения настоящих артефактов: Поляна `3/4/5 = 35/60/5%`, Лощина `5/6/7/8/9 = 5/20/47/26/2%`, Мёртвый город `4/5/6/7 = 11/80/7/2%`. Lua 5.1/LuaJIT regression проверяет support/веса/средние, один сохранённый roll, stock fallback, восстановление upvalue при success/error, unique IDs и независимость decoys.
 - [ ] Полевым normal debug-off прогоном подтвердить новый roll, `requested=created=captured=linked`, отсутствие повторного spawn после save/load/same-level и независимый decoy count.
 
-- [ ] Smoke A — чистая ручная установка будущего архива в новый MO2-мод: Recommended + exact markers All, `debug_mode=off`; одна новая T2 проверяет effective debug false, нетехнические exact hints у присутствующих типов, schema-9/weighted startup и обычный выход.
-- [ ] Smoke B — ручное обновление/переустановка тем же архивом: Recommended + exact markers None, `debug_mode=off`; существующее убежище + одна новая короткая вылазка + save/load подтверждают отсутствие exact markers/технического текста, отсутствие повторного roll/spawn и сохранение выбранной upgrade policy.
-- [ ] FOMOD реализован только полными проверенными LTX-вариантами по утверждённой матрице; partial overlays/merge отсутствуют, все 17 вариантов проходят config/static validation.
+- [ ] Smoke A — GitHub RC ставится новой версионной MO2-записью, dev-копия отключается: Recommended + все типы зон + exact markers All, `debug_mode=off`; одна новая T2 проверяет effective debug false, нетехнические exact hints, schema-9/weighted startup и обычный выход.
+- [ ] Smoke B — тот же RC ставится второй отдельной MO2-записью без merge, первая RC-запись отключается: Recommended + все типы зон + exact markers None, `debug_mode=off`; существующее убежище + новая короткая вылазка + save/load подтверждают отсутствие exact/technical markers, отсутствие reroll/respawn и отсутствие унаследованных файлов.
+- [x] RC FOMOD реализован 136 полными LTX-вариантами: 64 Recommended, 64 Observe-only, 8 Diagnostic. Partial overlays/merge отсутствуют; генератор и `test_fomod.ps1` проверяют полные ключи, разрешённые различия и взаимно-однозначные XML patterns.
 - [ ] GitHub README собран по `docs/GITHUB-README-OUTLINE.md`; добавлены license/attribution, known limitation #5, update/rollback, SHA verification и support template.
 - [x] Зафиксировано продуктовое решение не добавлять координатные границы карты в artifact rescue. Известное редкое ограничение описано: пока физически недоступный артефакт остаётся внутри связанного круга, rescue не срабатывает; обычный rolling-path применим после устойчивого выхода за `radius + 5 м`.
 
@@ -46,4 +46,4 @@
 - Live watcher при обязательном порядке «watcher → X-Ray», автоматическое завершение `game_closed_after_grace` с 20-секундным хвостом и публикация уникального session-файла/`latest.log` подтверждены полем 18 октября.
 - Schema-9/weighted correctness smoke: пять рейдов T2/T2/T2/T1/T3, 29/29 артефактов доступны и подобраны; counts, pool, decoys, loot и cleanup прошли без AER errors. Проценты распределений этой короткой выборкой не доказываются.
 
-Остались два presentation-smoke с debug-off (exact markers on, затем all exact markers off), решение о публичных defaults `debug_mode`/`artifact_rescue_actions`, FOMOD, clean release-candidate install/upgrade, license/attribution, version/tag/release и публичные/Discord-материалы. Точный порядок: `docs/RELEASE-READINESS-GAPS-2026-10-21.md`.
+Остались два presentation-smoke с debug-off (exact markers on, затем all exact markers off), чистая установка RC отдельной MO2-записью, license/attribution, финальная версия/tag/release и публичные/Discord-материалы. Public defaults и RC FOMOD уже зафиксированы. Точный порядок: `docs/RELEASE-READINESS-GAPS-2026-10-21.md`.

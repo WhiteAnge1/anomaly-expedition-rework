@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <fomod>
-    <Name>[Геймплей] Anomaly Expedition Rework by White_Angel v0.2.1-alpha</Name>
+    <Name>[Геймплей] Anomaly Expedition Rework by White_Angel v0.3.0-rc1</Name>
     <Author>White_Angel</Author>
-    <Version>0.2.1-alpha</Version>
-    <Description>Approximate artifact search areas and configurable decoys for RVM dungeon sorties.</Description>
-    <Website></Website>
+    <Version>0.3.0-rc1</Version>
+    <Description>Approximate artifact search areas, weighted rewards, configurable decoys and save-safe artifact placement for GRA 2.5 expeditions.</Description>
+    <Website>https://github.com/WhiteAnge1/anomaly-expedition-rework</Website>
 </fomod>
 

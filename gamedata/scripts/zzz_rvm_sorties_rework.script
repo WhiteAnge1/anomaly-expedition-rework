@@ -1,4 +1,4 @@
--- Anomaly Expedition Rework by White_Angel 0.2.1-alpha
+-- Anomaly Expedition Rework by White_Angel 0.3.0-rc1
 -- Minimal wrappers around the actual GRA Bolt dungeon-sortie implementation.
 
 local C = rvm_sorties_config
@@ -307,6 +307,33 @@ function ARTIFACT_COUNT.configured_profile(level_name, stock_count, maximum_coun
         C.get_string(section, "artifact_count_profile", level_name))
     return profile, profile_error
 end
+
+-- DECOY_COUNT_POLICY_BEGIN
+function ARTIFACT_COUNT.configured_decoy_count(level_name)
+    local use_level = C.get_bool("global", "enable_location_zone_counts", true)
+    local section = use_level and ("level_" .. tostring(level_name)) or "global"
+    local values, values_error = ARTIFACT_COUNT.integer_list(C.get_list(section, "zone_count_values"), 0, 20)
+    if not values then return 1, section, nil, values_error end
+    local weight_tokens = C.get_list(section, "zone_count_weights")
+    if #weight_tokens ~= #values then return 1, section, nil, "weights_length_mismatch" end
+    local weights, total = {}, 0
+    for index, token in ipairs(weight_tokens) do
+        local weight = tonumber(token)
+        if not weight or weight ~= math.floor(weight) or weight <= 0 then
+            return 1, section, nil, "invalid_weight_at_" .. tostring(index)
+        end
+        weights[index] = weight
+        total = total + weight
+    end
+    local roll = math.random(1, total)
+    local cumulative = 0
+    for index, weight in ipairs(weights) do
+        cumulative = cumulative + weight
+        if roll <= cumulative then return values[index], section, roll, nil end
+    end
+    return values[#values], section, roll, nil
+end
+-- DECOY_COUNT_POLICY_END
 
 function ARTIFACT_COUNT.ensure_plan(level_name, entry)
     local stock_count = ARTIFACT_COUNT.stock[level_name]
@@ -4312,15 +4339,14 @@ local function create_decoys()
         log("debug_force_decoy_type=artifact: only real artifact areas retained")
         return
     end
-    local false_count = 1
-    if level.name() == "k01_darkscape" then
-        false_count = math.random(2, 4)
-    elseif level.name() == "l09_deadcity" then
-        local roll = math.random(1, 100)
-        false_count = roll <= 20 and 1 or roll <= 80 and 2 or 3
+    local false_count, count_section, count_roll, count_error = ARTIFACT_COUNT.configured_decoy_count(level.name())
+    if count_error then
+        printf(PREFIX .. " ERROR decoy count config invalid level=%s section=%s reason=%s; fallback=1",
+            tostring(level.name()), tostring(count_section), tostring(count_error))
     end
-    release_log("decoy plan level=%s true=%s false=%s type_weights=50/25/25",
-        tostring(level.name()), tostring(true_count), tostring(false_count))
+    release_log("decoy plan level=%s true=%s false=%s count_section=%s raw_roll=%s type_weights=%s/%s/%s",
+        tostring(level.name()), tostring(true_count), tostring(false_count), tostring(count_section),
+        tostring(count_roll or "none"), tostring(weights.enemy), tostring(weights.loot), tostring(weights.empty))
     for index = 1, false_count do
         local kind = weighted_decoy(weights)
         if kind then
@@ -5274,7 +5300,8 @@ local function install_hooks()
                 tostring(ARTIFACT_COUNT.hook.error))
         end
         raid_anomalys.spawner_anomals_zones = function(level_name)
-            local active = enabled() and state.sortie_type == "infected"
+            local active = enabled() and C.get_bool("global", "enable_location_artifact_counts", true)
+                and state.sortie_type == "infected"
                 and state.level_name == level.name() and state.level_name == level_name
                 and ARTIFACT_COUNT.stock[level_name] ~= nil
             if not active then return base_spawner(level_name) end
@@ -5597,7 +5624,7 @@ local function actor_on_first_update()
     install_hooks()
     if not ORIGIN.startup_reported then
         ORIGIN.startup_reported = true
-        printf(PREFIX .. " startup self-test ok version=0.2.1-alpha provenance_schema=%s origin_namespace=true",
+        printf(PREFIX .. " startup self-test ok version=0.3.0-rc1 provenance_schema=%s origin_namespace=true",
             tostring(ARTIFACT_PROVENANCE_SCHEMA))
     end
     for _, record in pairs(state.artifact_provenance or {}) do

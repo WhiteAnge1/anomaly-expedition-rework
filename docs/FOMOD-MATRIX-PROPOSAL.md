@@ -1,80 +1,59 @@
-# Final FOMOD matrix proposal
+# Final FOMOD matrix for 0.3.0-rc1
 
-Status: design ready for owner approval. No `ModuleConfig.xml`, variants or archive are created in this step.
+Status: owner-approved and implemented as RC staging. This is not a final archive, tag or GitHub Release.
 
-## Non-negotiable common baseline
+## Common baseline
 
-Every selectable full LTX keeps:
+Every selectable full LTX keeps schema 9 (`artifact_proactive_hold=true`), the weighted artifact pool, location-specific artifact/false-zone counts, tested loot and ambush balance, and every forced/laboratory switch off. Deprecated legacy relocation is always `artifact_rescue_actions=false` and is not exposed by the installer.
 
-- mod enabled;
-- schema 9 proactive hold enabled at accepted `0.75` server / `1.0` online clearance;
-- weighted true-field pool and accepted tier weights;
-- current counts, radii, decoy weights, loot economy and ambush balance;
-- all forced controls `off/0/false`;
-- all same-ID/stabilization laboratory gates `false`;
-- identical lists and level/tier sections.
+The installer never merges lines and never edits an existing MO2 mod directory. Each conditional choice copies one complete `rvm_sorties_rework.ltx` over the common baseline inside the newly installed mod entry.
 
-Only the explicitly listed profile and marker keys differ. Each install choice copies one complete, statically validated `rvm_sorties_rework.ltx`; partial LTX overlays and line-merging installers are forbidden.
+## Profiles
 
-## Required behavior profiles
+| Profile | Debug | Legacy observation | Legacy actions | Exact markers |
+|---|---|---|---|---|
+| Recommended | off | off | off | independently selectable, default none |
+| Observe-only | off | on | off | independently selectable, default none |
+| Diagnostic | on | on | off | full debug always shows all categories |
 
-| Profile | `debug_mode` | Schema 9 | Legacy observe | Legacy actions | Intended user |
-|---|---|---|---|---|---|
-| **Recommended** | `off` | `artifact_proactive_hold=true` | `false` | proposed `false` | Ordinary public gameplay; weighted production behavior |
-| **Observe-only** | `off` | `true` | `true` | `false` | Support/reproduction with legacy provenance observation but no legacy relocation |
-| **Diagnostic** | `on` | `true` | `true` | `false` | Tester/developer: technical tooltips, all exact markers, log and census |
+Diagnostic does not enable forced decoys/tier, one-shot cleanup, teleport or stabilization experiments.
 
-Diagnostic intentionally does **not** enable legacy actions, forced decoys/tier, cleanup or prototype gates. Those remain manual laboratory-only controls documented in `DEBUG-GUIDE.md`.
+## Search-area types
 
-The owner must approve `artifact_rescue_actions=false` for Recommended. This does not turn off schema 9. If the owner instead requires legacy held-first rescue in Recommended, the complete variant can use `true`, but that choice must be documented as a separate production risk and re-smoked once.
+Three independent choices are available in every profile:
 
-## Independent exact marker selections
+- dangerous false areas (`enable_enemy_decoys`), containing an owned mutant squad;
+- valuable false areas (`enable_loot_decoys`), containing a loot cache;
+- safe false areas (`enable_empty_decoys`), containing no reward or ambush.
 
-For Recommended and Observe-only, expose three independent checkboxes, default unchecked:
+All three default to enabled. Disabling all three is safe: true artifact fields remain and the false-zone plan simply creates no false areas. Their relative weights remain editable in the LTX and automatically renormalize over enabled types.
 
-- exact artifact marker;
-- exact loot-container marker;
-- exact owned-enemy marker.
+## Complete-variant count
 
-The eight possible combinations are materialized as eight complete LTX files per profile:
+- Recommended: 8 area-type combinations x 8 exact-marker combinations = 64.
+- Observe-only: 8 x 8 = 64.
+- Diagnostic: 8 area-type combinations; individual marker page is hidden because debug forces all markers = 8.
+- Total: **136 complete LTX variants**.
 
-| Marker variant | Artifact | Loot | Enemy |
-|---|---:|---:|---:|
-| None | false | false | false |
-| Artifact | true | false | false |
-| Loot | false | true | false |
-| Enemy | false | false | true |
-| Artifact + Loot | true | true | false |
-| Artifact + Enemy | true | false | true |
-| Loot + Enemy | false | true | true |
-| All | true | true | true |
+Generated sources live under `installer/variants`; `fomod/ModuleConfig.xml` contains exactly one conditional install pattern for each. `tools/generate_fomod.ps1` regenerates them, and `tools/test_fomod.ps1` proves every file is a complete config, differs only in approved keys, retains schema 9/weighted/safe forced defaults, and has a one-to-one XML pattern.
 
-This yields 16 complete public variants plus one Diagnostic variant: **17 full LTX files**. Diagnostic presents markers as “always enabled by full debug”; marker checkboxes must be hidden, disabled or ignored there rather than implying they work independently.
+## Advanced LTX controls intentionally not expanded into FOMOD
 
-## FOMOD pages
+The following remain documented manual configuration rather than multiplying the installer matrix:
 
-1. **Welcome / requirements:** GRA 2.5 supported build, GRA Bolt, Rojok Artifact System, Arrival and PAW compatibility/load-order wording; existing saves supported; game must be restarted.
-2. **Behavior profile:** single required choice among Recommended, Observe-only, Diagnostic. Recommended selected by default.
-3. **Exact markers:** visible only for Recommended/Observe-only; three independent choices, all off by default, with clear balance/spoiler descriptions.
-4. **Summary:** show chosen profile, marker categories, fixed weighted/schema-9 baseline, destination mod name and known debug-marker travel limitation.
+- `enabled` master switch;
+- `stash_mode=anomaly/scouting/disabled`;
+- `[artifact_pool] profile=weighted/stock`;
+- `artifact_proactive_hold`;
+- `enable_location_artifact_counts` and per-level `artifact_count_values/weights`;
+- `enable_location_zone_counts` and global/per-level `zone_count_values/weights`;
+- type weights, loot lists/chances, radii and placement attempts;
+- per-level `ambush_spawn_timing`, including Darkscape `proximity/start`.
 
-## Invalid combinations excluded by construction
+## Install and update policy
 
-- `debug_mode=on` with a claim that individual marker toggles hide categories;
-- schema 9 disabled;
-- weighted profile disabled or custom pool weights;
-- legacy actions enabled together with a profile named Observe-only;
-- both stabilization gates enabled;
-- debug teleport without exact hard-coded allowlist and all prerequisite gates;
-- any forced decoy/tier/cleanup value left active;
-- empty/zero decoy weights, invalid tier/count arrays or partial list overrides;
-- partial `rvm_sorties_rework.ltx` overlays from multiple installer steps.
+FOMOD does not back up user files and does not manage an existing MO2 directory. Acceptance uses a versioned GitHub archive installed as a new, separately named MO2 mod entry; the development/older entry is disabled.
 
-## Upgrade behavior requiring owner decision
+For an update, install the new version as a new entry, compare the changelog and config migration notes, manually transfer still-supported custom values, then disable or remove the old entry. Do not use MO2 merge to retain an old LTX: it may omit new required keys and makes the installed result impossible to reproduce.
 
-A full variant necessarily replaces the config. Choose one policy before implementation:
-
-1. **Explicit replacement (recommended):** installer warns that selecting a profile replaces the LTX; user backs up custom changes. This is deterministic and testable.
-2. **Preserve existing config:** upgrade path installs no LTX when the user selects preservation. This is not a partial overlay, but it cannot guarantee new required keys/defaults and needs a separate compatibility check.
-
-Do not attempt automatic line merge.
+After acceptance, the identical archive may be mirrored to Google Drive. Both copies must publish the same SHA-256.

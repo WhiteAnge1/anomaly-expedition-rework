@@ -21,12 +21,19 @@ $required = @(
     'gamedata\configs\ui\map_spots_rvm_sorties.xml',
     'gamedata\configs\text\rus\st_rvm_sorties_rework.xml',
     'fomod\info.xml',
+    'fomod\ModuleConfig.xml',
+    'tools\generate_fomod.ps1',
+    'tools\test_fomod.ps1',
     'meta.ini',
     '.gitignore',
     'docs\CONFIG.md',
     'docs\DEBUG-GUIDE.md',
     'docs\ARTIFACT-COUNT-OPTIONS.md',
     'docs\RELEASE-CHECKLIST.md',
+    'docs\PUBLIC-CONFIG-AUDIT-2026-10-21.md',
+    'docs\FOMOD-MATRIX-PROPOSAL.md',
+    'docs\GITHUB-README-OUTLINE.md',
+    'docs\RC-STAGING-0.3.0-rc1.md',
     'docs\ROADMAP-TO-RELEASE.md',
     'docs\FIELD-TEST-PROACTIVE-HOLD.md',
     'docs\FIELD-TEST-2026-10-21-COMPILE-FAIL.md',
@@ -154,7 +161,7 @@ if ($main.Contains('census skipped: diagnostics disabled')) { $failures.Add('deb
 foreach ($needle in @('roll_valuable_quota','percent_roll','weighted_section','valuable_first_chance','valuable_second_chance','valuable_third_chance','loot_valuable','loot_ordinary','loot_fragments','loot_cap','medicine_rolls','ordinary_capacity','rare_artifact_chance')) {
     if (-not $main.Contains($needle)) { $failures.Add("loot quality policy missing: $needle") }
 }
-foreach ($needle in @('math.random(2, 4)','roll <= 20 and 1 or roll <= 80 and 2 or 3','type preserved, no replacement created','local offset_divisor = math.max(1, balanced("loot_offset_divisor", 3))','local max_offset = math.max(0, radius / offset_divisor)','actual_offset <= max_offset','elseif snapped_offset > offset_limit then','artifact placement tier=%s level=%s offset=%s fraction=%s limit=%s range=%s..%s','separated(fixed, true)','local blocks = not (allow_artifact_overlap and zone.kind == "artifact")','report_artifact_center_failure(artifact_id, art.position, attempted, rejects)','ARTIFACT_RETRY_SUMMARY_MS = 60000','near_origin=%s','invalid_vertex','post_snap_limit','anchor_failure','retries continue, duplicate errors suppressed','artifact center retry pending id=%s position=(%s) near_origin=%s passes=%s attempts=%s rejects=[%s]; duplicate ERROR suppressed','ambush_start_center_exclusion_radius')) {
+foreach ($needle in @('ARTIFACT_COUNT.configured_decoy_count(level.name())','decoy count config invalid','type preserved, no replacement created','local offset_divisor = math.max(1, balanced("loot_offset_divisor", 3))','local max_offset = math.max(0, radius / offset_divisor)','actual_offset <= max_offset','elseif snapped_offset > offset_limit then','artifact placement tier=%s level=%s offset=%s fraction=%s limit=%s range=%s..%s','separated(fixed, true)','local blocks = not (allow_artifact_overlap and zone.kind == "artifact")','report_artifact_center_failure(artifact_id, art.position, attempted, rejects)','ARTIFACT_RETRY_SUMMARY_MS = 60000','near_origin=%s','invalid_vertex','post_snap_limit','anchor_failure','retries continue, duplicate errors suppressed','artifact center retry pending id=%s position=(%s) near_origin=%s passes=%s attempts=%s rejects=[%s]; duplicate ERROR suppressed','ambush_start_center_exclusion_radius')) {
     if (-not $main.Contains($needle)) { $failures.Add("zone policy missing: $needle") }
 }
 if ($main -match 'create_decoy\([^\)]*\)[\s\S]{0,300}create_decoy\(') { $failures.Add('failed decoy type must not be rerolled or replaced') }
@@ -179,7 +186,7 @@ foreach ($section in $ambushProfiles.Keys) {
         if (-not $sectionMatch.Value.Contains($needle)) { $failures.Add("ambush profile $section missing: $needle") }
     }
 }
-foreach ($needle in @('stash_mode = scouting','weight_enemy = 50','weight_loot = 25','weight_empty = 25','remove_on_npc_pickup = false','ambush_start_center_exclusion_radius = 120','artifact_offset_fraction_min = 0.10','artifact_offset_fraction_max = 0.20','artifact_offset_fraction_min = 0.06','artifact_offset_fraction_max = 0.12','loot_offset_divisor = 3','loot_offset_divisor = 5','loot_offset_divisor = 10','valuable_first_chance = 35','valuable_second_chance = 10','valuable_third_chance = 1.5','loot_cap = 6','loot_cap = 7','loot_cap = 8','loot_medicine_half_weight = medkit_army','loot_medicine_half_weight = medkit_scientic','loot_medicine_half_weight = adrenalin','loot_valuable = af_iam, lead_box, detector_simple, detector_advanced, af_cooler, af_freon, af_camelbak, af_frames, af_grid, af_surge, device_torch','loot_valuable = detector_advanced, detector_elite, af_iam, af_aac, lead_box, af_grid_up, af_freon_up, af_cooler_up, af_camelbak_up, af_frames_up, device_torch_nv_1, device_torch_nv_2','loot_valuable = detector_elite, detector_scientific, lead_box, af_aac, af_aam, device_torch_nv_3','rare_artifact_chance = 70','loot_rare_non_artifact = raid_intelligence_note','loot_container_visuals = raid_small_stash_1','map_spot = rvm_search_small','debug_mode = on','debug_log = false','[level_y04_pole]','[level_k01_darkscape]','[level_l09_deadcity]')) {
+foreach ($needle in @('enable_location_artifact_counts = true','enable_location_zone_counts = true','zone_count_values = 2,3,4','zone_count_weights = 1,1,1','zone_count_weights = 20,60,20','stash_mode = scouting','weight_enemy = 50','weight_loot = 25','weight_empty = 25','remove_on_npc_pickup = false','ambush_start_center_exclusion_radius = 120','artifact_offset_fraction_min = 0.10','artifact_offset_fraction_max = 0.20','artifact_offset_fraction_min = 0.06','artifact_offset_fraction_max = 0.12','loot_offset_divisor = 3','loot_offset_divisor = 5','loot_offset_divisor = 10','valuable_first_chance = 35','valuable_second_chance = 10','valuable_third_chance = 1.5','loot_cap = 6','loot_cap = 7','loot_cap = 8','loot_medicine_half_weight = medkit_army','loot_medicine_half_weight = medkit_scientic','loot_medicine_half_weight = adrenalin','loot_valuable = af_iam, lead_box, detector_simple, detector_advanced, af_cooler, af_freon, af_camelbak, af_frames, af_grid, af_surge, device_torch','loot_valuable = detector_advanced, detector_elite, af_iam, af_aac, lead_box, af_grid_up, af_freon_up, af_cooler_up, af_camelbak_up, af_frames_up, device_torch_nv_1, device_torch_nv_2','loot_valuable = detector_elite, detector_scientific, lead_box, af_aac, af_aam, device_torch_nv_3','rare_artifact_chance = 70','loot_rare_non_artifact = raid_intelligence_note','loot_container_visuals = raid_small_stash_1','map_spot = rvm_search_small','debug_mode = off','artifact_rescue_actions = false','debug_log = false','[level_y04_pole]','[level_k01_darkscape]','[level_l09_deadcity]')) {
     if (-not $ltx.Contains($needle)) { $failures.Add("config invariant missing: $needle") }
 }
 foreach ($needle in @('profile = weighted','tier_1_weight_junk = 45','tier_1_weight_low = 45','tier_1_weight_medium = 10','tier_1_weight_high = 0','tier_1_weight_unique = 0','tier_2_weight_junk = 10','tier_2_weight_low = 32','tier_2_weight_medium = 43','tier_2_weight_high = 15','tier_2_weight_unique = 0','tier_3_weight_junk = 2','tier_3_weight_low = 8','tier_3_weight_medium = 43','tier_3_weight_high = 45','tier_3_weight_unique = 2')) {
@@ -253,8 +260,9 @@ foreach ($forbidden in @('simk_card','artifact_container')) {
 }
 
 [xml](Get-Content -LiteralPath (Join-Path $ModRoot 'fomod\info.xml') -Raw -Encoding UTF8) | Out-Null
+[xml](Get-Content -LiteralPath (Join-Path $ModRoot 'fomod\ModuleConfig.xml') -Raw -Encoding UTF8) | Out-Null
 $fomod = Get-Content -LiteralPath (Join-Path $ModRoot 'fomod\info.xml') -Raw -Encoding UTF8
-if (-not $fomod.Contains('[Геймплей] Anomaly Expedition Rework by White_Angel v0.2.1-alpha')) { $failures.Add('FOMOD display name must include category and version') }
+if (-not $fomod.Contains('[Геймплей] Anomaly Expedition Rework by White_Angel v0.3.0-rc1')) { $failures.Add('FOMOD display name must include category and version') }
 $stringsPath = Join-Path $ModRoot 'gamedata\configs\text\rus\st_rvm_sorties_rework.xml'
 $strict1251 = [Text.Encoding]::GetEncoding(1251, [Text.EncoderFallback]::ExceptionFallback, [Text.DecoderFallback]::ExceptionFallback)
 $stringsText = $strict1251.GetString([IO.File]::ReadAllBytes($stringsPath))
@@ -308,6 +316,9 @@ if ($watcher.Contains('New-Object IO.StreamReader')) { $failures.Add('live log w
 $gitIgnore = Get-Content -LiteralPath (Join-Path $ModRoot '.gitignore') -Raw
 if (-not $gitIgnore.Contains('/test-artifacts/live-logs/')) { $failures.Add('generated live watcher archives must be gitignored') }
 $configReference = Get-Content -LiteralPath (Join-Path $ModRoot 'docs\CONFIG.md') -Raw -Encoding UTF8
+foreach ($needle in @('enable_location_artifact_counts','enable_location_zone_counts','zone_count_values','ambush_spawn_timing = proximity')) {
+    if (-not $configReference.Contains($needle)) { $failures.Add("config reference switch missing: $needle") }
+}
 foreach ($needle in @('Необязательный казуальный режим точных меток','show_exact_artifact_markers','show_exact_loot_markers','show_exact_enemy_markers','enemy_spawn_distance_min/max','90..150','120..170','80..120','система аномалий Arrival')) {
     if (-not $configReference.Contains($needle)) { $failures.Add("config reference missing: $needle") }
 }
@@ -368,6 +379,7 @@ if ($Profile -eq 'full' -or $Profile -eq 'geometry') {
     & (Join-Path $ModRoot 'tools\test_geometry_policy.ps1') -ModRoot $ModRoot
 }
 if ($Profile -eq 'full' -or $Profile -eq 'fast') {
+    & (Join-Path $ModRoot 'tools\test_fomod.ps1') -ModRoot $ModRoot
     & (Join-Path $ModRoot 'tools\test_artifact_rescue_policy.ps1') -ModRoot $ModRoot
     & (Join-Path $ModRoot 'tools\test_artifact_stabilization_policy.ps1') -ModRoot $ModRoot
     & (Join-Path $ModRoot 'tools\test_artifact_held_stabilization_policy.ps1') -ModRoot $ModRoot

@@ -32,7 +32,8 @@
 6. **FOMOD profiles**
    - Recommended, Observe-only, Diagnostic comparison table;
    - exact-marker choices and spoiler implications;
-   - config replacement/upgrade warning.
+   - 136 complete-config combinations: profiles, area types and exact markers;
+   - new-entry update policy; explicitly state that FOMOD neither backs up nor merges an old config.
 7. **Gameplay details**
    - T1/T2/T3 counts and search radii;
    - true-field quality weights, explicitly labelled probabilities rather than guarantees;
@@ -61,8 +62,8 @@
     - supported locations/build only;
     - balance remains versioned and configurable.
 13. **Updating, rollback and uninstall**
-    - config replacement policy;
-    - backup/restore;
+   - install a versioned archive as a new MO2 entry and disable the old entry;
+   - manually migrate supported custom values using changelog/config migration notes; never merge an old LTX;
     - disabling mod restores original behavior because source mods are unmodified.
 14. **Integrity**
     - release archive SHA-256 and PowerShell verification command;

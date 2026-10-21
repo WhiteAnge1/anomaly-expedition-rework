@@ -536,7 +536,7 @@ foreach ($needle in @(
     'ORIGIN.restore_all_switch_flags("pre_save")',
     'function ORIGIN.rebuild_artifact_zone(record, action, snapshot)',
     'origin_area_rebuilt', 'origin_rvm_field_revalidation_required',
-    'startup self-test ok version=0.2.1-alpha',
+    'startup self-test ok version=0.3.0-rc1',
     'production_same_id_teleport',
     'local function guarded_rvm_artifact_spawn(base_spawn, anom_zone, field_pos, level_tier)',
     'inner_env ~= raid_anomalys', 'stock_inner_environment_unverified; spawn deferred',
@@ -587,7 +587,7 @@ Assert-True (Test-RescueRuntimeGate $false $true) 'active mode disabled provenan
 Assert-True (-not (Test-RescueRuntimeGate $false $false)) 'fully disabled mode still enabled provenance'
 
 foreach ($needle in @(
-    'artifact_rescue_observe_only = false', 'artifact_rescue_actions = true',
+    'artifact_rescue_observe_only = false', 'artifact_rescue_actions = false',
     'artifact_rescue_rolling_policy = held_first',
     'artifact_rescue_underground_policy = held_first',
     'artifact_rescue_origin_policy = held_first', 'artifact_spawn_guard_attempts = 8',

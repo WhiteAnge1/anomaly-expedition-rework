@@ -11,7 +11,7 @@ Scope: every user-editable key currently shipped in `gamedata/configs/plugins/rv
 - `show_exact_artifact_markers`, `show_exact_loot_markers`, `show_exact_enemy_markers` default to `false`; the installer may independently enable them.
 - All field-tested gameplay, loot, decoy, count, radius and ambush values remain frozen.
 
-Important distinction: schema 9 is controlled by `artifact_proactive_hold`, not by `artifact_rescue_actions`. The latter gates only the legacy rolling/underground/origin action executor. The proposed public Recommended profile keeps schema 9 **on** and legacy actions **off**; this is an owner decision because the currently shipped alpha LTX has legacy actions `true` while older documentation proposed `false`.
+Important distinction: schema 9 is controlled by `artifact_proactive_hold`, not by `artifact_rescue_actions`. The latter gates only the deprecated rolling/underground/origin executor. The owner-approved public configuration keeps schema 9 **on** and legacy actions **off** in every profile. The deprecated runtime remains only to load older alpha saves and preserve research diagnostics; it is not a supported user feature or FOMOD choice.
 
 Ranges below are either enforced by runtime or required safe invariants. A value described as “freeze” is technically editable but should not be exposed by FOMOD because invalid or untested combinations fail closed, degrade placement, or alter balance.
 
@@ -20,10 +20,13 @@ Ranges below are either enforced by runtime or required safe invariants. A value
 | Key | Current | Accepted / safe domain | Proposed public | Dependencies and exposure |
 |---|---:|---|---:|---|
 | `enabled` | `true` | boolean | `true` | Master switch; advanced manual only |
+| `enable_location_artifact_counts` | `true` | boolean | `true` | `false` preserves stock RVM counts `4/8/6`; manual advanced switch |
+| `enable_location_zone_counts` | `true` | boolean | `true` | `false` uses global `zone_count_values/weights`; manual advanced switch |
+| `zone_count_values` / `zone_count_weights` | `1` / `1` | ordered integers `0..20` / positive relative integer weights | unchanged | Global false-zone-count fallback |
 | `stash_mode` | `scouting` | `anomaly/scouting/disabled` | `scouting` | Field-tested; freeze, not FOMOD |
-| `enable_enemy_decoys` | `true` | boolean | `true` | Freeze |
-| `enable_loot_decoys` | `true` | boolean | `true` | Freeze |
-| `enable_empty_decoys` | `true` | boolean | `true` | Freeze |
+| `enable_enemy_decoys` | `true` | boolean | `true` | Independent FOMOD dangerous-area choice |
+| `enable_loot_decoys` | `true` | boolean | `true` | Independent FOMOD valuable-area choice |
+| `enable_empty_decoys` | `true` | boolean | `true` | Independent FOMOD safe-area choice |
 | `weight_enemy` | `50` | number `>=0` | `50` | At least one enabled type must have positive weight |
 | `weight_loot` | `25` | number `>=0` | `25` | Remaining enabled weights normalize automatically |
 | `weight_empty` | `25` | number `>=0` | `25` | Not a count |
@@ -86,7 +89,7 @@ Loot lists and chances are advanced balance controls, not FOMOD options.
 | `artifact_proactive_position_tolerance` | `0.35` | runtime clamp `0.1..1.0` m | `0.35` | Verification only, not relocation permission |
 | `artifact_spawn_guard_attempts` | `8` | runtime clamp integer `1..20` | `8` | Invalid guarded spawn remains fail-closed |
 | `artifact_rescue_observe_only` | `false` | boolean | profile-dependent | Legacy provenance monitor, not schema 9 |
-| `artifact_rescue_actions` | `true` | boolean | **proposed `false`** | Gates only legacy active rescue; owner choice |
+| `artifact_rescue_actions` | `false` | boolean | **`false`** | Deprecated legacy relocation; unavailable in FOMOD |
 | `artifact_rescue_rolling_policy` | `held_first` | `held_first/debug_teleport`; other values disable | `held_first` | Used only if legacy actions enabled |
 | `artifact_rescue_underground_policy` | `held_first` | same | `held_first` | Same executor |
 | `artifact_rescue_origin_policy` | `held_first` | same | `held_first` | Strict origin proof required |
@@ -114,7 +117,7 @@ These keys must be identical and inert in every public FOMOD profile: `artifact_
 | `show_exact_artifact_markers` | `false` | boolean | `false` | Independent checkbox |
 | `show_exact_loot_markers` | `false` | boolean | `false` | Independent checkbox |
 | `show_exact_enemy_markers` | `false` | boolean | `false` | Independent checkbox |
-| `debug_mode` | `on` | `auto/on/off` | **`off`** | Chosen by profile, not marker checkbox |
+| `debug_mode` | `off` | `auto/on/off` | **`off`** | Chosen by profile, not marker checkbox |
 | `debug_log` | `false` | boolean | `false` | Legacy fallback only if `debug_mode` absent |
 | `debug_force_decoy_type` | `off` | `off/artifact/enemy/loot/empty` | `off` | Never expose publicly |
 | `debug_force_tier` | `0` | integer `0..3` | `0` | Never expose publicly |
@@ -165,11 +168,14 @@ All tier loot lists and values remain frozen and outside FOMOD.
 
 For each level, `tier` must be `1..3`; count values and weights must have equal non-zero lengths, values must be unique positive integers, weights non-negative with positive total, and counts must not exceed supported RVM zone capacity. `artifact_count_profile` is a diagnostic name and must remain synchronized with its arrays.
 
+False-zone count tables are explicit too: Pole `1` with weight `1`, Darkscape `2/3/4` with equal relative weights `1/1/1`, Dead City `1/2/3` with weights `20/60/20`. Values are ordered integers `0..20`; weights are positive relative integers and need not sum to 100. Invalid configuration logs an error and safely falls back to one false zone.
+
 ## What is safe to expose in FOMOD
 
 Expose only:
 
 1. one complete behavior profile: Recommended / Observe-only / Diagnostic;
-2. independent artifact / loot / enemy exact marker choices for Recommended and Observe-only.
+2. independent artifact / loot / enemy exact marker choices for Recommended and Observe-only;
+3. independent dangerous / valuable / safe false-area type choices for every profile.
 
 Do not expose weights, radii, counts, rescue thresholds, spawn timing, forced settings, loot lists, pool weights, update rate or individual debug laboratory gates. They lack a bounded field-tested combination matrix and would require partial overlays or dynamic LTX merging.

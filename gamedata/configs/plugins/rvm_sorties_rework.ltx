@@ -1,5 +1,5 @@
 ; ============================================================================
-; Anomaly Expedition Rework by White_Angel 0.2.1-alpha
+; Anomaly Expedition Rework by White_Angel 0.3.0-rc1
 ; Все расстояния указаны в игровых метрах, вероятности и веса — числа >= 0.
 ; Иерархия значений: [global] -> [tier_N] -> [level_техническое_имя].
 ; После изменения файла полностью перезапустите игру.
@@ -8,6 +8,15 @@
 [global]
 ; Основной выключатель. false: callbacks остаются безопасными, но ничего не создают.
 enabled = true
+
+; true uses the per-location artifact_count_* tables below. false preserves
+; the stock RVM artifact count for every supported infected expedition.
+enable_location_artifact_counts = true
+; true uses each level's zone_count_* table for false search areas. false uses
+; the global fallback directly below. These counts never change true fields.
+enable_location_zone_counts = true
+zone_count_values = 1
+zone_count_weights = 1
 
 ; Тайники: anomaly (исходное поведение), scouting (перенос), disabled (отключить).
 stash_mode = scouting
@@ -147,7 +156,7 @@ artifact_rescue_observe_only = false
 ; Schema 9 supersedes the older schema-6 description above: exact guarded
 ; targets persist spawn, surface and raised online-hold coordinates separately.
 ; Общий предохранитель только legacy/debug действий.
-artifact_rescue_actions = true
+artifact_rescue_actions = false
 ; Production policy: held_first. После штатных 15 секунд подтверждённого rolling
 ; первый rescue делает same-ID teleport, три fresh snapshots, reacquire и held.
 ; Значение debug_teleport возвращает закрытый exact-ID лабораторный сценарий.
@@ -224,7 +233,7 @@ show_exact_enemy_markers = false
 
 ; Диагностика: auto следует глобальным DEV_DEBUG/DEV_DEBUG_DEV, on/off задают
 ; явное поведение. Публичный default не включает debug без debug-запуска игры.
-debug_mode = on
+debug_mode = off
 ; Совместимость со старыми конфигами: используется только если debug_mode отсутствует.
 debug_log = false
 ; off, artifact, enemy, loot, empty — принудительный тип ложных областей для теста.
@@ -341,6 +350,9 @@ tier = 1
 artifact_count_profile = pole_35_60_5
 artifact_count_values = 3,4,5
 artifact_count_weights = 35,60,5
+zone_count_profile = pole_fixed_1
+zone_count_values = 1
+zone_count_weights = 1
 ambush_spawn_timing = start
 zone_radius_min = 55
 zone_radius_max = 85
@@ -359,6 +371,9 @@ tier = 2
 artifact_count_profile = darkscape_5_20_47_26_2
 artifact_count_values = 5,6,7,8,9
 artifact_count_weights = 5,20,47,26,2
+zone_count_profile = darkscape_uniform_2_4
+zone_count_values = 2,3,4
+zone_count_weights = 1,1,1
 ambush_spawn_timing = proximity
 zone_radius_min = 150
 zone_radius_max = 240
@@ -377,6 +392,9 @@ tier = 3
 artifact_count_profile = deadcity_11_80_7_2
 artifact_count_values = 4,5,6,7
 artifact_count_weights = 11,80,7,2
+zone_count_profile = deadcity_20_60_20
+zone_count_values = 1,2,3
+zone_count_weights = 20,60,20
 ambush_spawn_timing = start
 zone_radius_min = 140
 zone_radius_max = 220
