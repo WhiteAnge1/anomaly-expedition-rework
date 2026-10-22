@@ -253,7 +253,8 @@ $maintain = $main.IndexOf('maintain_held_stabilization(record, snapshot, now)', 
 $terminalGuard = $main.IndexOf('if record.disabled or record.state == "owned"', $updateStart)
 Assert-True ($maintain -gt $updateStart -and $maintain -lt $terminalGuard) 'load/disabled held release is not processed before terminal guards'
 
-$heldBlock = [regex]::Match($main, '(?s)attempt_held_stabilization = function\(.*?\nend\n\s*local function update_debug_same_id_rescue').Value
+$heldBlock = [regex]::Match($main, '(?s)attempt_held_stabilization = function\(.*?\r?\nend\r?\n\s*local function update_debug_same_id_rescue').Value
+Assert-True ($heldBlock.Length -gt 0) 'held stabilization block extraction must support LF and CRLF'
 foreach ($forbidden in @('apply_force(', 'apply_torque(', 'set_switch_online', 'set_switch_offline', 'alife_create(')) {
     Assert-True (-not $heldBlock.Contains($forbidden)) "forbidden held mechanism detected: $forbidden"
 }

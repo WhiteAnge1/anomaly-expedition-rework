@@ -104,7 +104,7 @@ Assert-True ($fixCall -ge 0 -and $releaseCall -gt $fixCall) 'same-callback relea
 
 Assert-True (([regex]::Matches($main, [regex]::Escape('alife():teleport_object('))).Count -eq 2) `
     'teleport call sites are not limited to initial rescue plus bounded held safe-target reposition'
-$blockMatch = [regex]::Match($main, '(?s)local function attempt_same_frame_stabilization\(.*?\nend\n\s*local function active_held_action')
+$blockMatch = [regex]::Match($main, '(?s)local function attempt_same_frame_stabilization\(.*?\r?\nend\r?\n\s*local function active_held_action')
 Assert-True $blockMatch.Success 'stabilization helper block was not isolated'
 $stabilizationBlock = $blockMatch.Value
 foreach ($forbidden in @('apply_force(', 'apply_torque(', 'set_switch_online', 'set_switch_offline', 'alife_create(')) {
