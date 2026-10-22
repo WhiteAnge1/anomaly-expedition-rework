@@ -615,7 +615,8 @@ Assert-True (([regex]::Matches($main, [regex]::Escape('alife():teleport_object('
 $strictHeldBlock = [regex]::Match($main, '(?s)local function held_target_snapshot_safe\(.*?\nend').Value
 Assert-True (-not $strictHeldBlock.Contains('snapshot.server_gvid == action.target.gvid')) `
     'strict online surface acceptance still depends on unstable ALife gvid equality'
-$targetBlock = [regex]::Match($main, '(?s)local function compute_observe_target\(record\).*?\nend\n\s*local function provenance_log').Value
+$targetBlock = [regex]::Match($main, '(?s)local function compute_observe_target\(record\).*?\r?\nend\r?\n\s*local function provenance_log').Value
+Assert-True ($targetBlock.Length -gt 0) 'compute_observe_target block extraction must support LF and CRLF'
 Assert-True ($targetBlock.Contains('record.spawn_input_pos') -and -not $targetBlock.Contains('snapshot.online_pos')) 'rescue target is not isolated from the failed current position'
 foreach ($gate in @('artifact_rescue_actions', 'artifact_rescue_debug_same_id_teleport', 'artifact_rescue_debug_artifact_ids', 'artifact_rescue_debug_reason')) {
     Assert-True ($main.Contains($gate)) "same-ID teleport gate missing: $gate"
