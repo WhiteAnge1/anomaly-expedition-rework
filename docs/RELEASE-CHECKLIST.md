@@ -1,8 +1,10 @@
 # Release checklist
 
-> `0.3.0-rc1` и `0.3.0-rc2` сохранены как superseded prerelease. `0.3.0-rc3` допускается как устанавливаемый prerelease только после проверки точных MCM menu/list ID, CP1251 без BOM для русского string-table, отсутствия mojibake, русифицированного FOMOD, воспроизводимой сборки и полного статического suite. Финальным релизом он не является, а полевая new-expedition/save-load проверка остаётся acceptance-блокером.
+> Предыдущие RC сохранены как superseded prerelease. `0.3.0-rc4` — устанавливаемый диагностический prerelease для узкого воспроизведения возможного смещения мутантского squad после save/load. Он не меняет позиции и не исправляет предполагаемую причину; финальным релизом не является.
 
 ## Обязательные блокеры публичного релиза
+
+- [ ] Для `0.3.0-rc4` выполнить узкий Darkscape save/load repro: общий debug выключен, exact enemy markers включены, immediate enemy spawn, один squad снят на 0/5/15/30 сек после загрузки, затем обычный выход. Сопоставить `squad_load_diag` по sortie nonce и ID; до результата не добавлять reposition/fix.
 
 - [x] Владелец утвердил public config/FOMOD: Recommended/Observe-only `debug_mode=off`, Diagnostic `on`, schema 9 и weighted во всех профилях, legacy actions всегда off, exact markers default None, три типа ложных зон независимо отключаемы. Обновление ставится новой MO2-записью без автоматического backup/merge старого LTX.
 

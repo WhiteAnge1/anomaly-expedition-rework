@@ -1,4 +1,4 @@
--- Anomaly Expedition Rework by White_Angel 0.3.0-rc3
+-- Anomaly Expedition Rework by White_Angel 0.3.0-rc4
 -- Minimal wrappers around the actual GRA Bolt dungeon-sortie implementation.
 
 local C = rvm_sorties_config
@@ -35,6 +35,7 @@ local attempt_held_stabilization = nil
 -- finite local-variable budget.
 RVM_SORTIES_PROACTIVE = RVM_SORTIES_PROACTIVE or {}
 RVM_SORTIES_PROACTIVE.pending_online = RVM_SORTIES_PROACTIVE.pending_online or {}
+RVM_SORTIES_SQUAD_DIAGNOSTICS = RVM_SORTIES_SQUAD_DIAGNOSTICS or {}
 local saved_origin_evidence_valid = nil
 local ORIGIN = {}
 
@@ -4802,6 +4803,169 @@ local function defer_ambush(zone, now, reason)
         tostring(zone.anchor_id), tostring(reason), tostring(zone.ambush_retry_count), tostring(retry_delay))
 end
 
+-- Read-only squad load diagnostics. This namespace is deliberately global so
+-- the already saturated X-Ray main chunk does not gain another local. Nothing
+-- in this block may create, release, teleport or write a position/vertex.
+-- SQUAD_LOAD_DIAGNOSTICS_BEGIN
+function RVM_SORTIES_SQUAD_DIAGNOSTICS.scalar_field(obj, names)
+    if not obj then return nil end
+    for _, name in ipairs(names or {}) do
+        local ok, value = pcall(function() return obj[name] end)
+        if ok and (type(value) == "number" or type(value) == "string" or type(value) == "boolean") then
+            return value
+        end
+    end
+    return nil
+end
+
+function RVM_SORTIES_SQUAD_DIAGNOSTICS.number_method(obj, names)
+    if not obj then return nil end
+    for _, name in ipairs(names or {}) do
+        local ok, method = pcall(function() return obj[name] end)
+        if ok and type(method) == "function" then
+            local call_ok, value = pcall(method, obj)
+            if call_ok and type(value) == "number" then return value end
+        end
+    end
+    return nil
+end
+
+function RVM_SORTIES_SQUAD_DIAGNOSTICS.session()
+    if not RVM_SORTIES_SQUAD_DIAGNOSTICS.session_nonce then
+        local clock_ok, clock = pcall(time_global)
+        RVM_SORTIES_SQUAD_DIAGNOSTICS.session_nonce = tostring(clock_ok and clock or "no_clock")
+            .. ":" .. tostring(level and level.name and level.name() or "no_level")
+    end
+    if not state.squad_diag_sortie_nonce then
+        state.squad_diag_sortie_nonce = tostring(state.level_name or "no_level")
+            .. ":" .. tostring(state.sortie_type or "no_type")
+            .. ":" .. tostring(RVM_SORTIES_SQUAD_DIAGNOSTICS.session_nonce)
+    end
+    return RVM_SORTIES_SQUAD_DIAGNOSTICS.session_nonce, state.squad_diag_sortie_nonce
+end
+
+function RVM_SORTIES_SQUAD_DIAGNOSTICS.delta(a, b)
+    if not (a and b) then return nil end
+    local dx, dy, dz = b.x - a.x, b.y - a.y, b.z - a.z
+    return math.sqrt(dx * dx + dy * dy + dz * dz)
+end
+
+function RVM_SORTIES_SQUAD_DIAGNOSTICS.capture(zone, stage, now, created_this_session, store_saved)
+    if not (zone and zone.kind == "enemy" and zone.squad_id and not zone.closed) then return end
+    local session_nonce, sortie_nonce = RVM_SORTIES_SQUAD_DIAGNOSTICS.session()
+    local squad = safe_alife_object(zone.squad_id)
+    local commander_id = squad_commander_id(squad)
+    local smart = RVM_SORTIES_SQUAD_DIAGNOSTICS.scalar_field(squad,
+        { "smart_terrain_id", "m_smart_terrain_id", "smart_id" })
+    local target = RVM_SORTIES_SQUAD_DIAGNOSTICS.scalar_field(squad,
+        { "assigned_target_id", "current_target_id", "target_id", "m_target_id" })
+    local actor_pos = db.actor and safe_object_position(db.actor) or nil
+    local saved_by_id = zone.squad_diag_saved or {}
+    local current_saved = {}
+    for raw_id, _ in pairs(zone.member_ids or zone.spawned_ids or {}) do
+        local member_id = tonumber(raw_id) or raw_id
+        local server = safe_alife_object(member_id)
+        local online_ok, online = pcall(function() return level and level.object_by_id(member_id) end)
+        online = online_ok and online or nil
+        local server_pos = safe_object_position(server)
+        local online_pos = safe_object_position(online)
+        local effective_pos = online_pos or server_pos
+        local saved = saved_by_id[tostring(member_id)]
+        local same_id = saved == nil or tostring(saved.member_id) == tostring(member_id)
+        local server_delta = saved and RVM_SORTIES_SQUAD_DIAGNOSTICS.delta(saved.server_pos, server_pos) or nil
+        local online_delta = saved and RVM_SORTIES_SQUAD_DIAGNOSTICS.delta(saved.online_pos, online_pos) or nil
+        local server_lvid = safe_server_vertex(server, "m_level_vertex_id")
+        local server_gvid = safe_server_vertex(server, "m_game_vertex_id")
+        local online_lvid = RVM_SORTIES_SQUAD_DIAGNOSTICS.number_method(online,
+            { "level_vertex_id", "level_vertex" })
+        local online_gvid = RVM_SORTIES_SQUAD_DIAGNOSTICS.number_method(online,
+            { "game_vertex_id", "game_vertex" })
+        release_log("squad_load_diag stage=%s session=%s sortie=%s t_ms=%s anchor_id=%s squad_id=%s commander_id=%s member_id=%s server_pos=(%s) online_pos=(%s) server_lvid=%s server_gvid=%s online_lvid=%s online_gvid=%s actor_distance=%s anchor_distance=%s saved_server_delta=%s saved_online_delta=%s smart=%s target=%s same_id=%s created_this_session=%s owned_by_rework=true position_write=false",
+            tostring(stage), tostring(session_nonce), tostring(sortie_nonce), tostring(now or "none"),
+            tostring(zone.anchor_id), tostring(zone.squad_id), tostring(commander_id or "none"), tostring(member_id),
+            fmt_position(server_pos), fmt_position(online_pos), tostring(server_lvid or "none"),
+            tostring(server_gvid or "none"), tostring(online_lvid or "none"), tostring(online_gvid or "none"),
+            actor_pos and effective_pos and fmt_number(RVM_SORTIES_SQUAD_DIAGNOSTICS.delta(actor_pos, effective_pos)) or "none",
+            zone.center and effective_pos and fmt_number(RVM_SORTIES_SQUAD_DIAGNOSTICS.delta(zone.center, effective_pos)) or "none",
+            server_delta and fmt_number(server_delta) or "none", online_delta and fmt_number(online_delta) or "none",
+            tostring(smart or "none"), tostring(target or "none"), tostring(same_id),
+            tostring(created_this_session == true))
+        current_saved[tostring(member_id)] = {
+            member_id = member_id,
+            server_pos = server_pos,
+            online_pos = online_pos,
+            server_lvid = server_lvid,
+            server_gvid = server_gvid,
+        }
+    end
+    if store_saved then zone.squad_diag_saved = current_saved end
+end
+
+function RVM_SORTIES_SQUAD_DIAGNOSTICS.invoke(method, ...)
+    if RVM_SORTIES_SQUAD_DIAGNOSTICS.disabled then return false end
+    local ok, err = pcall(method, ...)
+    if not ok then
+        RVM_SORTIES_SQUAD_DIAGNOSTICS.disabled = true
+        printf(PREFIX .. " ERROR squad load diagnostics disabled error=%s; gameplay unchanged", tostring(err))
+    end
+    return ok
+end
+
+function RVM_SORTIES_SQUAD_DIAGNOSTICS.created(zone, now)
+    zone.squad_diag_loaded = false
+    zone.squad_diag_started_at = nil
+    zone.squad_diag_emitted = {}
+    RVM_SORTIES_SQUAD_DIAGNOSTICS.capture(zone, "creation", now, true, false)
+end
+
+function RVM_SORTIES_SQUAD_DIAGNOSTICS.before_save(now)
+    for _, zone in pairs(state.zones or {}) do
+        if zone.kind == "enemy" and zone.triggered and not zone.closed then
+            RVM_SORTIES_SQUAD_DIAGNOSTICS.capture(zone, "before_save", now, not zone.squad_diag_loaded, true)
+        end
+    end
+end
+
+function RVM_SORTIES_SQUAD_DIAGNOSTICS.load_restore(now)
+    for _, zone in pairs(state.zones or {}) do
+        if zone.kind == "enemy" and zone.triggered and not zone.closed then
+            zone.squad_diag_loaded = true
+            zone.squad_diag_started_at = nil
+            zone.squad_diag_emitted = {}
+            RVM_SORTIES_SQUAD_DIAGNOSTICS.capture(zone, "load_restore", now, false, false)
+        end
+    end
+end
+
+function RVM_SORTIES_SQUAD_DIAGNOSTICS.first_update(now)
+    for _, zone in pairs(state.zones or {}) do
+        if zone.kind == "enemy" and zone.triggered and not zone.closed and zone.squad_diag_loaded
+        and not zone.squad_diag_started_at then
+            zone.squad_diag_started_at = now
+            zone.squad_diag_emitted = zone.squad_diag_emitted or {}
+            zone.squad_diag_emitted[0] = true
+            RVM_SORTIES_SQUAD_DIAGNOSTICS.capture(zone, "load_first_update_0s", now, false, false)
+        end
+    end
+end
+
+function RVM_SORTIES_SQUAD_DIAGNOSTICS.update(now)
+    for _, zone in pairs(state.zones or {}) do
+        if zone.kind == "enemy" and zone.triggered and not zone.closed and zone.squad_diag_started_at then
+            zone.squad_diag_emitted = zone.squad_diag_emitted or {}
+            for _, seconds in ipairs({ 5, 15, 30 }) do
+                if not zone.squad_diag_emitted[seconds]
+                and now - zone.squad_diag_started_at >= seconds * 1000 then
+                    zone.squad_diag_emitted[seconds] = true
+                    RVM_SORTIES_SQUAD_DIAGNOSTICS.capture(zone,
+                        "load_followup_" .. tostring(seconds) .. "s", now, false, false)
+                end
+            end
+        end
+    end
+end
+-- SQUAD_LOAD_DIAGNOSTICS_END
+
 local function trigger_ambush(zone, now, spawn_timing)
     if zone.triggered then return end
     spawn_timing = spawn_timing == "start" and "start" or "proximity"
@@ -4833,6 +4997,7 @@ local function trigger_ambush(zone, now, spawn_timing)
         zone.ambush_retry_at = nil
         zone.ambush_retry_actor_pos = nil
         zone.ambush_retry_view_dir = nil
+        RVM_SORTIES_SQUAD_DIAGNOSTICS.invoke(RVM_SORTIES_SQUAD_DIAGNOSTICS.created, zone, now)
         release_log("enemy squad ready tier=%s preset=%s cascade=%s members=%s",
             tostring(current_tier()), tostring(zone.squad_section), tostring(zone.spawn_cascade_step),
             tostring(size_table(zone.spawned_ids)))
@@ -5638,7 +5803,7 @@ local function actor_on_first_update()
     install_hooks()
     if not ORIGIN.startup_reported then
         ORIGIN.startup_reported = true
-        printf(PREFIX .. " startup self-test ok version=0.3.0-rc3 provenance_schema=%s origin_namespace=true",
+        printf(PREFIX .. " startup self-test ok version=0.3.0-rc4 provenance_schema=%s origin_namespace=true",
             tostring(ARTIFACT_PROVENANCE_SCHEMA))
     end
     for _, record in pairs(state.artifact_provenance or {}) do
@@ -5683,6 +5848,7 @@ local function actor_on_first_update()
         for _, zone in pairs(state.zones) do
             if not zone.closed then refresh_zone_spots(zone) end
         end
+        RVM_SORTIES_SQUAD_DIAGNOSTICS.invoke(RVM_SORTIES_SQUAD_DIAGNOSTICS.first_update, time_global())
         release_log("runtime initialized type=%s restored_zones=%s",
             tostring(state.sortie_type), tostring(size_table(state.zones or {})))
     end
@@ -5711,6 +5877,7 @@ local function actor_on_update()
         end
         if not state.decoys_created and state.last_artifact_time > 0 and now - state.last_artifact_time >= 2000 then create_decoys() end
         update_zones(now)
+        RVM_SORTIES_SQUAD_DIAGNOSTICS.invoke(RVM_SORTIES_SQUAD_DIAGNOSTICS.update, now)
     end
 end
 
@@ -5775,6 +5942,7 @@ local function save_state(m_data)
             state.provenance_next_save_log_at = now + interval
         end
     end
+    RVM_SORTIES_SQUAD_DIAGNOSTICS.invoke(RVM_SORTIES_SQUAD_DIAGNOSTICS.before_save, time_global())
     m_data.rvm_sorties_rework = state
 end
 
@@ -6211,6 +6379,7 @@ local function load_state(m_data)
     end
     migrate_artifact_provenance(previous_schema)
     state.schema = 9
+    RVM_SORTIES_SQUAD_DIAGNOSTICS.invoke(RVM_SORTIES_SQUAD_DIAGNOSTICS.load_restore, time_global())
 end
 
 local function find_debug_ui(...)
