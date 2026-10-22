@@ -1,4 +1,4 @@
--- Anomaly Expedition Rework by White_Angel 0.3.0-rc2
+-- Anomaly Expedition Rework by White_Angel 0.3.0-rc3
 -- Minimal wrappers around the actual GRA Bolt dungeon-sortie implementation.
 
 local C = rvm_sorties_config
@@ -5638,7 +5638,7 @@ local function actor_on_first_update()
     install_hooks()
     if not ORIGIN.startup_reported then
         ORIGIN.startup_reported = true
-        printf(PREFIX .. " startup self-test ok version=0.3.0-rc2 provenance_schema=%s origin_namespace=true",
+        printf(PREFIX .. " startup self-test ok version=0.3.0-rc3 provenance_schema=%s origin_namespace=true",
             tostring(ARTIFACT_PROVENANCE_SCHEMA))
     end
     for _, record in pairs(state.artifact_provenance or {}) do

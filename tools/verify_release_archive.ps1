@@ -58,7 +58,7 @@ try {
         if (-not $mcmCoreText.Contains($needle)) { throw "Installed MCM API mismatch: $needle" }
     }
     $extractedMain = Get-Content -LiteralPath (Join-Path $temporary 'gamedata\scripts\zzz_rvm_sorties_rework.script') -Raw
-    foreach ($needle in @('version=0.3.0-rc2','settings_snapshot = nil','C.build_snapshot(level.name())','C.activate_snapshot(state.settings_snapshot)','C.clear_snapshot()','pending_transition','transition resolved same_level')) {
+    foreach ($needle in @('version=0.3.0-rc3','settings_snapshot = nil','C.build_snapshot(level.name())','C.activate_snapshot(state.settings_snapshot)','C.clear_snapshot()','pending_transition','transition resolved same_level')) {
         if (-not $extractedMain.Contains($needle)) { throw "Extracted snapshot/version invariant missing: $needle" }
     }
     foreach ($file in Get-ChildItem -LiteralPath $temporary -Recurse -File) {

@@ -44,6 +44,8 @@ $required = @(
     'docs\RELEASE-NOTES-0.3.0-rc1.md',
     'docs\RC-STAGING-0.3.0-rc2.md',
     'docs\RELEASE-NOTES-0.3.0-rc2.md',
+    'docs\RC-STAGING-0.3.0-rc3.md',
+    'docs\RELEASE-NOTES-0.3.0-rc3.md',
     'docs\ROADMAP-TO-RELEASE.md',
     'docs\FIELD-TEST-PROACTIVE-HOLD.md',
     'docs\FIELD-TEST-2026-10-21-COMPILE-FAIL.md',
@@ -76,8 +78,8 @@ foreach ($relative in $required) {
 }
 
 # Windows PowerShell 5.1 treats BOM-less UTF-8 scripts as the active ANSI code
-# page. Both scripts contain Cyrillic text, so the BOM is a runtime requirement.
-foreach ($relative in @('tools\static_check.ps1','tools\watch_live_log.ps1','tools\test_loot_policy.ps1')) {
+# page. Every listed script contains Cyrillic text, so the BOM is a runtime requirement.
+foreach ($relative in @('tools\static_check.ps1','tools\watch_live_log.ps1','tools\test_loot_policy.ps1','tools\generate_fomod.ps1','tools\test_fomod.ps1')) {
     $toolPath = Join-Path $ModRoot $relative
     if (Test-Path -LiteralPath $toolPath) {
         $bytes = [IO.File]::ReadAllBytes($toolPath)
@@ -280,10 +282,15 @@ foreach ($forbidden in @('simk_card','artifact_container')) {
 
 [xml](Get-Content -LiteralPath (Join-Path $ModRoot 'fomod\info.xml') -Raw -Encoding UTF8) | Out-Null
 [xml](Get-Content -LiteralPath (Join-Path $ModRoot 'fomod\ModuleConfig.xml') -Raw -Encoding UTF8) | Out-Null
-[xml](Get-Content -LiteralPath (Join-Path $ModRoot 'gamedata\configs\text\rus\st_rvm_sorties_mcm.xml') -Raw -Encoding UTF8) | Out-Null
+$mcmRusPath = Join-Path $ModRoot 'gamedata\configs\text\rus\st_rvm_sorties_mcm.xml'
+$mcmRusBytes = [IO.File]::ReadAllBytes($mcmRusPath)
+$mcmRusText = [Text.Encoding]::GetEncoding(1251).GetString($mcmRusBytes)
+if ($mcmRusBytes.Length -ge 3 -and $mcmRusBytes[0] -eq 0xEF -and $mcmRusBytes[1] -eq 0xBB -and $mcmRusBytes[2] -eq 0xBF) { $failures.Add('Russian MCM string table must not have UTF-8 BOM') }
+if ($mcmRusText -notmatch '<\?xml[^>]+encoding="windows-1251"') { $failures.Add('Russian MCM string table must declare windows-1251') }
+[xml]$mcmRusText | Out-Null
 [xml](Get-Content -LiteralPath (Join-Path $ModRoot 'gamedata\configs\text\eng\st_rvm_sorties_mcm.xml') -Raw -Encoding UTF8) | Out-Null
 $fomod = Get-Content -LiteralPath (Join-Path $ModRoot 'fomod\info.xml') -Raw -Encoding UTF8
-if (-not $fomod.Contains('[Геймплей] Anomaly Expedition Rework by White_Angel v0.3.0-rc2')) { $failures.Add('FOMOD display name must include category and version') }
+if (-not $fomod.Contains('[Геймплей] Anomaly Expedition Rework by White_Angel v0.3.0-rc3')) { $failures.Add('FOMOD display name must include category and version') }
 $stringsPath = Join-Path $ModRoot 'gamedata\configs\text\rus\st_rvm_sorties_rework.xml'
 $strict1251 = [Text.Encoding]::GetEncoding(1251, [Text.EncoderFallback]::ExceptionFallback, [Text.DecoderFallback]::ExceptionFallback)
 $stringsText = $strict1251.GetString([IO.File]::ReadAllBytes($stringsPath))
