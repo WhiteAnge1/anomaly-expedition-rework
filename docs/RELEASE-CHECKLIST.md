@@ -1,6 +1,6 @@
 # Release checklist
 
-> `0.3.0-rc1` сохранён как промежуточный prerelease и не является текущим acceptance-кандидатом. `rc2` запрещён до прохождения MCM static/runtime checks, проверки 56 русских/английских tooltip, clean install единого Recommended FOMOD и полевого new-expedition/save-load smoke.
+> `0.3.0-rc1` сохранён как superseded prerelease. `0.3.0-rc2` допускается как устанавливаемый prerelease после воспроизводимой сборки и полного статического suite; финальным релизом он не является, а полевая new-expedition/save-load проверка остаётся acceptance-блокером.
 
 ## Обязательные блокеры публичного релиза
 

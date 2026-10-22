@@ -1,7 +1,7 @@
 param(
     [string]$ModRoot = (Split-Path -Parent $PSScriptRoot),
     [string]$OutputDirectory = (Join-Path (Split-Path -Parent $PSScriptRoot) 'dist'),
-    [string]$FileName = 'Anomaly-Expedition-Rework-0.3.0-rc1.zip'
+    [string]$FileName = 'Anomaly-Expedition-Rework-0.3.0-rc2.zip'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -31,7 +31,7 @@ $stream = [IO.File]::Open($archivePath, [IO.FileMode]::CreateNew, [IO.FileAccess
 try {
     $zip = New-Object IO.Compression.ZipArchive($stream, [IO.Compression.ZipArchiveMode]::Create, $false)
     try {
-        $fixedTime = [DateTimeOffset]::new(2026, 10, 21, 0, 0, 0, [TimeSpan]::Zero)
+        $fixedTime = [DateTimeOffset]::new(2026, 10, 22, 0, 0, 0, [TimeSpan]::Zero)
         foreach ($relative in $relativeFiles) {
             $source = Join-Path $ModRoot ($relative -replace '/','\')
             $entry = $zip.CreateEntry($relative, [IO.Compression.CompressionLevel]::Optimal)

@@ -8,6 +8,10 @@ param(
 $ErrorActionPreference = 'Stop'
 $ArchivePath = (Resolve-Path -LiteralPath $ArchivePath).Path
 $SourceRoot = (Resolve-Path -LiteralPath $SourceRoot).Path
+if (-not $BuildModsRoot -or -not (Test-Path -LiteralPath $BuildModsRoot)) {
+    throw 'BuildModsRoot with installed Anomaly MCM 1.7.2 is required for release verification'
+}
+$BuildModsRoot = (Resolve-Path -LiteralPath $BuildModsRoot).Path
 $temporary = Join-Path ([IO.Path]::GetTempPath()) ('aer-rc-verify-' + [Guid]::NewGuid().ToString('N'))
 [void](New-Item -ItemType Directory -Path $temporary)
 
@@ -31,13 +35,32 @@ try {
             if ($name -notmatch '^(gamedata|fomod)/') { throw "Unexpected archive root: $name" }
             if ($name -match '(?i)\.(log|sav|scop|db|bak|tmp)$') { throw "Forbidden runtime artifact: $name" }
         }
-        foreach ($required in @('fomod/info.xml','fomod/ModuleConfig.xml','gamedata/scripts/zzz_rvm_sorties_rework.script','gamedata/configs/plugins/rvm_sorties_rework.ltx')) {
+        foreach ($required in @(
+            'fomod/info.xml','fomod/ModuleConfig.xml',
+            'gamedata/scripts/zzz_rvm_sorties_rework.script',
+            'gamedata/scripts/rvm_sorties_config.script',
+            'gamedata/scripts/rvm_sorties_mcm.script',
+            'gamedata/configs/plugins/rvm_sorties_rework.ltx',
+            'gamedata/configs/text/rus/st_rvm_sorties_mcm.xml',
+            'gamedata/configs/text/eng/st_rvm_sorties_mcm.xml'
+        )) {
             if (-not ($entries.FullName -contains $required)) { throw "Required archive entry missing: $required" }
         }
         if (@($entries | Where-Object FullName -Match '^installer/').Count -ne 0) { throw 'Obsolete installer variants found' }
     } finally { $zip.Dispose() }
 
     Expand-Archive -LiteralPath $ArchivePath -DestinationPath $temporary
+    $mcmCore = Get-ChildItem -LiteralPath $BuildModsRoot -Recurse -File -Filter 'ui_mcm.script' |
+        Where-Object { $_.FullName -match 'Anomaly-MCM' } | Select-Object -First 1
+    if (-not $mcmCore) { throw 'Installed Anomaly-MCM ui_mcm.script not found' }
+    $mcmCoreText = Get-Content -LiteralPath $mcmCore.FullName -Raw
+    foreach ($needle in @('function get(id)','function is_gathering()','ui_mcm.get() cannot be called during script load or on_mcm_load()','function get_opt_table(id)','_desc')) {
+        if (-not $mcmCoreText.Contains($needle)) { throw "Installed MCM API mismatch: $needle" }
+    }
+    $extractedMain = Get-Content -LiteralPath (Join-Path $temporary 'gamedata\scripts\zzz_rvm_sorties_rework.script') -Raw
+    foreach ($needle in @('version=0.3.0-rc2','settings_snapshot = nil','C.build_snapshot(level.name())','C.activate_snapshot(state.settings_snapshot)','C.clear_snapshot()','pending_transition','transition resolved same_level')) {
+        if (-not $extractedMain.Contains($needle)) { throw "Extracted snapshot/version invariant missing: $needle" }
+    }
     foreach ($file in Get-ChildItem -LiteralPath $temporary -Recurse -File) {
         if ($file.Extension -match '^\.(script|ltx|xml|ini)$') {
             $bytes = [IO.File]::ReadAllBytes($file.FullName)
@@ -53,6 +76,7 @@ try {
     & (Join-Path $SourceRoot 'tools\test_artifact_stabilization_policy.ps1') -ModRoot $temporary
     & (Join-Path $SourceRoot 'tools\test_artifact_held_stabilization_policy.ps1') -ModRoot $temporary
     & (Join-Path $SourceRoot 'tools\test_geometry_policy.ps1') -ModRoot $temporary
+    & (Join-Path $SourceRoot 'tools\test_loot_policy.ps1') -ModRoot $temporary -Samples 200000
 
     if (-not $PythonDeps) {
         $projectRoot = Split-Path -Parent (Split-Path -Parent $SourceRoot)
