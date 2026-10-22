@@ -34,7 +34,7 @@ function on_mcm_load()
     }
     append(zone_counts, weights("pole_", {1}, {1}))
     zone_counts[#zone_counts + 1] = { id="darkscape_title", type="title", text="ui_mcm_rvm_sorties_rework_zone_counts_darkscape_title" }
-    append(zone_counts, weights("darkscape_", {2,3,4}, {1,1,1}))
+    append(zone_counts, weights("darkscape_", {2,3,4}, {33,34,33}))
     zone_counts[#zone_counts + 1] = { id="deadcity_title", type="title", text="ui_mcm_rvm_sorties_rework_zone_counts_deadcity_title" }
     append(zone_counts, weights("deadcity_", {1,2,3}, {20,60,20}))
 

@@ -168,7 +168,7 @@ All tier loot lists and values remain frozen and outside FOMOD.
 
 For each level, `tier` must be `1..3`; count values and weights must have equal non-zero lengths, values must be unique positive integers, weights non-negative with positive total, and counts must not exceed supported RVM zone capacity. `artifact_count_profile` is a diagnostic name and must remain synchronized with its arrays.
 
-False-zone count tables are explicit too: Pole `1` with weight `1`, Darkscape `2/3/4` with equal relative weights `1/1/1`, Dead City `1/2/3` with weights `20/60/20`. Values are ordered integers `0..20`; weights are positive relative integers and need not sum to 100. Invalid configuration logs an error and safely falls back to one false zone.
+False-zone count tables are explicit too: Pole `1` with weight `1`, Darkscape `2/3/4` with public weights `33/34/33`, Dead City `1/2/3` with weights `20/60/20`. Public multi-value profiles sum to 100; runtime still accepts and normalizes positive relative integers. Values are ordered integers `0..20`. Invalid configuration logs an error and safely falls back to one false zone.
 
 ## What is safe to expose in FOMOD
 

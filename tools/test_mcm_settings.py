@@ -118,6 +118,8 @@ def run_variant(name: str, root: Path, ltx: dict[str, dict[str, str]]) -> None:
         section = f"level_{level}"
         assert lua_list(globals_.get_list(section, "artifact_count_weights")) == ltx[section]["artifact_count_weights"].split(",")
         assert lua_list(globals_.get_list(section, "zone_count_weights")) == ltx[section]["zone_count_weights"].split(",")
+    assert ltx["level_k01_darkscape"]["zone_count_weights"] == "33,34,33"
+    assert lua_list(globals_.get_list("level_k01_darkscape", "zone_count_weights")) == ["33", "34", "33"]
 
     globals_.MCM_VALUES["rvm_sorties_rework/general/stash_mode"] = "disabled"
     globals_.MCM_VALUES["rvm_sorties_rework/darkscape/spawn_timing"] = "start"
@@ -125,13 +127,18 @@ def run_variant(name: str, root: Path, ltx: dict[str, dict[str, str]]) -> None:
         globals_.MCM_VALUES[f"rvm_sorties_rework/artifact_pool/tier2_{quality}"] = 10
     for count in (5, 6, 7, 8, 9):
         globals_.MCM_VALUES[f"rvm_sorties_rework/artifact_counts/darkscape_{count}"] = 1
+    for count, weight in ((2, 66), (3, 68), (4, 66)):
+        globals_.MCM_VALUES[f"rvm_sorties_rework/zone_counts/darkscape_{count}"] = weight
     snapshot = globals_.build_snapshot("k01_darkscape")
     assert globals_.activate_snapshot(snapshot) is True
     globals_.MCM_VALUES["rvm_sorties_rework/general/stash_mode"] = "scouting"
     globals_.MCM_VALUES["rvm_sorties_rework/darkscape/spawn_timing"] = "proximity"
+    for count in (2, 3, 4):
+        globals_.MCM_VALUES[f"rvm_sorties_rework/zone_counts/darkscape_{count}"] = 1
     assert globals_.get_string("global", "stash_mode", "missing") == "disabled"
     assert globals_.get_string("level_k01_darkscape", "ambush_spawn_timing", "missing") == "start"
     assert lua_list(globals_.get_list("level_k01_darkscape", "artifact_count_weights")) == ["20"] * 5
+    assert lua_list(globals_.get_list("level_k01_darkscape", "zone_count_weights")) == ["66", "68", "66"]
     for quality in ("junk", "low", "medium", "high", "unique"):
         assert globals_.get_number("artifact_pool", f"tier_2_weight_{quality}", -1) == 20
 
@@ -140,20 +147,25 @@ def run_variant(name: str, root: Path, ltx: dict[str, dict[str, str]]) -> None:
         globals_.MCM_VALUES[f"rvm_sorties_rework/decoys/weight_{kind}"] = 0
     for quality in ("junk", "low", "medium", "high", "unique"):
         globals_.MCM_VALUES[f"rvm_sorties_rework/artifact_pool/tier2_{quality}"] = 0
+    for count in (2, 3, 4):
+        globals_.MCM_VALUES[f"rvm_sorties_rework/zone_counts/darkscape_{count}"] = 0
     invalid_snapshot = globals_.build_snapshot("k01_darkscape")
     assert globals_.activate_snapshot(invalid_snapshot) is True
     assert globals_.get_number("global", "weight_enemy", -1) == float(ltx["global"]["weight_enemy"])
     assert globals_.get_number("artifact_pool", "tier_2_weight_medium", -1) == float(
         ltx["artifact_pool"]["tier_2_weight_medium"]
     )
+    assert lua_list(globals_.get_list("level_k01_darkscape", "zone_count_weights")) == ["33", "34", "33"]
 
     globals_.clear_snapshot()
     globals_.ui_mcm = None
     assert globals_.get_string("global", "stash_mode", "missing") == ltx["global"]["stash_mode"]
     assert lua_list(globals_.get_list("level_k01_darkscape", "artifact_count_weights")) == ltx["level_k01_darkscape"]["artifact_count_weights"].split(",")
+    assert lua_list(globals_.get_list("level_k01_darkscape", "zone_count_weights")) == ["33", "34", "33"]
 
     lua.execute('ui_mcm = { is_gathering=function() return false end, get=function() error("broken MCM") end }')
     assert globals_.get_number("global", "weight_enemy", -1) == float(ltx["global"]["weight_enemy"])
+    assert lua_list(globals_.get_list("level_k01_darkscape", "zone_count_weights")) == ["33", "34", "33"]
 
 
 def main() -> int:

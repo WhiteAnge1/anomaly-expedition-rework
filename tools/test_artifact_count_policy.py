@@ -14,7 +14,7 @@ EXPECTED = {
 
 ZONE_EXPECTED = {
     "y04_pole": ([1], [1]),
-    "k01_darkscape": ([2, 3, 4], [1, 1, 1]),
+    "k01_darkscape": ([2, 3, 4], [33, 34, 33]),
     "l09_deadcity": ([1, 2, 3], [20, 60, 20]),
 }
 
@@ -159,7 +159,7 @@ end
 local source = {
     global = { zone_count_values = { "1" }, zone_count_weights = { "1" } },
     level_y04_pole = { zone_count_values = { "1" }, zone_count_weights = { "1" } },
-    level_k01_darkscape = { zone_count_values = { "2", "3", "4" }, zone_count_weights = { "1", "1", "1" } },
+    level_k01_darkscape = { zone_count_values = { "2", "3", "4" }, zone_count_weights = { "33", "34", "33" } },
     level_l09_deadcity = { zone_count_values = { "1", "2", "3" }, zone_count_weights = { "20", "60", "20" } },
 }
 local use_level = true
@@ -179,8 +179,10 @@ local function choose(level_name, roll)
 end
 local value, section, raw_roll, reason = choose("k01_darkscape", 1)
 expect(value == 2 and section == "level_k01_darkscape" and raw_roll == 1 and reason == nil, "Darkscape lower boundary")
-value = choose("k01_darkscape", 2); expect(value == 3, "Darkscape middle boundary")
-value = choose("k01_darkscape", 3); expect(value == 4, "Darkscape upper boundary")
+value = choose("k01_darkscape", 33); expect(value == 2, "Darkscape first upper boundary")
+value = choose("k01_darkscape", 34); expect(value == 3, "Darkscape middle lower boundary")
+value = choose("k01_darkscape", 67); expect(value == 3, "Darkscape middle upper boundary")
+value = choose("k01_darkscape", 68); expect(value == 4, "Darkscape upper boundary")
 value = choose("l09_deadcity", 20); expect(value == 1, "Dead City first boundary")
 value = choose("l09_deadcity", 21); expect(value == 2, "Dead City second lower boundary")
 value = choose("l09_deadcity", 80); expect(value == 2, "Dead City second upper boundary")
