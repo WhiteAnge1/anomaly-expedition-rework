@@ -49,6 +49,8 @@ $required = @(
     'docs\RELEASE-NOTES-0.3.0-rc3.md',
     'docs\RC-STAGING-0.3.0-rc4.md',
     'docs\RELEASE-NOTES-0.3.0-rc4.md',
+    'docs\RC-STAGING-0.3.0-rc5.md',
+    'docs\RELEASE-NOTES-0.3.0-rc5.md',
     'docs\ROADMAP-TO-RELEASE.md',
     'docs\FIELD-TEST-PROACTIVE-HOLD.md',
     'docs\FIELD-TEST-2026-10-21-COMPILE-FAIL.md',
@@ -294,7 +296,7 @@ if ($mcmRusText -notmatch '<\?xml[^>]+encoding="windows-1251"') { $failures.Add(
 [xml]$mcmRusText | Out-Null
 [xml](Get-Content -LiteralPath (Join-Path $ModRoot 'gamedata\configs\text\eng\st_rvm_sorties_mcm.xml') -Raw -Encoding UTF8) | Out-Null
 $fomod = Get-Content -LiteralPath (Join-Path $ModRoot 'fomod\info.xml') -Raw -Encoding UTF8
-if (-not $fomod.Contains('[Геймплей] Anomaly Expedition Rework by White_Angel v0.3.0-rc4')) { $failures.Add('FOMOD display name must include category and version') }
+if (-not $fomod.Contains('[Геймплей] Anomaly Expedition Rework by White_Angel v0.3.0-rc5')) { $failures.Add('FOMOD display name must include category and version') }
 $stringsPath = Join-Path $ModRoot 'gamedata\configs\text\rus\st_rvm_sorties_rework.xml'
 $strict1251 = [Text.Encoding]::GetEncoding(1251, [Text.EncoderFallback]::ExceptionFallback, [Text.DecoderFallback]::ExceptionFallback)
 $stringsText = $strict1251.GetString([IO.File]::ReadAllBytes($stringsPath))
