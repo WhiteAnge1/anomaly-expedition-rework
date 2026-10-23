@@ -38,6 +38,7 @@ $required = @(
     'docs\PUBLIC-CONFIG-AUDIT-2026-10-21.md',
     'docs\MCM-IMPACT-DESIGN.md',
     'docs\MCM-STATIC-REPORT-2026-10-22.md',
+    'docs\AUDIT-2026-10-23-SQUAD-SPAWN-TIMING.md',
     'docs\FOMOD-MATRIX-PROPOSAL.md',
     'docs\GITHUB-README-OUTLINE.md',
     'docs\RC-STAGING-0.3.0-rc1.md',
