@@ -6,7 +6,7 @@ $modulePath = Join-Path $ModRoot 'fomod\ModuleConfig.xml'
 $content = @'
 <?xml version="1.0" encoding="utf-8"?>
 <config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://qconsulting.ca/fo3/ModConfig5.0.xsd">
-    <moduleName>[&#1043;&#1077;&#1081;&#1084;&#1087;&#1083;&#1077;&#1081;] Anomaly Expedition Rework by White_Angel 0.3.0-rc6</moduleName>
+    <moduleName>[&#1043;&#1077;&#1081;&#1084;&#1087;&#1083;&#1077;&#1081;] Anomaly Expedition Rework by White_Angel 0.3.0-rc7</moduleName>
     <requiredInstallFiles>
         <folder source="gamedata" destination="gamedata" priority="0" />
     </requiredInstallFiles>

@@ -1,5 +1,7 @@
 # GitHub README and repository description outline
 
+Status: реализовано для публичного `v0.3.0-rc7`; документ сохранён как контроль структуры README.
+
 ## Proposed repository description
 
 `MO2 gameplay mod for GRA 2.5 infected expeditions: search areas, weighted Rojok artifact pools, variable counts, decoys, loot, ambushes and save-safe schema-9 artifact placement.`

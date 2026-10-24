@@ -31,8 +31,8 @@
 ## Карта и PAW
 
 - PAW добавляет map spots через `modxml_map_spots_paw.script`, а контекстное меню получает ID выбранного server object (`map_spot_menu_add_property`).
-- PAW предоставляет `generate_scripted_mapspot_at`, `set_pingspot_persistence` и `deregister_script_zone`. Мод создаёт отдельную невидимую `script_zone`, делает её постоянной на срок жизни области и освобождает тем же API.
-- Поэтому круг прикреплён не к артефакту и не к физическому `raid_shelter_gag`, а к отдельному якорю в смещённом центре. PAW видит только `script_zone`; это устраняет ложное действие перехода в контекстном меню.
+- RC6 использовал `generate_scripted_mapspot_at`/`set_pingspot_persistence`, из-за чего PAW считал AER anchor своим и мог удалить его при waypoint cleanup. RC7 создаёт собственную raw `script_zone`; legacy PAW-owned anchor мигрирует, а потерянный anchor открытой зоны восстанавливается без повторного spawn содержимого.
+- Поэтому круг прикреплён не к артефакту и не к физическому `raid_shelter_gag`, а к отдельному AER-якорю в смещённом центре. PAW может использовать его как waypoint target, но обычный cancel/auto-clear не владеет lifecycle зоны.
 - Собственные `map_spots.xml` не копируются: DXML включает маленький фрагмент `map_spots_rvm_sorties.xml`, совместимый с PAW.
 
 ## A-Life, callbacks и сохранения

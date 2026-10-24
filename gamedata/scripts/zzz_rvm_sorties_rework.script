@@ -1,4 +1,4 @@
--- Anomaly Expedition Rework by White_Angel 0.3.0-rc6
+-- Anomaly Expedition Rework by White_Angel 0.3.0-rc7
 -- Minimal wrappers around the actual GRA Bolt dungeon-sortie implementation.
 
 local C = rvm_sorties_config
@@ -36,6 +36,7 @@ local attempt_held_stabilization = nil
 RVM_SORTIES_PROACTIVE = RVM_SORTIES_PROACTIVE or {}
 RVM_SORTIES_PROACTIVE.pending_online = RVM_SORTIES_PROACTIVE.pending_online or {}
 RVM_SORTIES_AMBUSH_ISOLATION = RVM_SORTIES_AMBUSH_ISOLATION or {}
+RVM_SORTIES_ANCHOR_RECOVERY = RVM_SORTIES_ANCHOR_RECOVERY or {}
 local saved_origin_evidence_valid = nil
 local ORIGIN = {}
 
@@ -3707,18 +3708,88 @@ local function create_anchor(pos)
     local lvid = valid_vertex(pos)
     if not lvid or not db.actor then return nil end
     local fixed = level.vertex_position(lvid)
-    if tasks_placeable_waypoints and tasks_placeable_waypoints.generate_scripted_mapspot_at
-    and tasks_placeable_waypoints.set_pingspot_persistence then
-        local ok, id = pcall(tasks_placeable_waypoints.generate_scripted_mapspot_at, fixed, lvid, db.actor:game_vertex_id())
-        if ok and id then
-            tasks_placeable_waypoints.set_pingspot_persistence(id, true)
-            return id, pos_table(fixed), true
-        end
-    end
+    -- AER owns this object. Registering it through PAW makes waypoint
+    -- cancellation mark the same script_zone for PAW cleanup.
     local anchor = alife_create("script_zone", fixed, lvid, db.actor:game_vertex_id())
     if not anchor then return nil end
     return anchor.id, pos_table(fixed), false
 end
+
+-- PAW_ANCHOR_RECOVERY_BEGIN
+function RVM_SORTIES_ANCHOR_RECOVERY.anchor_exists(id)
+    if not id then return false end
+    local ok, obj = pcall(alife_object, id)
+    return ok and obj ~= nil
+end
+
+function RVM_SORTIES_ANCHOR_RECOVERY.recover(old_key, zone, reason)
+    if not (zone and not zone.closed and zone.center) then return false end
+    local old_id = zone.anchor_id
+    local legacy_paw = zone.paw_anchor == true
+    if not legacy_paw and RVM_SORTIES_ANCHOR_RECOVERY.anchor_exists(old_id) then return false end
+
+    local new_id, new_center, new_paw = create_anchor(pos_vector(zone.center))
+    if not new_id then
+        if not zone.anchor_recovery_error_reported then
+            zone.anchor_recovery_error_reported = true
+            printf(PREFIX .. " ERROR zone anchor recovery deferred reason=%s type=%s old_anchor=%s; content preserved",
+                tostring(reason), tostring(zone.kind), tostring(old_id))
+        end
+        return false
+    end
+
+    local new_key = tostring(new_id)
+    if state.zones[new_key] and state.zones[new_key] ~= zone then
+        release_anchor({ anchor_id = new_id, paw_anchor = new_paw })
+        printf(PREFIX .. " ERROR zone anchor recovery collision reason=%s old_anchor=%s new_anchor=%s; content preserved",
+            tostring(reason), tostring(old_id), tostring(new_id))
+        return false
+    end
+
+    remove_spot(zone)
+    release_anchor({
+        anchor_id = old_id,
+        paw_anchor = legacy_paw,
+        managed_anchor = zone.managed_anchor,
+    })
+    if state.zones[tostring(old_key)] == zone then state.zones[tostring(old_key)] = nil end
+    if old_id and state.zones[tostring(old_id)] == zone then state.zones[tostring(old_id)] = nil end
+
+    zone.anchor_id = new_id
+    zone.center = new_center
+    zone.paw_anchor = false
+    zone.managed_anchor = false
+    zone.anchor_recovery_error_reported = nil
+    state.zones[new_key] = zone
+    for lineage_id, anchor_key in pairs(state.artifact_zone or {}) do
+        if tostring(anchor_key) == tostring(old_key) or tostring(anchor_key) == tostring(old_id) then
+            state.artifact_zone[lineage_id] = new_key
+        end
+    end
+    if zone.kind == "artifact" and zone.artifact_id then link_artifact_provenance(zone) end
+    release_log("zone anchor recovered reason=%s type=%s old_anchor=%s new_anchor=%s legacy_paw=%s content_preserved=true",
+        tostring(reason), tostring(zone.kind), tostring(old_id), tostring(new_id), tostring(legacy_paw))
+    return true
+end
+
+function RVM_SORTIES_ANCHOR_RECOVERY.recover_all(reason, refresh_repaired)
+    local pending = {}
+    for key, zone in pairs(state.zones or {}) do
+        if zone and not zone.closed
+        and (zone.paw_anchor == true or not RVM_SORTIES_ANCHOR_RECOVERY.anchor_exists(zone.anchor_id)) then
+            pending[#pending + 1] = { key = tostring(key), zone = zone }
+        end
+    end
+    local repaired = 0
+    for _, entry in ipairs(pending) do
+        if RVM_SORTIES_ANCHOR_RECOVERY.recover(entry.key, entry.zone, reason) then
+            repaired = repaired + 1
+            if refresh_repaired then refresh_zone_spots(entry.zone) end
+        end
+    end
+    return repaired
+end
+-- PAW_ANCHOR_RECOVERY_END
 
 local function separated(pos, allow_artifact_overlap)
     local minimum = balanced("zone_separation_min", 45)
@@ -5761,7 +5832,7 @@ local function actor_on_first_update()
     install_hooks()
     if not ORIGIN.startup_reported then
         ORIGIN.startup_reported = true
-        printf(PREFIX .. " startup self-test ok version=0.3.0-rc6 provenance_schema=%s origin_namespace=true",
+        printf(PREFIX .. " startup self-test ok version=0.3.0-rc7 provenance_schema=%s origin_namespace=true",
             tostring(ARTIFACT_PROVENANCE_SCHEMA))
     end
     for _, record in pairs(state.artifact_provenance or {}) do
@@ -5804,6 +5875,7 @@ local function actor_on_first_update()
     end
     if state.level_name == level.name() then
         RVM_SORTIES_AMBUSH_ISOLATION.restore_all("actor_first_update")
+        RVM_SORTIES_ANCHOR_RECOVERY.recover_all("actor_first_update", false)
         for _, zone in pairs(state.zones) do
             if not zone.closed then refresh_zone_spots(zone) end
         end
@@ -5820,6 +5892,7 @@ local function actor_on_update()
 
     if C.get_bool("global", "debug_cleanup_current_sortie", false) then cleanup("debug_flag"); return end
     if not state.level_name or state.level_name ~= level.name() then return end
+    RVM_SORTIES_ANCHOR_RECOVERY.recover_all("actor_update", true)
     if not state.start_pos and state.start_capture_after and now >= state.start_capture_after then
         state.start_pos = pos_table(db.actor:position())
         log("start position captured (%s, %s, %s)", fmt_number(state.start_pos.x), fmt_number(state.start_pos.y), fmt_number(state.start_pos.z))

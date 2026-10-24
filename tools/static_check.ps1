@@ -12,6 +12,9 @@ $ModRoot = (Resolve-Path -LiteralPath $ModRoot).Path
 $failures = [System.Collections.Generic.List[string]]::new()
 
 $required = @(
+    'LICENSE',
+    'CREDITS.md',
+    'CHANGELOG.md',
     'gamedata\scripts\rvm_sorties_config.script',
     'gamedata\scripts\rvm_sorties_mcm.script',
     'gamedata\scripts\rvm_sorties_artifact_pool.script',
@@ -32,6 +35,7 @@ $required = @(
     'meta.ini',
     '.gitignore',
     'docs\CONFIG.md',
+    'docs\SUPPORT.md',
     'docs\DEBUG-GUIDE.md',
     'docs\ARTIFACT-COUNT-OPTIONS.md',
     'docs\RELEASE-CHECKLIST.md',
@@ -55,6 +59,8 @@ $required = @(
     'docs\FIELD-TEST-2026-10-24-RC6-SQUAD-ISOLATION.md',
     'docs\RC-STAGING-0.3.0-rc6.md',
     'docs\RELEASE-NOTES-0.3.0-rc6.md',
+    'docs\RC-STAGING-0.3.0-rc7.md',
+    'docs\RELEASE-NOTES-0.3.0-rc7.md',
     'docs\ROADMAP-TO-RELEASE.md',
     'docs\FIELD-TEST-PROACTIVE-HOLD.md',
     'docs\FIELD-TEST-2026-10-21-COMPILE-FAIL.md',
@@ -73,6 +79,7 @@ $required = @(
     'tools\test_artifact_proactive_hold.py',
     'tools\test_xray_main_chunk_locals.py',
     'tools\test_squad_target_isolation.py',
+    'tools\test_paw_anchor_isolation.py',
     'tools\test_startup_generation_path.py',
     'tools\test_lua51_compile.py',
     'tools\test_mcm_settings.py',
@@ -132,8 +139,14 @@ foreach ($needle in @('rvm_sorties_artifact_pool.create_context','rvm_sorties_ar
 foreach ($needle in @('raid_artefacts_tiers_by_dop','raid_artefacts.addToQueuedArtefacts','{ 1, 2, 3, 4, 5 }','{ 5, 6 }','{ 6, 7 }')) {
     if (-not $main.Contains($needle)) { $failures.Add("artifact integration missing: $needle") }
 }
-foreach ($needle in @('generate_scripted_mapspot_at','set_pingspot_persistence','deregister_script_zone','visual_id','decoy plan','pending_transition','confirmed_level_change','safe_remove_map_spot')) {
+foreach ($needle in @('deregister_script_zone','visual_id','decoy plan','pending_transition','confirmed_level_change','safe_remove_map_spot')) {
     if (-not $main.Contains($needle)) { $failures.Add("test-fix integration missing: $needle") }
+}
+foreach ($needle in @('PAW_ANCHOR_RECOVERY_BEGIN','RVM_SORTIES_ANCHOR_RECOVERY.recover_all("actor_first_update", false)','RVM_SORTIES_ANCHOR_RECOVERY.recover_all("actor_update", true)','content_preserved=true')) {
+    if (-not $main.Contains($needle)) { $failures.Add("PAW-independent anchor recovery missing: $needle") }
+}
+foreach ($needle in @('generate_scripted_mapspot_at','set_pingspot_persistence')) {
+    if ($main.Contains($needle)) { $failures.Add("new AER anchors must not enter PAW ownership: $needle") }
 }
 foreach ($needle in @('DEV_DEBUG','DEV_DEBUG_DEV','rvm_rework_debug','rvm_rework_census','population_census','owned_by_rework','spawned_info','SendOutput','paw_stash_red')) {
     if (-not $main.Contains($needle)) { $failures.Add("debug integration missing: $needle") }
@@ -306,7 +319,7 @@ if ($mcmRusText -notmatch '<\?xml[^>]+encoding="windows-1251"') { $failures.Add(
 [xml]$mcmRusText | Out-Null
 [xml](Get-Content -LiteralPath (Join-Path $ModRoot 'gamedata\configs\text\eng\st_rvm_sorties_mcm.xml') -Raw -Encoding UTF8) | Out-Null
 $fomod = Get-Content -LiteralPath (Join-Path $ModRoot 'fomod\info.xml') -Raw -Encoding UTF8
-if (-not $fomod.Contains('[Геймплей] Anomaly Expedition Rework by White_Angel v0.3.0-rc6')) { $failures.Add('FOMOD display name must include category and version') }
+if (-not $fomod.Contains('[Геймплей] Anomaly Expedition Rework by White_Angel v0.3.0-rc7')) { $failures.Add('FOMOD display name must include category and version') }
 $stringsPath = Join-Path $ModRoot 'gamedata\configs\text\rus\st_rvm_sorties_rework.xml'
 $strict1251 = [Text.Encoding]::GetEncoding(1251, [Text.EncoderFallback]::ExceptionFallback, [Text.DecoderFallback]::ExceptionFallback)
 $stringsText = $strict1251.GetString([IO.File]::ReadAllBytes($stringsPath))
@@ -373,8 +386,12 @@ foreach ($needle in @('Обычному пользователю','debug_mode = 
 }
 
 $releaseRoadmap = Get-Content -LiteralPath (Join-Path $ModRoot 'docs\ROADMAP-TO-RELEASE.md') -Raw -Encoding UTF8
-foreach ($needle in @('T2','radius/5','T3','radius/10','proactive artifact hold','clean-install','обновление','MO2/FOMOD','SHA-256','GitHub release','Google Drive')) {
+foreach ($needle in @('v0.3.0-rc7','регулируемые размеры','issues #3','#5','clean install/update','full suite','Google Drive')) {
     if (-not $releaseRoadmap.Contains($needle)) { $failures.Add("release roadmap missing: $needle") }
+}
+$readme = Get-Content -LiteralPath (Join-Path $ModRoot 'README.md') -Raw -Encoding UTF8
+foreach ($needle in @('Текущая публичная версия: **0.3.0-rc7**','собственные невидимые `script_zone` AER','docs/SUPPORT.md','Anomaly-Expedition-Rework-0.3.0-rc7.zip.sha256','LICENSE','CREDITS.md','CHANGELOG.md','issues/3','issues/5')) {
+    if (-not $readme.Contains($needle)) { $failures.Add("public README missing: $needle") }
 }
 
 if ($BuildModsRoot) {
@@ -472,6 +489,8 @@ if ($Profile -eq 'full' -or $Profile -eq 'fast') {
             if ($LASTEXITCODE -ne 0) { $failures.Add('X-Ray main-chunk local variable budget exceeded') }
             python (Join-Path $ModRoot 'tools\test_squad_target_isolation.py') $ModRoot
             if ($LASTEXITCODE -ne 0) { $failures.Add('squad target isolation regression failed') }
+            python (Join-Path $ModRoot 'tools\test_paw_anchor_isolation.py') $ModRoot
+            if ($LASTEXITCODE -ne 0) { $failures.Add('PAW anchor isolation regression failed') }
             python (Join-Path $ModRoot 'tools\test_startup_generation_path.py') $ModRoot
             if ($LASTEXITCODE -ne 0) { $failures.Add('startup-to-generation path regression failed') }
         } finally {

@@ -58,7 +58,7 @@ try {
         if (-not $mcmCoreText.Contains($needle)) { throw "Installed MCM API mismatch: $needle" }
     }
     $extractedMain = Get-Content -LiteralPath (Join-Path $temporary 'gamedata\scripts\zzz_rvm_sorties_rework.script') -Raw
-    foreach ($needle in @('version=0.3.0-rc6','settings_snapshot = nil','C.build_snapshot(level.name())','C.activate_snapshot(state.settings_snapshot)','C.clear_snapshot()','pending_transition','transition resolved same_level','AMBUSH_ISOLATION_BEGIN','squad.scripted_target = self_target','online_policy=unchanged position_write=false')) {
+    foreach ($needle in @('version=0.3.0-rc7','settings_snapshot = nil','C.build_snapshot(level.name())','C.activate_snapshot(state.settings_snapshot)','C.clear_snapshot()','pending_transition','transition resolved same_level','AMBUSH_ISOLATION_BEGIN','squad.scripted_target = self_target','online_policy=unchanged position_write=false','PAW_ANCHOR_RECOVERY_BEGIN','alife_create("script_zone"','content_preserved=true')) {
         if (-not $extractedMain.Contains($needle)) { throw "Extracted snapshot/version invariant missing: $needle" }
     }
     foreach ($needle in @('RVM_SORTIES_SQUAD_DIAGNOSTICS','SQUAD_LOAD_DIAGNOSTICS_BEGIN','squad_load_diag','squad_diag_requested','creation_followup_','load_followup_')) {
@@ -103,6 +103,7 @@ try {
         Invoke-PythonTest 'test_artifact_proactive_hold.py' @($temporary)
         Invoke-PythonTest 'test_xray_main_chunk_locals.py' @($temporary)
         Invoke-PythonTest 'test_squad_target_isolation.py' @($temporary)
+        Invoke-PythonTest 'test_paw_anchor_isolation.py' @($temporary)
         Invoke-PythonTest 'test_startup_generation_path.py' @($temporary)
         if ($PythonDeps) {
             $scripts = Join-Path $temporary 'gamedata\scripts'

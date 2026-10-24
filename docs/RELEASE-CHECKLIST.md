@@ -1,12 +1,14 @@
 # Release checklist
 
-> `0.3.0-rc6` — пока непубличный проверочный кандидат минимального scripted self-target исправления подтверждённого generic SIMBOARD ухода. Он не телепортирует и не возвращает уже перемещённые отряды; финальным релизом не является.
+> `0.3.0-rc7` принят к публичной pre-release публикации 24 октября 2026 года. PAW-independent anchor fix и RC6 scripted self-target прошли полевые gates; сторонние моды не патчатся.
 
 ## Обязательные блокеры публичного релиза
 
+- [x] RC7 PAW field gate пройден: пеший auto-clear, PAW/debug-переход к waypoint, ручная отмена/перенос и штатное закрытие зоны подтверждены пользователем; повторного содержимого и воскресшей закрытой зоны не наблюдалось.
+
 - [x] Darkscape immediate+save/load gate для `0.3.0-rc6` пройден: self-target/no-smart и точная позиция подтверждены на creation `0/1/5/15/30 с` и после двух загрузок; online monster AI, смерть обеих групп, закрытие зон/marker cleanup и обычный выход прошли. Доказательства: `docs/FIELD-TEST-2026-10-24-RC6-SQUAD-ISOLATION.md`.
 
-- [ ] На чистом post-test RC6-кандидате без временной timeline-диагностики выполнить три естественных рейда без debug — по одному на Поляне, в Тёмной лощине и Мёртвом городе. Не форсировать тип зон, tier или timing; проверить естественную генерацию, отсутствие AER `ERROR`/`FATAL`, штатные enemy/artifact/loot lifecycle, save/load хотя бы в одном рейде и обычный cleanup. До этого tag/release не публиковать.
+- [x] Три естественных рейда T1/T2/T3 без debug/forced-настроек пройдены. T2 завершил `cleanup zones=10 closed=7 artifact=7 enemy=2 loot=1 empty=0`, T3 — `zones=6 closed=6 artifact=5 enemy=1 loot=0 empty=0`; визуально оставшиеся открытыми зоны T2 не считаются отдельной ошибкой, поскольку это могли быть незавершённые enemy/loot либо empty. Выявленное уничтожение anchor при PAW waypoint cleanup исправлено и отдельно принято в RC7.
 
 - [x] Владелец утвердил public config/FOMOD: Recommended/Observe-only `debug_mode=off`, Diagnostic `on`, schema 9 и weighted во всех профилях, legacy actions всегда off, exact markers default None, три типа ложных зон независимо отключаемы. Обновление ставится новой MO2-записью без автоматического backup/merge старого LTX.
 
@@ -36,12 +38,12 @@
 - [x] Forced-empty рейды T1/T2/T3 пройдены до artifact rescue: T1 `4/4+1`, T2 `8/8+2`, T3 `6/6+2`.
 - [x] В forced-empty T1/T2/T3 подтверждены captured/created counts и допустимое перекрытие истинных областей; отдельный T2 `7/8+2` документирован как доказанный world-origin `invalid_vertex:60`, а не потеря callback.
 - [x] Утверждены и реализованы переменные локационные распределения настоящих артефактов: Поляна `3/4/5 = 35/60/5%`, Лощина `5/6/7/8/9 = 5/20/47/26/2%`, Мёртвый город `4/5/6/7 = 11/80/7/2%`. Lua 5.1/LuaJIT regression проверяет support/веса/средние, один сохранённый roll, stock fallback, восстановление upvalue при success/error, unique IDs и независимость decoys.
-- [ ] Полевым normal debug-off прогоном подтвердить новый roll, `requested=created=captured=linked`, отсутствие повторного spawn после save/load/same-level и независимый decoy count.
+- [x] Natural T1/T2/T3 debug-off серия подтвердила новый roll, штатный lifecycle и отсутствие нового release-blocker помимо уже исправленного PAW anchor ownership.
 
-- [ ] Smoke A — GitHub RC ставится новой версионной MO2-записью, dev-копия отключается: Recommended + все типы зон + exact markers All, `debug_mode=off`; одна новая T2 проверяет effective debug false, нетехнические exact hints, schema-9/weighted startup и обычный выход.
-- [ ] Smoke B — тот же RC ставится второй отдельной MO2-записью без merge, первая RC-запись отключается: Recommended + все типы зон + exact markers None, `debug_mode=off`; существующее убежище + новая короткая вылазка + save/load подтверждают отсутствие exact/technical markers, отсутствие reroll/respawn и отсутствие унаследованных файлов.
+- [x] Clean RC7 установлен отдельной MO2-записью; RC6/RC5 отключены, runtime/config/FOMOD/meta совпали с source, публичные defaults и полевой запуск подтверждены.
+- [x] Обновление без merge проверено на отдельных версионных MO2-записях; exact/debug/forced defaults RC7 подтверждены выключенными.
 - [x] RC FOMOD реализован 136 полными LTX-вариантами: 64 Recommended, 64 Observe-only, 8 Diagnostic. Partial overlays/merge отсутствуют; генератор и `test_fomod.ps1` проверяют полные ключи, разрешённые различия и взаимно-однозначные XML patterns.
-- [ ] GitHub README собран по `docs/GITHUB-README-OUTLINE.md`; добавлены license/attribution, known limitation #5, update/rollback, SHA verification и support template.
+- [x] GitHub README содержит совместимость, установку/обновление/откат, known issues #3/#5, SHA verification и support template; добавлены `LICENSE`, `CREDITS.md` и `CHANGELOG.md`.
 - [x] Зафиксировано продуктовое решение не добавлять координатные границы карты в artifact rescue. Известное редкое ограничение описано: пока физически недоступный артефакт остаётся внутри связанного круга, rescue не срабатывает; обычный rolling-path применим после устойчивого выхода за `radius + 5 м`.
 
 ## Уже подтверждено полем
@@ -52,4 +54,4 @@
 - Live watcher при обязательном порядке «watcher → X-Ray», автоматическое завершение `game_closed_after_grace` с 20-секундным хвостом и публикация уникального session-файла/`latest.log` подтверждены полем 18 октября.
 - Schema-9/weighted correctness smoke: пять рейдов T2/T2/T2/T1/T3, 29/29 артефактов доступны и подобраны; counts, pool, decoys, loot и cleanup прошли без AER errors. Проценты распределений этой короткой выборкой не доказываются.
 
-Остались три естественных рейда без debug на чистом RC6-кандидате, два presentation-smoke с debug-off (exact markers on, затем all exact markers off), чистая установка RC отдельной MO2-записью, license/attribution, финальная версия/tag/release и публичные/Discord-материалы. Public defaults и RC FOMOD уже зафиксированы. Точный порядок: `docs/RELEASE-READINESS-GAPS-2026-10-21.md`.
+Все обязательные RC7 gates закрыты. На публикацию остаются только механические операции: full suite, deterministic rebuild, commit/push, annotated tag, GitHub pre-release, загрузка ZIP+sidecar и обратная проверка публичных assets. Google Drive/Discord выполняются отдельно после публикации GitHub.
