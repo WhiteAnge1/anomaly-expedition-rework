@@ -4,7 +4,9 @@
 
 ## Обязательные блокеры публичного релиза
 
-- [ ] Для `0.3.0-rc6` выполнить новый Darkscape immediate+save/load repro: запуск без `-dbg`, AER debug выключен, exact enemy markers включены. Проверить self-target/no-smart на creation `0/1/5/15/30 с`, сохранение позиции offline; затем приблизиться, подтвердить online monster AI, смерть/закрытие зоны, marker cleanup, save/load и обычный выход.
+- [x] Darkscape immediate+save/load gate для `0.3.0-rc6` пройден: self-target/no-smart и точная позиция подтверждены на creation `0/1/5/15/30 с` и после двух загрузок; online monster AI, смерть обеих групп, закрытие зон/marker cleanup и обычный выход прошли. Доказательства: `docs/FIELD-TEST-2026-10-24-RC6-SQUAD-ISOLATION.md`.
+
+- [ ] На чистом post-test RC6-кандидате без временной timeline-диагностики выполнить три естественных рейда без debug — по одному на Поляне, в Тёмной лощине и Мёртвом городе. Не форсировать тип зон, tier или timing; проверить естественную генерацию, отсутствие AER `ERROR`/`FATAL`, штатные enemy/artifact/loot lifecycle, save/load хотя бы в одном рейде и обычный cleanup. До этого tag/release не публиковать.
 
 - [x] Владелец утвердил public config/FOMOD: Recommended/Observe-only `debug_mode=off`, Diagnostic `on`, schema 9 и weighted во всех профилях, legacy actions всегда off, exact markers default None, три типа ложных зон независимо отключаемы. Обновление ставится новой MO2-записью без автоматического backup/merge старого LTX.
 
@@ -50,4 +52,4 @@
 - Live watcher при обязательном порядке «watcher → X-Ray», автоматическое завершение `game_closed_after_grace` с 20-секундным хвостом и публикация уникального session-файла/`latest.log` подтверждены полем 18 октября.
 - Schema-9/weighted correctness smoke: пять рейдов T2/T2/T2/T1/T3, 29/29 артефактов доступны и подобраны; counts, pool, decoys, loot и cleanup прошли без AER errors. Проценты распределений этой короткой выборкой не доказываются.
 
-Остались два presentation-smoke с debug-off (exact markers on, затем all exact markers off), чистая установка RC отдельной MO2-записью, license/attribution, финальная версия/tag/release и публичные/Discord-материалы. Public defaults и RC FOMOD уже зафиксированы. Точный порядок: `docs/RELEASE-READINESS-GAPS-2026-10-21.md`.
+Остались три естественных рейда без debug на чистом RC6-кандидате, два presentation-smoke с debug-off (exact markers on, затем all exact markers off), чистая установка RC отдельной MO2-записью, license/attribution, финальная версия/tag/release и публичные/Discord-материалы. Public defaults и RC FOMOD уже зафиксированы. Точный порядок: `docs/RELEASE-READINESS-GAPS-2026-10-21.md`.

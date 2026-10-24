@@ -1,5 +1,7 @@
 # Матрица игровой приёмки 0.3.0-rc6
 
+RC6 squad-isolation gate 24 октября принят. Два Darkscape owned squad сохранили точные spawn-позиции и scripted self-target без smart на creation `0/1/5/15/30 с` и после save/load, затем штатно перешли online, сражались, закрыли зоны/markers и были полностью очищены при выходе. После gate временная timeline/per-member телеметрия удалена. Перед публикацией остаются три естественных рейда без debug и forced-настроек — по одному на Поляне, в Тёмной лощине и Мёртвом городе — уже на чистом post-test кандидате. Полный отчёт: `docs/FIELD-TEST-2026-10-24-RC6-SQUAD-ISOLATION.md`.
+
 ## MCM acceptance
 
 - установленный API сверяется с фактическим `Anomaly-MCM 1.7.2/ui_mcm.script`;

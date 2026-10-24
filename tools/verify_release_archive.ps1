@@ -58,8 +58,11 @@ try {
         if (-not $mcmCoreText.Contains($needle)) { throw "Installed MCM API mismatch: $needle" }
     }
     $extractedMain = Get-Content -LiteralPath (Join-Path $temporary 'gamedata\scripts\zzz_rvm_sorties_rework.script') -Raw
-    foreach ($needle in @('version=0.3.0-rc6','settings_snapshot = nil','C.build_snapshot(level.name())','C.activate_snapshot(state.settings_snapshot)','C.clear_snapshot()','pending_transition','transition resolved same_level','SQUAD_LOAD_DIAGNOSTICS_BEGIN','requested_pos=(%s)','tostring(zone.squad_diag_phase or "load") .. "_followup_"','AMBUSH_ISOLATION_BEGIN','squad.scripted_target = self_target','online_policy=unchanged position_write=false')) {
+    foreach ($needle in @('version=0.3.0-rc6','settings_snapshot = nil','C.build_snapshot(level.name())','C.activate_snapshot(state.settings_snapshot)','C.clear_snapshot()','pending_transition','transition resolved same_level','AMBUSH_ISOLATION_BEGIN','squad.scripted_target = self_target','online_policy=unchanged position_write=false')) {
         if (-not $extractedMain.Contains($needle)) { throw "Extracted snapshot/version invariant missing: $needle" }
+    }
+    foreach ($needle in @('RVM_SORTIES_SQUAD_DIAGNOSTICS','SQUAD_LOAD_DIAGNOSTICS_BEGIN','squad_load_diag','squad_diag_requested','creation_followup_','load_followup_')) {
+        if ($extractedMain.Contains($needle)) { throw "Temporary squad timeline diagnostic leaked into archive: $needle" }
     }
     foreach ($file in Get-ChildItem -LiteralPath $temporary -Recurse -File) {
         if ($file.Extension -match '^\.(script|ltx|xml|ini)$') {
@@ -99,7 +102,6 @@ try {
         else { Invoke-PythonTest 'test_artifact_pool.py' @($temporary) }
         Invoke-PythonTest 'test_artifact_proactive_hold.py' @($temporary)
         Invoke-PythonTest 'test_xray_main_chunk_locals.py' @($temporary)
-        Invoke-PythonTest 'test_squad_load_diagnostics.py' @($temporary)
         Invoke-PythonTest 'test_squad_target_isolation.py' @($temporary)
         Invoke-PythonTest 'test_startup_generation_path.py' @($temporary)
         if ($PythonDeps) {

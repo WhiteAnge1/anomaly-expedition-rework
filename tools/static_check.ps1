@@ -52,6 +52,7 @@ $required = @(
     'docs\RC-STAGING-0.3.0-rc5.md',
     'docs\RELEASE-NOTES-0.3.0-rc5.md',
     'docs\AUDIT-2026-10-24-AMBUSH-SMART-MIGRATION.md',
+    'docs\FIELD-TEST-2026-10-24-RC6-SQUAD-ISOLATION.md',
     'docs\RC-STAGING-0.3.0-rc6.md',
     'docs\RELEASE-NOTES-0.3.0-rc6.md',
     'docs\ROADMAP-TO-RELEASE.md',
@@ -71,7 +72,6 @@ $required = @(
     'tools\test_artifact_pool.py',
     'tools\test_artifact_proactive_hold.py',
     'tools\test_xray_main_chunk_locals.py',
-    'tools\test_squad_load_diagnostics.py',
     'tools\test_squad_target_isolation.py',
     'tools\test_startup_generation_path.py',
     'tools\test_lua51_compile.py',
@@ -169,6 +169,12 @@ foreach ($needle in @('local roll = math.random() * total','roll < weights.frequ
     if (-not $main.Contains($needle)) { $failures.Add("two-stage squad probability regression: $needle") }
 }
 if ($main -match 'local\s+section\s*=\s*sections\[math\.random') { $failures.Add('independent random mutant creation returned') }
+foreach ($needle in @('AMBUSH_ISOLATION_BEGIN','squad.scripted_target = self_target','enemy isolation applied reason=%s squad_id=%s scripted_target=self','online_policy=unchanged position_write=false')) {
+    if (-not $main.Contains($needle)) { $failures.Add("squad isolation release diagnostic missing: $needle") }
+}
+foreach ($needle in @('RVM_SORTIES_SQUAD_DIAGNOSTICS','SQUAD_LOAD_DIAGNOSTICS_BEGIN','squad_load_diag','squad_diag_requested','creation_followup_','load_followup_')) {
+    if ($main.Contains($needle)) { $failures.Add("temporary squad timeline diagnostic returned: $needle") }
+}
 foreach ($needle in @('ARTIFACT_EXACT_SPOT = "rvm_exact_artifact_icon"','LOOT_EXACT_SPOT = "rvm_exact_loot_icon"','ENEMY_EXACT_SPOT = "rvm_exact_enemy_icon"','artifact_exact_marker_enabled','loot_exact_marker_enabled','enemy_exact_marker_enabled','exact_marker_hint','sync_artifact_exact_spot','sync_enemy_exact_spot','sync_enemy_squad_exact_spot','squad:commander_id()','marker_target_id','pairs(zone.spawned_ids or {})','owned_by_rework=true')) {
     if (-not $main.Contains($needle)) { $failures.Add("exact debug marker integration missing: $needle") }
 }
@@ -464,8 +470,6 @@ if ($Profile -eq 'full' -or $Profile -eq 'fast') {
             if ($LASTEXITCODE -ne 0) { $failures.Add('artifact proactive hold lifecycle policy test failed') }
             python (Join-Path $ModRoot 'tools\test_xray_main_chunk_locals.py') $ModRoot
             if ($LASTEXITCODE -ne 0) { $failures.Add('X-Ray main-chunk local variable budget exceeded') }
-            python (Join-Path $ModRoot 'tools\test_squad_load_diagnostics.py') $ModRoot
-            if ($LASTEXITCODE -ne 0) { $failures.Add('squad load diagnostics regression failed') }
             python (Join-Path $ModRoot 'tools\test_squad_target_isolation.py') $ModRoot
             if ($LASTEXITCODE -ne 0) { $failures.Add('squad target isolation regression failed') }
             python (Join-Path $ModRoot 'tools\test_startup_generation_path.py') $ModRoot
