@@ -51,6 +51,9 @@ $required = @(
     'docs\RELEASE-NOTES-0.3.0-rc4.md',
     'docs\RC-STAGING-0.3.0-rc5.md',
     'docs\RELEASE-NOTES-0.3.0-rc5.md',
+    'docs\AUDIT-2026-10-24-AMBUSH-SMART-MIGRATION.md',
+    'docs\RC-STAGING-0.3.0-rc6.md',
+    'docs\RELEASE-NOTES-0.3.0-rc6.md',
     'docs\ROADMAP-TO-RELEASE.md',
     'docs\FIELD-TEST-PROACTIVE-HOLD.md',
     'docs\FIELD-TEST-2026-10-21-COMPILE-FAIL.md',
@@ -69,6 +72,7 @@ $required = @(
     'tools\test_artifact_proactive_hold.py',
     'tools\test_xray_main_chunk_locals.py',
     'tools\test_squad_load_diagnostics.py',
+    'tools\test_squad_target_isolation.py',
     'tools\test_startup_generation_path.py',
     'tools\test_lua51_compile.py',
     'tools\test_mcm_settings.py',
@@ -296,7 +300,7 @@ if ($mcmRusText -notmatch '<\?xml[^>]+encoding="windows-1251"') { $failures.Add(
 [xml]$mcmRusText | Out-Null
 [xml](Get-Content -LiteralPath (Join-Path $ModRoot 'gamedata\configs\text\eng\st_rvm_sorties_mcm.xml') -Raw -Encoding UTF8) | Out-Null
 $fomod = Get-Content -LiteralPath (Join-Path $ModRoot 'fomod\info.xml') -Raw -Encoding UTF8
-if (-not $fomod.Contains('[Геймплей] Anomaly Expedition Rework by White_Angel v0.3.0-rc5')) { $failures.Add('FOMOD display name must include category and version') }
+if (-not $fomod.Contains('[Геймплей] Anomaly Expedition Rework by White_Angel v0.3.0-rc6')) { $failures.Add('FOMOD display name must include category and version') }
 $stringsPath = Join-Path $ModRoot 'gamedata\configs\text\rus\st_rvm_sorties_rework.xml'
 $strict1251 = [Text.Encoding]::GetEncoding(1251, [Text.EncoderFallback]::ExceptionFallback, [Text.DecoderFallback]::ExceptionFallback)
 $stringsText = $strict1251.GetString([IO.File]::ReadAllBytes($stringsPath))
@@ -462,6 +466,8 @@ if ($Profile -eq 'full' -or $Profile -eq 'fast') {
             if ($LASTEXITCODE -ne 0) { $failures.Add('X-Ray main-chunk local variable budget exceeded') }
             python (Join-Path $ModRoot 'tools\test_squad_load_diagnostics.py') $ModRoot
             if ($LASTEXITCODE -ne 0) { $failures.Add('squad load diagnostics regression failed') }
+            python (Join-Path $ModRoot 'tools\test_squad_target_isolation.py') $ModRoot
+            if ($LASTEXITCODE -ne 0) { $failures.Add('squad target isolation regression failed') }
             python (Join-Path $ModRoot 'tools\test_startup_generation_path.py') $ModRoot
             if ($LASTEXITCODE -ne 0) { $failures.Add('startup-to-generation path regression failed') }
         } finally {

@@ -1,4 +1,4 @@
--- Anomaly Expedition Rework by White_Angel 0.3.0-rc5
+-- Anomaly Expedition Rework by White_Angel 0.3.0-rc6
 -- Minimal wrappers around the actual GRA Bolt dungeon-sortie implementation.
 
 local C = rvm_sorties_config
@@ -36,6 +36,7 @@ local attempt_held_stabilization = nil
 RVM_SORTIES_PROACTIVE = RVM_SORTIES_PROACTIVE or {}
 RVM_SORTIES_PROACTIVE.pending_online = RVM_SORTIES_PROACTIVE.pending_online or {}
 RVM_SORTIES_SQUAD_DIAGNOSTICS = RVM_SORTIES_SQUAD_DIAGNOSTICS or {}
+RVM_SORTIES_AMBUSH_ISOLATION = RVM_SORTIES_AMBUSH_ISOLATION or {}
 local saved_origin_evidence_valid = nil
 local ORIGIN = {}
 
@@ -707,7 +708,15 @@ local function spawn_exact_squad(zone, pos, lvid, cascade_step)
         return false, "setup_or_callback_failed:" .. tostring(setup_error)
     end
 
+    local isolation_ok, isolation_error = RVM_SORTIES_AMBUSH_ISOLATION.apply(
+        temporary, squad, "creation", true)
+    if not isolation_ok then
+        release_enemy_squad(temporary, "isolation_rollback")
+        return false, "isolation_failed:" .. tostring(isolation_error)
+    end
+
     zone.squad_id = temporary.squad_id
+    zone.squad_isolation_policy = temporary.squad_isolation_policy
     zone.member_ids = temporary.member_ids
     zone.spawned_ids = temporary.member_ids
     zone.spawned_info = {}
@@ -5004,6 +5013,119 @@ function RVM_SORTIES_SQUAD_DIAGNOSTICS.update(now)
 end
 -- SQUAD_LOAD_DIAGNOSTICS_END
 
+-- Owned ambush squads must not enter generic SIMBOARD target selection.  A
+-- bare __lock would also force the squad offline in sim_squad_scripted, so the
+-- stable seam is the engine's serialized scripted target pointed at the squad
+-- itself.  specific_update then returns without selecting a foreign smart,
+-- while normal online/offline switching and online monster combat stay intact.
+-- AMBUSH_ISOLATION_BEGIN
+function RVM_SORTIES_AMBUSH_ISOLATION.scalar(squad, name)
+    if not squad then return nil end
+    local ok, value = pcall(function() return squad[name] end)
+    return ok and value or nil
+end
+
+function RVM_SORTIES_AMBUSH_ISOLATION.zone_for(squad_id)
+    if squad_id == nil then return nil end
+    for _, zone in pairs(state.zones or {}) do
+        if zone.kind == "enemy" and zone.triggered and not zone.closed
+        and tostring(zone.squad_id) == tostring(squad_id) then
+            return zone
+        end
+    end
+    return nil
+end
+
+function RVM_SORTIES_AMBUSH_ISOLATION.describe(squad)
+    local smart = RVM_SORTIES_AMBUSH_ISOLATION.scalar(squad, "smart_id")
+    local assigned = RVM_SORTIES_AMBUSH_ISOLATION.scalar(squad, "assigned_target_id")
+    local current = RVM_SORTIES_AMBUSH_ISOLATION.scalar(squad, "current_target_id")
+    local scripted = RVM_SORTIES_AMBUSH_ISOLATION.scalar(squad, "scripted_target")
+    return smart, assigned, current, scripted
+end
+
+function RVM_SORTIES_AMBUSH_ISOLATION.apply(zone, squad, reason, require_unassigned)
+    if not (zone and squad) then return false, "missing_zone_or_squad" end
+    local squad_id = safe_object_id_any(squad)
+    if not squad_id or tostring(zone.squad_id) ~= tostring(squad_id) then
+        return false, "squad_identity_mismatch"
+    end
+    local smart, assigned, current, scripted = RVM_SORTIES_AMBUSH_ISOLATION.describe(squad)
+    local self_target = tostring(squad_id)
+    if scripted ~= nil and tostring(scripted) == self_target then
+        zone.squad_isolation_policy = "self_target"
+        return true, "already_isolated"
+    end
+    if scripted ~= nil and tostring(scripted) ~= "" then
+        return false, "foreign_scripted_target:" .. tostring(scripted)
+    end
+    if require_unassigned and (smart ~= nil or assigned ~= nil or current ~= nil) then
+        return false, "preassigned smart=" .. tostring(smart)
+            .. " assigned=" .. tostring(assigned) .. " current=" .. tostring(current)
+    end
+    local set_ok, set_error = pcall(function() squad.scripted_target = self_target end)
+    if not set_ok then return false, "scripted_target_write_failed:" .. tostring(set_error) end
+    local verified = RVM_SORTIES_AMBUSH_ISOLATION.scalar(squad, "scripted_target")
+    if tostring(verified) ~= self_target then return false, "scripted_target_verify_failed" end
+    zone.squad_isolation_policy = "self_target"
+    release_log("enemy isolation applied reason=%s squad_id=%s scripted_target=self smart=%s assigned=%s current=%s online_policy=unchanged position_write=false",
+        tostring(reason), tostring(squad_id), tostring(smart), tostring(assigned), tostring(current))
+    return true, "applied"
+end
+
+function RVM_SORTIES_AMBUSH_ISOLATION.enforce(zone, squad, reason)
+    if not (zone and squad and zone.squad_isolation_policy == "self_target") then
+        return false, "policy_not_owned"
+    end
+    local ok, status = RVM_SORTIES_AMBUSH_ISOLATION.apply(zone, squad, reason, true)
+    if not ok and not zone.squad_isolation_error_reported then
+        zone.squad_isolation_error_reported = true
+        printf(PREFIX .. " ERROR enemy isolation unavailable reason=%s squad_id=%s error=%s; no target cleared and no position changed",
+            tostring(reason), tostring(zone.squad_id), tostring(status))
+    elseif ok then
+        zone.squad_isolation_error_reported = nil
+    end
+    return ok, status
+end
+
+function RVM_SORTIES_AMBUSH_ISOLATION.restore_all(reason)
+    for _, zone in pairs(state.zones or {}) do
+        if zone.kind == "enemy" and zone.triggered and not zone.closed and zone.squad_id then
+            local squad = safe_alife_object(zone.squad_id)
+            if zone.squad_isolation_policy == "self_target" then
+                RVM_SORTIES_AMBUSH_ISOLATION.enforce(zone, squad, reason)
+            elseif squad then
+                -- Migration is intentionally narrow: untouched RC5 squads are
+                -- isolated only while they still have no smart or target.  An
+                -- already moved/assigned squad is never detached or returned.
+                local ok, status = RVM_SORTIES_AMBUSH_ISOLATION.apply(zone, squad, reason .. "_migration", true)
+                if not ok and not zone.squad_isolation_migration_reported then
+                    zone.squad_isolation_migration_reported = true
+                    release_log("enemy isolation migration skipped reason=%s squad_id=%s error=%s position_write=false",
+                        tostring(reason), tostring(zone.squad_id), tostring(status))
+                end
+            end
+        end
+    end
+end
+
+function RVM_SORTIES_AMBUSH_ISOLATION.squad_on_update(squad)
+    local squad_id = safe_object_id_any(squad)
+    local zone = RVM_SORTIES_AMBUSH_ISOLATION.zone_for(squad_id)
+    if not zone then return end
+    if zone.squad_isolation_policy == "self_target" then
+        RVM_SORTIES_AMBUSH_ISOLATION.enforce(zone, squad, "squad_callback")
+        return
+    end
+    local ok, status = RVM_SORTIES_AMBUSH_ISOLATION.apply(zone, squad, "squad_callback_migration", true)
+    if not ok and not zone.squad_isolation_migration_reported then
+        zone.squad_isolation_migration_reported = true
+        release_log("enemy isolation migration skipped reason=squad_callback squad_id=%s error=%s position_write=false",
+            tostring(zone.squad_id), tostring(status))
+    end
+end
+-- AMBUSH_ISOLATION_END
+
 local function trigger_ambush(zone, now, spawn_timing)
     if zone.triggered then return end
     spawn_timing = spawn_timing == "start" and "start" or "proximity"
@@ -5841,7 +5963,7 @@ local function actor_on_first_update()
     install_hooks()
     if not ORIGIN.startup_reported then
         ORIGIN.startup_reported = true
-        printf(PREFIX .. " startup self-test ok version=0.3.0-rc5 provenance_schema=%s origin_namespace=true",
+        printf(PREFIX .. " startup self-test ok version=0.3.0-rc6 provenance_schema=%s origin_namespace=true",
             tostring(ARTIFACT_PROVENANCE_SCHEMA))
     end
     for _, record in pairs(state.artifact_provenance or {}) do
@@ -5883,6 +6005,7 @@ local function actor_on_first_update()
         cleanup("loaded_other_level")
     end
     if state.level_name == level.name() then
+        RVM_SORTIES_AMBUSH_ISOLATION.restore_all("actor_first_update")
         for _, zone in pairs(state.zones) do
             if not zone.closed then refresh_zone_spots(zone) end
         end
@@ -6417,6 +6540,7 @@ local function load_state(m_data)
     end
     migrate_artifact_provenance(previous_schema)
     state.schema = 9
+    RVM_SORTIES_AMBUSH_ISOLATION.restore_all("load_state")
     RVM_SORTIES_SQUAD_DIAGNOSTICS.invoke(RVM_SORTIES_SQUAD_DIAGNOSTICS.load_restore, time_global())
 end
 
@@ -6515,6 +6639,8 @@ function on_game_start()
     RegisterScriptCallback("npc_on_item_take", npc_on_item_take)
     RegisterScriptCallback("physic_object_on_use_callback", physic_object_on_use_callback)
     RegisterScriptCallback("artefact_on_first_update", RVM_SORTIES_PROACTIVE.artefact_on_first_update)
+    RegisterScriptCallback("squad_on_first_update", RVM_SORTIES_AMBUSH_ISOLATION.squad_on_update)
+    RegisterScriptCallback("squad_on_update", RVM_SORTIES_AMBUSH_ISOLATION.squad_on_update)
     RegisterScriptCallback("on_before_level_changing", on_before_level_changing)
     RegisterScriptCallback("save_state", save_state)
     RegisterScriptCallback("load_state", load_state)

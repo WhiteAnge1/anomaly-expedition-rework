@@ -1,10 +1,10 @@
 # Release checklist
 
-> Предыдущие RC сохранены как superseded prerelease. `0.3.0-rc5` — устанавливаемый расширенный диагностический prerelease для разделения spawn-at-request, раннего simulation/AI движения и возможного смещения mutant squad после save/load. Он не меняет позиции и не исправляет предполагаемую причину; финальным релизом не является.
+> `0.3.0-rc6` — пока непубличный проверочный кандидат минимального scripted self-target исправления подтверждённого generic SIMBOARD ухода. Он не телепортирует и не возвращает уже перемещённые отряды; финальным релизом не является.
 
 ## Обязательные блокеры публичного релиза
 
-- [ ] Для `0.3.0-rc5` выполнить узкий Darkscape immediate+save/load repro: запуск без `-dbg`, AER debug выключен, exact enemy markers включены, actor неподвижен; creation `0/1/5/15/30 с`, затем load `0/5/15/30 с` и обычный выход. Сопоставить `squad_load_diag` по sortie nonce и ID; до результата не добавлять reposition/fix.
+- [ ] Для `0.3.0-rc6` выполнить новый Darkscape immediate+save/load repro: запуск без `-dbg`, AER debug выключен, exact enemy markers включены. Проверить self-target/no-smart на creation `0/1/5/15/30 с`, сохранение позиции offline; затем приблизиться, подтвердить online monster AI, смерть/закрытие зоны, marker cleanup, save/load и обычный выход.
 
 - [x] Владелец утвердил public config/FOMOD: Recommended/Observe-only `debug_mode=off`, Diagnostic `on`, schema 9 и weighted во всех профилях, legacy actions всегда off, exact markers default None, три типа ложных зон независимо отключаемы. Обновление ставится новой MO2-записью без автоматического backup/merge старого LTX.
 
