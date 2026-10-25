@@ -2,11 +2,11 @@
 
 ## MCM и приоритет источников
 
-Публичные игровые настройки находятся в `Настройки → MCM → Переработка аномальных вылазок` и рассчитаны на фактический **Anomaly MCM 1.7.2**. Приоритет строгий: валидное значение MCM → значение LTX → встроенный безопасный default. Если MCM отсутствует, ещё собирает меню или выбрасывает ошибку, защищённый адаптер без падения использует LTX.
+Публичные игровые настройки находятся в `Настройки → MCM → Переработка аномальных вылазок` и рассчитаны на фактический **Anomaly MCM 1.7.2**. Приоритет строгий: валидное значение MCM → соответствующее резервное значение LTX → встроенный безопасный default. Пока API MCM недоступен или ещё собирает меню, защищённый адаптер без падения использует LTX.
 
-Все представленные в MCM игровые значения снимаются атомарно при начале новой вылазки, сохраняются в save-state и повторно активируются при загрузке. Изменение MCM во время рейда не смешивает старые и новые параметры: оно действует со следующей новой вылазки. Reset/Defaults MCM совпадает с публичным LTX baseline. Debug, forced и deprecated laboratory rescue-параметры намеренно не выставлены в MCM.
+Все представленные в MCM игровые значения снимаются атомарно при начале новой вылазки, сохраняются в save-state и повторно активируются при загрузке. Изменение MCM во время рейда не смешивает старые и новые параметры: оно действует со следующей новой вылазки. Reset/Defaults MCM совпадает с публичным LTX baseline. Отладочные, forced и устаревшие экспериментальные rescue-параметры намеренно не выставлены в MCM.
 
-Fallback-файл настроек: `gamedata/configs/plugins/rvm_sorties_rework.ltx`. После ручного изменения полностью закройте игру и запустите её снова. Начинать новую игру не требуется; новые параметры применятся при следующем входе на локацию вылазки.
+Fallback-файл настроек: `gamedata/configs/plugins/rvm_sorties_rework.ltx`. В MO2: правый клик по AER → **«Открыть в проводнике»** → `gamedata\configs\plugins\rvm_sorties_rework.ltx`. После ручного изменения полностью закройте игру и запустите её снова. Начинать новую игру не требуется; новые параметры применятся при следующем входе на локацию вылазки. Переключателя полного debug AER в MCM нет.
 
 ## Основные настройки
 
@@ -86,7 +86,7 @@ Fallback-файл настроек: `gamedata/configs/plugins/rvm_sorties_rework
 
 Центр artifact-области настраивается ключами `artifact_offset_fraction_min/max` через обычную иерархию `[global] → [tier_N] → [level_*]`. Принятые профили: T1 `0.35..0.80` без изменений, T2 `0.10..0.20`, T3 `0.06..0.12`. После привязки к level-vertex проверяется уже фактическое смещение центра; превышение max отклоняется. Release-log сообщает `tier/level/offset/fraction/limit/range`. Настоящие artifact-области могут перекрываться друг с другом, потому что штатный RVM способен создать несколько артефактов в одной anomaly-zone; `zone_separation_min` по-прежнему действует для ложных областей и не превращён в общий запрет кластеров. Это исправляет только отображаемую геометрию и не перемещает сам артефакт; случаи `(0,0,0)` и underground остаются отдельной задачей rescue. При невозможности построить центр rate-limited лог показывает позицию, `near_origin` (не далее 2 м от мирового нуля) и накопленные причины отказов `invalid_vertex/post_snap_limit/separation/anchor_failure`.
 
-## Artifact rescue: production policy, наблюдение и лабораторный prototype
+## Artifact safety: основной proactive hold и legacy rescue
 
 | Параметр | Default | Назначение |
 |---|---:|---|
@@ -96,11 +96,11 @@ Fallback-файл настроек: `gamedata/configs/plugins/rvm_sorties_rework
 | `artifact_proactive_position_tolerance` | `0.35` | Допуск проверки current shell; не разрешает relocation или online teleport |
 | `artifact_rescue_observe_only` | `false` | Диагностический классификатор старого rescue; schema-9 proactive records его обходят |
 | `artifact_rescue_actions` | `false` | Общий master gate любых активных действий; безопасный default оставляет только наблюдение |
-| `artifact_rescue_rolling_policy` | `held_first` | Production policy: первый подтверждённый rolling сразу проходит teleport → 3 snapshots → reacquire → indefinite held; `debug_teleport` выбирает старую exact-ID лабораторную схему |
-| `artifact_rescue_underground_policy` | `held_first` | Отдельная production policy настоящего vertical underground; использует captured field target и тот же held executor, не меняя rolling/origin |
-| `artifact_rescue_origin_policy` | `held_first` | Отдельная policy только для строгого `origin_mismatch`; master gate по умолчанию выключен |
+| `artifact_rescue_rolling_policy` | `held_first` | Legacy/research policy для подтверждённого rolling; не выполняет действие при публичном `artifact_rescue_actions=false` |
+| `artifact_rescue_underground_policy` | `held_first` | Legacy/research policy настоящего vertical underground; master gate по умолчанию выключен |
+| `artifact_rescue_origin_policy` | `held_first` | Legacy/research policy строгого `origin_mismatch`; master gate по умолчанию выключен |
 | `artifact_spawn_guard_attempts` | `8` | Число bounded-повторов штатного RVM spawn при invalid vertex, отсутствии static support или выходе кандидата за captured field |
-| `artifact_rescue_debug_same_id_teleport` | `false` | Второй gate лабораторного same-ID teleport |
+| `artifact_rescue_debug_same_id_teleport` | `false` | Второй gate устаревшего экспериментального same-ID teleport |
 | `artifact_rescue_debug_artifact_ids` | `1407,6362` | Закрытый exact original-ID allowlist; код отклоняет любые другие ID и section fallback |
 | `artifact_rescue_debug_reason` | `rolling` | Единственная разрешённая причина prototype; сейчас поддерживается только `rolling` |
 | `artifact_rescue_debug_monitor_ms` | `30000` | Минимальный мониторинг после `position_verified` |
@@ -108,7 +108,7 @@ Fallback-файл настроек: `gamedata/configs/plugins/rvm_sorties_rework
 | `artifact_rescue_debug_cooldown_ms` | `20000` | Пауза после повторного rolling-confirmation до второго dispatch |
 | `artifact_rescue_debug_max_dispatches` | `2` | Предел обычных same-ID отправок на original ID |
 | `artifact_rescue_debug_same_frame_stabilization` | `false` | Отдельный gate третьего experimental dispatch после двух verified обычных; требует все предыдущие rescue-gate |
-| `artifact_rescue_debug_held_after_verified_actions` | `2` | Порог только для `debug_teleport`; production `held_first` всегда использует ноль обычных rescue |
+| `artifact_rescue_debug_held_after_verified_actions` | `2` | Порог только для старого `debug_teleport`; основной proactive path этим параметром не пользуется |
 | `artifact_rescue_debug_held_stabilization` | `false` | Альтернативный third-stage gate: удерживает только зафиксированные модом элементы до pickup/release trigger; несовместим с same-frame gate |
 | `artifact_rescue_debug_held_timeout_ms` | `120000` | Аварийное освобождение held-элементов; `0` отключает time release, положительное значение ограничивается снизу 30 секундами |
 | `artifact_rescue_origin_radius` | `2` | Радиус признака near-origin; сам по себе никогда не подтверждает ошибку |
@@ -130,15 +130,15 @@ Provenance schema 5 сохраняет ID/section, шаблон и размер 
 
 Preventive слой не копирует таблицы артефактов RVM. Он доказывает через Lua 5.1 environment связь внутренней функции `raid_anomalys` с внешней `raid_artefacts`-обёрткой, временно и синхронно защищает второй vertex/create и всё равно вызывает штатный внешний wrapper. Поэтому выбор section, классы/мутации и `addToQueuedArtefacts` сохраняются. При недоказуемом hook path создание fail-closed запрещается с явным `ERROR`.
 
-Prototype не является пользовательской функцией. Он выбирается только через `artifact_rescue_rolling_policy=debug_teleport` и дополнительно требует `artifact_rescue_debug_same_id_teleport=true`, exact ID `1407`/`6362` и debug-настройки ниже. В нём по-прежнему можно воспроизвести старые ordinary/same-frame/held сценарии.
+Legacy prototype не является пользовательской функцией и не описывает нормальное поведение RC7. Он выбирается только через `artifact_rescue_rolling_policy=debug_teleport` и дополнительно требует `artifact_rescue_actions=true`, `artifact_rescue_debug_same_id_teleport=true`, exact ID `1407`/`6362` и debug-настройки ниже. В нём можно воспроизвести старые ordinary/same-frame/held исследовательские сценарии.
 
 `artifact_rescue_debug_same_frame_stabilization=true` разрешает ровно третий dispatch только после двух обычных действий с `verified_at` и нового независимого rolling-confirmation. После same-ID teleport код проверяет exact online-object и все physics elements, временно фиксирует только ранее не fixed элементы и освобождает только их в том же callback. Shell/API/element failure не отменяет teleport: пишется `stabilization_unavailable/failed`, затем продолжаются position verification и мониторинг. Permanent fix, перенос fixed-состояния через кадр/save, recreate, offline-cycle, `apply_force` и section fallback запрещены. После третьего dispatch действует hard maximum `3`.
 
-`artifact_rescue_debug_held_stabilization=true` относится только к `debug_teleport` и не может работать одновременно с same-frame gate. Его timeout и порог сохраняются для диагностики. Production `held_first` использует тот же проверенный post-teleport journal/release-контракт, но всегда с порогом `0` и без автоматического timeout.
+`artifact_rescue_debug_held_stabilization=true` относится только к legacy `debug_teleport` и не может работать одновременно с same-frame gate. Его timeout и порог сохраняются для исследовательской диагностики. Основной RC7-путь — preventive guard + proactive hold выше — не использует post-teleport rescue-контракт.
 
 ## Диагностика и тестовые параметры
 
-- `debug_mode = auto|on|off` — полный технический режим. `auto` следует `DEV_DEBUG`/`DEV_DEBUG_DEV`.
+- `debug_mode = off|on|auto` — полный технический режим. Публичный default `off` не меняется от одного лишь глобального `-dbg/-dbgdev`; `on` включает AER debug постоянно, `auto` следует `DEV_DEBUG`/`DEV_DEBUG_DEV`.
 - `debug_log` — совместимость со старыми конфигами при отсутствии `debug_mode`.
 - `debug_force_decoy_type`, `debug_force_tier`, `debug_cleanup_current_sortie` — только для контролируемых тестов.
 
