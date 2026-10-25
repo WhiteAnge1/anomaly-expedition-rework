@@ -2,7 +2,8 @@ param(
     [Parameter(Mandatory=$true)][string]$ArchivePath,
     [string]$SourceRoot = (Split-Path -Parent $PSScriptRoot),
     [string]$BuildModsRoot = '',
-    [string]$PythonDeps = ''
+    [string]$PythonDeps = '',
+    [string]$LuaRuntimeDeps = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -58,7 +59,7 @@ try {
         if (-not $mcmCoreText.Contains($needle)) { throw "Installed MCM API mismatch: $needle" }
     }
     $extractedMain = Get-Content -LiteralPath (Join-Path $temporary 'gamedata\scripts\zzz_rvm_sorties_rework.script') -Raw
-    foreach ($needle in @('version=0.3.0-rc7','settings_snapshot = nil','C.build_snapshot(level.name())','C.activate_snapshot(state.settings_snapshot)','C.clear_snapshot()','pending_transition','transition resolved same_level','AMBUSH_ISOLATION_BEGIN','squad.scripted_target = self_target','online_policy=unchanged position_write=false','PAW_ANCHOR_RECOVERY_BEGIN','alife_create("script_zone"','content_preserved=true')) {
+    foreach ($needle in @('version=0.3.0-rc8','settings_snapshot = nil','C.build_snapshot(level.name())','C.activate_snapshot(state.settings_snapshot)','C.clear_snapshot()','pending_transition','transition resolved same_level','AMBUSH_ISOLATION_BEGIN','squad.scripted_target = self_target','online_policy=unchanged position_write=false','PAW_ANCHOR_RECOVERY_BEGIN','alife_create("script_zone"','content_preserved=true')) {
         if (-not $extractedMain.Contains($needle)) { throw "Extracted snapshot/version invariant missing: $needle" }
     }
     foreach ($needle in @('RVM_SORTIES_SQUAD_DIAGNOSTICS','SQUAD_LOAD_DIAGNOSTICS_BEGIN','squad_load_diag','squad_diag_requested','creation_followup_','load_followup_')) {
@@ -87,7 +88,7 @@ try {
         if (Test-Path -LiteralPath $candidate) { $PythonDeps = $candidate }
     }
     $projectRoot = Split-Path -Parent (Split-Path -Parent $SourceRoot)
-    $luaDeps = Join-Path $projectRoot 'work\lua-runtime'
+    $luaDeps = if ($LuaRuntimeDeps) { $LuaRuntimeDeps } else { Join-Path $projectRoot 'work\lua-runtime' }
     if (-not (Test-Path -LiteralPath $luaDeps)) { throw 'Lua runtime dependencies unavailable' }
     $oldPythonPath = $env:PYTHONPATH
     try {

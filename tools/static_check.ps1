@@ -61,6 +61,7 @@ $required = @(
     'docs\RELEASE-NOTES-0.3.0-rc6.md',
     'docs\RC-STAGING-0.3.0-rc7.md',
     'docs\RELEASE-NOTES-0.3.0-rc7.md',
+    'docs\RELEASE-NOTES-0.3.0-rc8.md',
     'docs\ROADMAP-TO-RELEASE.md',
     'docs\FIELD-TEST-PROACTIVE-HOLD.md',
     'docs\FIELD-TEST-2026-10-21-COMPILE-FAIL.md',
@@ -319,7 +320,7 @@ if ($mcmRusText -notmatch '<\?xml[^>]+encoding="windows-1251"') { $failures.Add(
 [xml]$mcmRusText | Out-Null
 [xml](Get-Content -LiteralPath (Join-Path $ModRoot 'gamedata\configs\text\eng\st_rvm_sorties_mcm.xml') -Raw -Encoding UTF8) | Out-Null
 $fomod = Get-Content -LiteralPath (Join-Path $ModRoot 'fomod\info.xml') -Raw -Encoding UTF8
-if (-not $fomod.Contains('[Геймплей] Anomaly Expedition Rework by White_Angel v0.3.0-rc7')) { $failures.Add('FOMOD display name must include category and version') }
+if (-not $fomod.Contains('[Геймплей] A_Exp_R by White_Angel v0.3')) { $failures.Add('FOMOD display name must use the approved path-safe MO2 name') }
 $stringsPath = Join-Path $ModRoot 'gamedata\configs\text\rus\st_rvm_sorties_rework.xml'
 $strict1251 = [Text.Encoding]::GetEncoding(1251, [Text.EncoderFallback]::ExceptionFallback, [Text.DecoderFallback]::ExceptionFallback)
 $stringsText = $strict1251.GetString([IO.File]::ReadAllBytes($stringsPath))
@@ -390,7 +391,7 @@ foreach ($needle in @('v0.3.0-rc7','регулируемые размеры','is
     if (-not $releaseRoadmap.Contains($needle)) { $failures.Add("release roadmap missing: $needle") }
 }
 $readme = Get-Content -LiteralPath (Join-Path $ModRoot 'README.md') -Raw -Encoding UTF8
-foreach ($needle in @('Текущая публичная версия: **0.3.0-rc7**','собственные невидимые `script_zone` AER','docs/SUPPORT.md','Anomaly-Expedition-Rework-0.3.0-rc7.zip.sha256','LICENSE','CREDITS.md','CHANGELOG.md','issues/3','issues/5')) {
+foreach ($needle in @('Текущая публичная версия: **0.3.0-rc8**','собственные невидимые `script_zone` AER','docs/SUPPORT.md','Anomaly-Expedition-Rework-0.3.0-rc8.zip.sha256','LICENSE','CREDITS.md','CHANGELOG.md','issues/3','issues/5')) {
     if (-not $readme.Contains($needle)) { $failures.Add("public README missing: $needle") }
 }
 

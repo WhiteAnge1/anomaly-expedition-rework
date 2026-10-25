@@ -1,7 +1,7 @@
 param(
     [string]$ModRoot = (Split-Path -Parent $PSScriptRoot),
     [string]$OutputDirectory = (Join-Path (Split-Path -Parent $PSScriptRoot) 'dist'),
-    [string]$FileName = 'Anomaly-Expedition-Rework-0.3.0-rc7.zip'
+    [string]$FileName = 'Anomaly-Expedition-Rework-0.3.0-rc8.zip'
 )
 
 $ErrorActionPreference = 'Stop'

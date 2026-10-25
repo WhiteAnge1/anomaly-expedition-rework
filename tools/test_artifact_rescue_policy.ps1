@@ -536,7 +536,7 @@ foreach ($needle in @(
     'ORIGIN.restore_all_switch_flags("pre_save")',
     'function ORIGIN.rebuild_artifact_zone(record, action, snapshot)',
     'origin_area_rebuilt', 'origin_rvm_field_revalidation_required',
-    'startup self-test ok version=0.3.0-rc7',
+    'startup self-test ok version=0.3.0-rc8',
     'production_same_id_teleport',
     'local function guarded_rvm_artifact_spawn(base_spawn, anom_zone, field_pos, level_tier)',
     'inner_env ~= raid_anomalys', 'stock_inner_environment_unverified; spawn deferred',

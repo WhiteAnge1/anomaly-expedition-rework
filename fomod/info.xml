@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <fomod>
-    <Name>[Геймплей] Anomaly Expedition Rework by White_Angel v0.3.0-rc7</Name>
+    <Name>[Геймплей] A_Exp_R by White_Angel v0.3</Name>
     <Author>White_Angel</Author>
-    <Version>0.3.0-rc7</Version>
+    <Version>0.3.0-rc8</Version>
     <Description>Приблизительные области поиска артефактов, взвешенные награды, настраиваемые ложные области и безопасное для сохранений размещение артефактов в вылазках GRA 2.5.</Description>
     <Website>https://github.com/WhiteAnge1/anomaly-expedition-rework</Website>
 </fomod>
