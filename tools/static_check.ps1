@@ -62,6 +62,8 @@ $required = @(
     'docs\RC-STAGING-0.3.0-rc7.md',
     'docs\RELEASE-NOTES-0.3.0-rc7.md',
     'docs\RELEASE-NOTES-0.3.0-rc8.md',
+    'docs\RC-STAGING-0.3.0-rc9.md',
+    'docs\RELEASE-NOTES-0.3.0-rc9.md',
     'docs\FIELD-TEST-2026-10-29-PAW-EXACT-TOGGLE-CRASH.md',
     'docs\ROADMAP-TO-RELEASE.md',
     'docs\FIELD-TEST-PROACTIVE-HOLD.md',
@@ -396,8 +398,12 @@ foreach ($needle in @('v0.3.0-rc7','регулируемые размеры','is
     if (-not $releaseRoadmap.Contains($needle)) { $failures.Add("release roadmap missing: $needle") }
 }
 $readme = Get-Content -LiteralPath (Join-Path $ModRoot 'README.md') -Raw -Encoding UTF8
-foreach ($needle in @('Текущая публичная версия: **0.3.0-rc8**','собственные невидимые `script_zone` AER','docs/SUPPORT.md','Anomaly-Expedition-Rework-0.3.0-rc8.zip.sha256','LICENSE','CREDITS.md','CHANGELOG.md','issues/3','issues/5')) {
+foreach ($needle in @('Текущий release candidate: **0.3.0-rc9**','собственные невидимые `script_zone` AER','docs/SUPPORT.md','Anomaly-Expedition-Rework-0.3.0-rc9.zip.sha256','LICENSE','CREDITS.md','CHANGELOG.md','issues/3','issues/5')) {
     if (-not $readme.Contains($needle)) { $failures.Add("public README missing: $needle") }
+}
+$rc9Notes = Get-Content -LiteralPath (Join-Path $ModRoot 'docs\RELEASE-NOTES-0.3.0-rc9.md') -Raw -Encoding UTF8
+foreach ($needle in @('0.3.0-rc9','[Геймплей] A_Exp_R by White_Angel v0.3','se_obj nil','route/pin','Anomaly-Expedition-Rework-0.3.0-rc9.zip.sha256')) {
+    if (-not $rc9Notes.Contains($needle)) { $failures.Add("RC9 release notes missing: $needle") }
 }
 
 if ($BuildModsRoot) {

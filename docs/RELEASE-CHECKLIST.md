@@ -1,10 +1,10 @@
 # Release checklist
 
-> `0.3.0-rc7` принят к публичной pre-release публикации 24 октября 2026 года. PAW-independent anchor fix и RC6 scripted self-target прошли полевые gates; сторонние моды не патчатся.
+> `0.3.0-rc9` подготовлен 29 октября 2026 года после принятия PAW stale-reference compatibility guard. PAW-independent anchors, RC6 scripted self-target и RC9 exact-toggle/pickup сценарий прошли полевые gates; файлы сторонних модов не изменяются.
 
 ## Обязательные блокеры публичного релиза
 
-- [ ] После RC8 закрыть новый PAW exact-marker stale-reference gate: точная последовательность «route + persistent pin на зелёной exact-метке → сохранить между вылазками → выключить exact markers → следующая infected-вылазка → pickup» должна завершиться без FATAL. В логе ожидаются штатные `artifact proactive release`/`zone closed` и максимум одна rate-limited строка `PAW compatibility deferred screen coords ... route_pin_preserved=true`; AER не должен удалять route/pin/map spot. Отдельно повторить два control-case: pickup без PAW и pickup с route/pin в той же вылазке. Автоматическая регрессия и доказанная причина: `docs/FIELD-TEST-2026-10-29-PAW-EXACT-TOGGLE-CRASH.md`.
+- [x] RC9 PAW exact-marker stale-reference gate пройден: последовательность «route + persistent pin на зелёной exact-метке → сохранить между вылазками → выключить exact markers → следующая anomalous sortie → pickup» завершилась без Lua FATAL. Pickup без PAW и два pickup с route/pin на приблизительных областях также прошли; AER штатно закрыл связанные области и сохранил PAW route/pin. Финальный лог содержит два `artifact proactive release`, два `zone closed` и rate-limited guard для PAW IDs `30407`/`30405`; SHA-256 лога `F8BCF192D362013B232536BB7A33090BEB2AF2A8D78B157BCC1A4BCC58CF04A5`. Один отдельный неповторившийся native `0xc0000005` не классифицирован как Lua-регрессия. Доказательства: `docs/FIELD-TEST-2026-10-29-PAW-EXACT-TOGGLE-CRASH.md`.
 
 - [x] RC7 PAW field gate пройден: пеший auto-clear, PAW/debug-переход к waypoint, ручная отмена/перенос и штатное закрытие зоны подтверждены пользователем; повторного содержимого и воскресшей закрытой зоны не наблюдалось.
 
@@ -56,4 +56,4 @@
 - Live watcher при обязательном порядке «watcher → X-Ray», автоматическое завершение `game_closed_after_grace` с 20-секундным хвостом и публикация уникального session-файла/`latest.log` подтверждены полем 18 октября.
 - Schema-9/weighted correctness smoke: пять рейдов T2/T2/T2/T1/T3, 29/29 артефактов доступны и подобраны; counts, pool, decoys, loot и cleanup прошли без AER errors. Проценты распределений этой короткой выборкой не доказываются.
 
-Все обязательные RC7 gates закрыты. На публикацию остаются только механические операции: full suite, deterministic rebuild, commit/push, annotated tag, GitHub pre-release, загрузка ZIP+sidecar и обратная проверка публичных assets. Google Drive/Discord выполняются отдельно после публикации GitHub.
+Все обязательные полевые gates RC9 закрыты. До публичной публикации остаются независимая проверка подготовленного ZIP агентом 0, annotated tag, GitHub pre-release, загрузка ZIP+sidecar и обратная проверка публичных assets. Google Drive/Discord выполняются отдельно после GitHub-публикации.
