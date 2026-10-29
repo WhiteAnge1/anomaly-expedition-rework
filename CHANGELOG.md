@@ -1,5 +1,11 @@
 # История изменений
 
+## Следующая версия — в разработке
+
+- Добавлен AER-contained compatibility guard для PAW `get_screen_coords`: переходное состояние, в котором client object ещё существует после исчезновения ALife server object, больше не приводит к `se_obj:clsid()` fatal.
+- Guard возвращает `nil` только для опасного кадра и не удаляет route, persistent pin или map spot; стабильные состояния остаются в ведении исходного PAW.
+- Добавлена исполняемая регрессия Lua 5.1/LuaJIT для client-only перехода, race между precheck и вызовом PAW, обычной делегации, штатной PAW cleanup-семантики и проброса посторонних ошибок.
+
 ## 0.3.0-rc8 — 2026-10-25
 
 - Имя, предлагаемое FOMOD для папки MO2, сокращено до `[Геймплей] A_Exp_R by White_Angel v0.3`.

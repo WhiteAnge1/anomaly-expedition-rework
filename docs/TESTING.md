@@ -4,6 +4,24 @@ RC7 добавляет обязательный PAW regression gate: на отк
 
 RC6 squad-isolation gate 24 октября принят. Два Darkscape owned squad сохранили точные spawn-позиции и scripted self-target без smart на creation `0/1/5/15/30 с` и после save/load, затем штатно перешли online, сражались, закрыли зоны/markers и были полностью очищены при выходе. После gate временная timeline/per-member телеметрия удалена. Последующие естественные рейды без debug/forced-настроек на Поляне, в Тёмной лощине и Мёртвом городе также приняты; они выявили только отдельный PAW anchor lifecycle blocker, для которого предназначен RC7. Полный isolation-отчёт: `docs/FIELD-TEST-2026-10-24-RC6-SQUAD-ISOLATION.md`.
 
+## PAW exact-marker stale-reference regression
+
+RC8 воспроизводимо падал в `tasks_placeable_waypoints.get_screen_coords` после сохранения route/persistent pin на зелёной exact-метке, переходов между вылазками, выключения exact artifact markers и последующего подбора AER-linked артефакта. В опасном кадре client `game_object` ещё существовал, а `alife_object(id)` уже возвращал `nil`; PAW затем без проверки вызывал `se_obj:clsid()`.
+
+Исполняемый gate `tools/test_paw_screen_coords_guard.py` обязан пройти на Lua 5.1, LuaJIT 2.0 и 2.1. Он проверяет client-only переход без вызова PAW cleanup, узкий catch того же race внутри исходной функции, обычную делегацию при наличии server object, сохранение штатной PAW cleanup-семантики при отсутствии обоих объектов, отсутствие двойного wrapper и проброс любой посторонней ошибки.
+
+Обязательный полевой ретест после установки агентом 0:
+
+1. Полностью перезапустить игру с новой сборкой AER и включить точные artifact-маркеры.
+2. В новой infected-вылазке поставить PAW route и persistent pin на зелёную exact-метку.
+3. Выйти, сохранив route/pin, пройти переход между вылазками, в убежище выключить exact artifact markers и начать следующую infected-вылазку.
+4. Подобрать AER-linked артефакт, ID которого PAW использует для HUD/route refresh.
+5. Ожидать штатные `artifact proactive release` и `zone closed`, отсутствие FATAL и не более одной строки `PAW compatibility deferred screen coords id=... stage=... route_pin_preserved=true` для каждого ID/stage.
+6. Отдельно повторить pickup без PAW и pickup с route/pin в той же вылазке: оба control-case обязаны остаться без регрессий.
+7. Проверить, что незавершённые приблизительные зоны, точные метки и независимые AER anchors сохраняют прежнюю семантику; AER не вызывает PAW `end_waypoint_task`, `pn_del` или удаление map spot.
+
+Статический разбор, контракт исправления и исходный incident перечислены в `docs/FIELD-TEST-2026-10-29-PAW-EXACT-TOGGLE-CRASH.md`.
+
 ## MCM acceptance
 
 - установленный API сверяется с фактическим `Anomaly-MCM 1.7.2/ui_mcm.script`;

@@ -62,6 +62,7 @@ $required = @(
     'docs\RC-STAGING-0.3.0-rc7.md',
     'docs\RELEASE-NOTES-0.3.0-rc7.md',
     'docs\RELEASE-NOTES-0.3.0-rc8.md',
+    'docs\FIELD-TEST-2026-10-29-PAW-EXACT-TOGGLE-CRASH.md',
     'docs\ROADMAP-TO-RELEASE.md',
     'docs\FIELD-TEST-PROACTIVE-HOLD.md',
     'docs\FIELD-TEST-2026-10-21-COMPILE-FAIL.md',
@@ -81,6 +82,7 @@ $required = @(
     'tools\test_xray_main_chunk_locals.py',
     'tools\test_squad_target_isolation.py',
     'tools\test_paw_anchor_isolation.py',
+    'tools\test_paw_screen_coords_guard.py',
     'tools\test_startup_generation_path.py',
     'tools\test_lua51_compile.py',
     'tools\test_mcm_settings.py',
@@ -191,6 +193,9 @@ foreach ($needle in @('RVM_SORTIES_SQUAD_DIAGNOSTICS','SQUAD_LOAD_DIAGNOSTICS_BE
 }
 foreach ($needle in @('ARTIFACT_EXACT_SPOT = "rvm_exact_artifact_icon"','LOOT_EXACT_SPOT = "rvm_exact_loot_icon"','ENEMY_EXACT_SPOT = "rvm_exact_enemy_icon"','artifact_exact_marker_enabled','loot_exact_marker_enabled','enemy_exact_marker_enabled','exact_marker_hint','sync_artifact_exact_spot','sync_enemy_exact_spot','sync_enemy_squad_exact_spot','squad:commander_id()','marker_target_id','pairs(zone.spawned_ids or {})','owned_by_rework=true')) {
     if (-not $main.Contains($needle)) { $failures.Add("exact debug marker integration missing: $needle") }
+}
+foreach ($needle in @('PAW_SCREEN_COORDS_GUARD_BEGIN','RVM_SORTIES_PAW_COMPAT.install','client_exists_server_missing','route_pin_preserved=true','pcall(base_get_screen_coords, id)','error(result, 0)')) {
+    if (-not $main.Contains($needle)) { $failures.Add("PAW screen-coords compatibility guard missing: $needle") }
 }
 foreach ($needle in @('ARTIFACT_EXACT_OVERLAP_DISTANCE = 2','diagnose_artifact_exact_overlaps','exact artifact marker overlap','exact positions preserved')) {
     if (-not $main.Contains($needle)) { $failures.Add("exact artifact overlap diagnostic missing: $needle") }
@@ -492,6 +497,8 @@ if ($Profile -eq 'full' -or $Profile -eq 'fast') {
             if ($LASTEXITCODE -ne 0) { $failures.Add('squad target isolation regression failed') }
             python (Join-Path $ModRoot 'tools\test_paw_anchor_isolation.py') $ModRoot
             if ($LASTEXITCODE -ne 0) { $failures.Add('PAW anchor isolation regression failed') }
+            python (Join-Path $ModRoot 'tools\test_paw_screen_coords_guard.py') $ModRoot
+            if ($LASTEXITCODE -ne 0) { $failures.Add('PAW screen-coords guard regression failed') }
             python (Join-Path $ModRoot 'tools\test_startup_generation_path.py') $ModRoot
             if ($LASTEXITCODE -ne 0) { $failures.Add('startup-to-generation path regression failed') }
         } finally {

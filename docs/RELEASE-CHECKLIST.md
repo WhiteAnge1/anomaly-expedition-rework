@@ -4,6 +4,8 @@
 
 ## Обязательные блокеры публичного релиза
 
+- [ ] После RC8 закрыть новый PAW exact-marker stale-reference gate: точная последовательность «route + persistent pin на зелёной exact-метке → сохранить между вылазками → выключить exact markers → следующая infected-вылазка → pickup» должна завершиться без FATAL. В логе ожидаются штатные `artifact proactive release`/`zone closed` и максимум одна rate-limited строка `PAW compatibility deferred screen coords ... route_pin_preserved=true`; AER не должен удалять route/pin/map spot. Отдельно повторить два control-case: pickup без PAW и pickup с route/pin в той же вылазке. Автоматическая регрессия и доказанная причина: `docs/FIELD-TEST-2026-10-29-PAW-EXACT-TOGGLE-CRASH.md`.
+
 - [x] RC7 PAW field gate пройден: пеший auto-clear, PAW/debug-переход к waypoint, ручная отмена/перенос и штатное закрытие зоны подтверждены пользователем; повторного содержимого и воскресшей закрытой зоны не наблюдалось.
 
 - [x] Darkscape immediate+save/load gate для `0.3.0-rc6` пройден: self-target/no-smart и точная позиция подтверждены на creation `0/1/5/15/30 с` и после двух загрузок; online monster AI, смерть обеих групп, закрытие зон/marker cleanup и обычный выход прошли. Доказательства: `docs/FIELD-TEST-2026-10-24-RC6-SQUAD-ISOLATION.md`.

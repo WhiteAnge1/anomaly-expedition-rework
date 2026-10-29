@@ -105,6 +105,7 @@ try {
         Invoke-PythonTest 'test_xray_main_chunk_locals.py' @($temporary)
         Invoke-PythonTest 'test_squad_target_isolation.py' @($temporary)
         Invoke-PythonTest 'test_paw_anchor_isolation.py' @($temporary)
+        Invoke-PythonTest 'test_paw_screen_coords_guard.py' @($temporary)
         Invoke-PythonTest 'test_startup_generation_path.py' @($temporary)
         if ($PythonDeps) {
             $scripts = Join-Path $temporary 'gamedata\scripts'

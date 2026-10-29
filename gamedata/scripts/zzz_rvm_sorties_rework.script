@@ -164,6 +164,67 @@ local function log(fmt, ...)
     end
 end
 
+-- PAW_SCREEN_COORDS_GUARD_BEGIN
+-- PAW may keep a route/pin for an object ID across expeditions. During pickup
+-- X-Ray can briefly retain the client game_object after its ALife server object
+-- has disappeared. PAW 1.x only handles the both-missing case, then dereferences
+-- se_obj:clsid() and crashes in this exact client-only transition. Wrap only the
+-- exported function: return no HUD coordinate for that frame, preserve the
+-- user's PAW state, and delegate every stable state to PAW unchanged.
+RVM_SORTIES_PAW_COMPAT = RVM_SORTIES_PAW_COMPAT or {
+    installed = false,
+    reported = {},
+}
+
+function RVM_SORTIES_PAW_COMPAT.report(id, stage)
+    local key = tostring(id) .. ":" .. tostring(stage)
+    if RVM_SORTIES_PAW_COMPAT.reported[key] then return end
+    RVM_SORTIES_PAW_COMPAT.reported[key] = true
+    printf(PREFIX .. " PAW compatibility deferred screen coords id=%s stage=%s reason=client_exists_server_missing route_pin_preserved=true",
+        tostring(id), tostring(stage))
+end
+
+function RVM_SORTIES_PAW_COMPAT.install()
+    local paw = tasks_placeable_waypoints
+    if type(paw) ~= "table" or type(paw.get_screen_coords) ~= "function" then return false end
+    if paw.get_screen_coords == RVM_SORTIES_PAW_COMPAT.wrapper then return true end
+
+    local base_get_screen_coords = paw.get_screen_coords
+    RVM_SORTIES_PAW_COMPAT.base_get_screen_coords = base_get_screen_coords
+    RVM_SORTIES_PAW_COMPAT.wrapper = function(id)
+        if id ~= nil then
+            local server_ok, server_object = pcall(alife_object, id)
+            local client_ok, client_object = pcall(function()
+                local stored = db and db.storage and db.storage[id]
+                if stored and stored.object then return stored.object end
+                return level and level.object_by_id and level.object_by_id(id) or nil
+            end)
+            if server_ok and client_ok and not server_object and client_object then
+                RVM_SORTIES_PAW_COMPAT.report(id, "precheck")
+                return nil
+            end
+        end
+
+        -- Cover the smaller race where the server object disappears between
+        -- the precheck and PAW's own lookup. Do not hide unrelated PAW errors.
+        local call_ok, result = pcall(base_get_screen_coords, id)
+        if call_ok then return result end
+        local error_text = tostring(result)
+        if string.find(error_text, "local 'se_obj'", 1, true)
+        and string.find(error_text, "nil value", 1, true) then
+            RVM_SORTIES_PAW_COMPAT.report(id, "caught_race")
+            return nil
+        end
+        error(result, 0)
+    end
+
+    paw.get_screen_coords = RVM_SORTIES_PAW_COMPAT.wrapper
+    RVM_SORTIES_PAW_COMPAT.installed = true
+    printf(PREFIX .. " PAW compatibility screen-coords guard installed")
+    return true
+end
+-- PAW_SCREEN_COORDS_GUARD_END
+
 local SUPPORTED_LEVELS = { y04_pole = true, k01_darkscape = true, l09_deadcity = true }
 ARTIFACT_COUNT = {
     stock = { y04_pole = 4, k01_darkscape = 8, l09_deadcity = 6 },
@@ -5459,6 +5520,7 @@ function RVM_SORTIES_PROACTIVE.artifact_online(obj, binder, source)
 end
 
 local function install_hooks()
+    RVM_SORTIES_PAW_COMPAT.install()
     if hooks_installed then return end
     hooks_installed = true
 
